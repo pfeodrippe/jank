@@ -1,0 +1,10 @@
+(ns cpp-raw-simple)
+
+(cpp/raw "
+inline int get_value() {
+  return 42;
+}
+")
+
+(defn -main []
+  (println (cpp/get_value)))
