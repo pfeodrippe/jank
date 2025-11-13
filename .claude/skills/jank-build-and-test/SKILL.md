@@ -40,7 +40,7 @@ For debugging the cpp or llvm output of a .jank file
 jank --codegen cpp run src/cpp_raw_inline/core.jank
 
 # LLVM (compile, more useful)
-jank --codegen llvm_ir --module-path="$(clojure -A:cpp-raw-inline -Spath)" compile cpp_raw_inline.core
+JANK_PRINT_IR=1 jank --codegen llvm_ir --module-path="$(clojure -A:cpp-raw-inline -Spath)" compile cpp_raw_inline.core 2>&1 | grep -v "dyld"
 
 # LLVM (seeing the output, less useful)
 jank --codegen llvm_ir --module-path="$(clojure -A:cpp-raw-inline -Spath)" run-main cpp_raw_inline.core
