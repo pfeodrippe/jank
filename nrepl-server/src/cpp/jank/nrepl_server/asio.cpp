@@ -591,6 +591,30 @@ namespace jank::nrepl_server::asio
     context::binding_scope const scope{ bindings };
 
     std::vector<bencode::value::dict> responses;
+    std::string captured_out;
+    runtime::scoped_output_redirect const redirect{
+      [&](std::string chunk) {
+        captured_out += chunk;
+      }
+    };
+
+    auto emit_pending_output([&]() {
+      if(captured_out.empty())
+      {
+        return;
+      }
+
+      bencode::value::dict out_msg;
+      if(!msg.id().empty())
+      {
+        out_msg.emplace("id", msg.id());
+      }
+      out_msg.emplace("session", session.id);
+      out_msg.emplace("out", captured_out);
+      responses.emplace_back(std::move(out_msg));
+      captured_out.clear();
+    });
+
     auto update_ns([&session]() {
       session.current_ns = __rt_ctx->current_ns_var->deref();
     });
@@ -600,6 +624,7 @@ namespace jank::nrepl_server::asio
       jtl::immutable_string_view const code_view{ code.data(), code.size() };
       auto const result(__rt_ctx->eval_string(code_view));
       update_ns();
+      emit_pending_output();
 
       bencode::value::dict value_msg;
       if(!msg.id().empty())
@@ -616,6 +641,7 @@ namespace jank::nrepl_server::asio
     catch(std::exception const &ex)
     {
       update_ns();
+      emit_pending_output();
       bencode::value::dict err_msg;
       if(!msg.id().empty())
       {
@@ -630,6 +656,7 @@ namespace jank::nrepl_server::asio
     catch(...)
     {
       update_ns();
+      emit_pending_output();
       auto unsupported(handle_unsupported(msg, "unknown-error"));
       if(!unsupported.empty())
       {
