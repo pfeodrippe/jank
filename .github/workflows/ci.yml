@@ -1,10 +1,11 @@
 name: Build compiler+runtime
 
-on:
-  pull_request:
-  push:
-    branches:
-      - main
+on: [ push, pull_request ]
+# on:
+#   pull_request:
+#   push:
+#     branches:
+#       - main
 
 permissions:
   contents: read
@@ -218,80 +219,3 @@ jobs:
             export JANK_SKIP_AOT_CHECK=1
           fi
           JANK_INSTALL_DEPS=true ./bin/jank/check_everything.clj
-      - name: Upload .deb for publishing
-        if: github.ref == 'refs/heads/main' && steps.jank-build-step.outputs.deb
-        uses: actions/upload-artifact@v4
-        with:
-          name: jank-deb
-          path: ${{ steps.jank-build-step.outputs.deb }}
-      - name: Upload Homebrew tarball for publishing
-        if: github.ref == 'refs/heads/main' && steps.jank-build-step.outputs.homebrew-tarball
-        uses: actions/upload-artifact@v4
-        with:
-          name: jank-homebrew-tarball
-          path: ${{ steps.jank-build-step.outputs.homebrew-tarball }}
-
-  publish-deb:
-    if: github.ref == 'refs/heads/main'
-    needs: build-jank
-    name: Publish .deb
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          name: jank-deb
-          path: ~/
-      - name: Import SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.PPA_SSH_KEY }}" > ~/.ssh/jank_id_ed25519
-          chmod 400 ~/.ssh/jank_id_ed25519
-      - name: Publish to PPA
-        run: |
-          scp -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no ~/*.deb root@ppa.jank-lang.org:/var/www/ppa.jank-lang.org/html/
-          ssh -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no root@ppa.jank-lang.org "~/update+sign"
-
-  publish-homebrew-tarball:
-    if: github.ref == 'refs/heads/main'
-    needs: build-jank
-    name: Publish Homebrew package
-    runs-on: macos-26
-    timeout-minutes: 5
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          name: jank-homebrew-tarball
-          path: ~/
-      - name: Import SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.PPA_SSH_KEY }}" > ~/.ssh/jank_id_ed25519
-          chmod 400 ~/.ssh/jank_id_ed25519
-      - name: Publish to cache
-        run: |
-          scp -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no ~/*.tar.gz root@cache.jank-lang.org:/var/www/cache.jank-lang.org/html/
-
-  build-nix:
-    name: "Nix - release"
-    runs-on: ubuntu-latest
-    steps:
-    - name: "Set up nix"
-      uses: cachix/install-nix-action@v31
-      with:
-        nix_path: nixpkgs=channel:nixos-unstable
-    - name: "Set up cachix"
-      uses: cachix/cachix-action@v16
-      with:
-        name: jank-lang
-        # If you chose API tokens for write access OR if you have a private cache
-        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-        # Only push to cache on main branch, not PRs
-        skipPush: "${{ github.ref != 'refs/heads/main' }}"
-    - uses: actions/checkout@v4
-      with:
-        submodules: 'recursive'
-    - name: "Build jank"
-      run: nix build .?submodules=1 -L
-    - name: "Check health"
-      run: nix run .?submodules=1 check-health
