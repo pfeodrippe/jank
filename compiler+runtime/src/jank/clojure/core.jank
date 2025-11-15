@@ -118,6 +118,10 @@
   "Coerce to boolean"
   (fn* boolean [o]
     (cpp/jank.runtime.truthy o)))
+(def jank-version
+  "Returns the version string for the running jank runtime."
+  (fn* jank-version []
+    (cpp/clojure.core_native.jank_version)))
 (def int
   "Coerce to int"
   (fn* int [o]

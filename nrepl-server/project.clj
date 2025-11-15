@@ -2,11 +2,13 @@
   :license {:name "MPL 2.0"
             :url "https://www.mozilla.org/en-US/MPL/2.0/"}
   :dependencies [[org.clojure/clojure "1.11.1"]]
-  :plugins [[org.jank-lang/lein-jank "0.0.1-SNAPSHOT"]]
+  :plugins [[org.jank-lang/lein-jank "0.2"]]
   :main ^:skip-aot jank.nrepl-server.core
   :target-path "target/%s"
   :jank {:include-paths []
-         :includes []}
+         :include-dirs ["/opt/homebrew/include"]
+         :library-dirs ["/opt/homebrew/lib"
+                        "/usr/lib"]}
   :source-paths ["src/jank"
                  "src/cpp"]
   :profiles {:uberjar {:aot :all

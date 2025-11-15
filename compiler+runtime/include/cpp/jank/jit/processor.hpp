@@ -31,7 +31,7 @@ namespace jank::jit
 
     void eval_string(jtl::immutable_string const &s) const;
     void load_object(jtl::immutable_string_view const &path) const;
-    void load_dynamic_library(jtl::immutable_string const &path) const;
+    jtl::string_result<void> load_dynamic_library(jtl::immutable_string const &path) const;
     void load_ir_module(llvm::orc::ThreadSafeModule &&m) const;
     void load_bitcode(jtl::immutable_string const &module,
                       jtl::immutable_string_view const &bitcode) const;
