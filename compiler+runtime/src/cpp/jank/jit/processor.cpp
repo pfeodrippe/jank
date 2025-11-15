@@ -4,8 +4,11 @@
 #include <clang/Frontend/FrontendDiagnostic.h>
 #include <Interpreter/Compatibility.h>
 #include <clang/Interpreter/CppInterOp.h>
+#include <filesystem>
+#include <optional>
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/Signals.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/Debugging/PerfSupportPlugin.h>
@@ -13,6 +16,9 @@
 #include <llvm/ExecutionEngine/Orc/TargetProcess/JITLoaderPerf.h>
 #include <llvm/ExecutionEngine/JITEventListener.h>
 #include <llvm/IRReader/IRReader.h>
+#include <llvm/Object/Archive.h>
+#include <llvm/Object/MachOUniversal.h>
+#include <llvm/Config/llvm-config.h>
 
 #include <cpptrace/gdb_jit.hpp>
 
@@ -27,6 +33,19 @@
 
 namespace jank::jit
 {
+  namespace
+  {
+    static std::string llvm_error_to_string(llvm::Error err)
+    {
+      std::string message;
+      llvm::handleAllErrors(std::move(err), [&](llvm::ErrorInfoBase &info)
+      {
+        message = info.message();
+      });
+      return message;
+    }
+  }
+
   static jtl::immutable_string default_shared_lib_name(jtl::immutable_string const &lib)
 #if defined(__APPLE__)
   {
@@ -76,9 +95,104 @@ namespace jank::jit
     }
   }
 
+#if defined(__APPLE__)
+  static void load_clang_runtime_archive(clang::Interpreter &interpreter,
+                                         std::string const &archive_path)
+  {
+    auto archive_buffer = llvm::MemoryBuffer::getFile(archive_path);
+    if(!archive_buffer)
+    {
+      throw error::system_failure(util::format("Failed to open '{}': {}",
+                                               archive_path,
+                                               archive_buffer.getError().message()));
+    }
+
+    auto load_archive_children = [&](llvm::object::Archive &archive)
+    {
+      auto &ee{ *interpreter.getExecutionEngine() };
+      llvm::Error child_err{ llvm::Error::success() };
+      for(auto child : archive.children(child_err))
+      {
+        auto child_buffer_ref = child.getMemoryBufferRef();
+        if(!child_buffer_ref)
+        {
+          llvm::consumeError(child_buffer_ref.takeError());
+          continue;
+        }
+
+        auto child_buffer{ llvm::MemoryBuffer::getMemBufferCopy(child_buffer_ref->getBuffer(),
+                                                               child_buffer_ref->getBufferIdentifier()) };
+        llvm::cantFail(ee.addObjectFile(std::move(child_buffer)));
+      }
+
+      if(child_err)
+      {
+        throw error::system_failure(util::format("Failed to load LLVM archive '{}': {}",
+                                                 archive_path,
+                                                 llvm_error_to_string(std::move(child_err))));
+      }
+    };
+
+    auto const buffer_ref{ (*archive_buffer)->getMemBufferRef() };
+    auto universal_or_err{ llvm::object::MachOUniversalBinary::create(buffer_ref) };
+    if(universal_or_err)
+    {
+      auto universal{ std::move(*universal_or_err) };
+      auto const host_arch{ llvm::Triple{ LLVM_DEFAULT_TARGET_TRIPLE }.getArch() };
+      bool loaded_slice{};
+      for(auto const &obj : universal->objects())
+      {
+        if(obj.getTriple().getArch() != host_arch)
+        {
+          continue;
+        }
+
+        auto archive_or_err = obj.getAsArchive();
+        if(!archive_or_err)
+        {
+          throw error::system_failure(util::format("Failed to parse '{}' slice '{}': {}",
+                                                   archive_path,
+                                                   obj.getArchFlagName(),
+                                                   llvm_error_to_string(archive_or_err.takeError())));
+        }
+
+        load_archive_children(**archive_or_err);
+        loaded_slice = true;
+        break;
+      }
+
+      if(!loaded_slice)
+      {
+        throw error::system_failure(util::format("Unable to find architecture '{}' in '{}'.",
+                                                 std::string{ llvm::Triple::getArchTypeName(host_arch) },
+                                                 archive_path));
+      }
+
+      return;
+    }
+    auto const universal_err{ llvm_error_to_string(universal_or_err.takeError()) };
+
+    auto archive_or_err{ llvm::object::Archive::create(buffer_ref) };
+    if(archive_or_err)
+    {
+      load_archive_children(**archive_or_err);
+      return;
+    }
+
+    throw error::system_failure(util::format("Failed to parse '{}': {} | {}",
+                                             archive_path,
+                                             universal_err,
+                                             llvm_error_to_string(archive_or_err.takeError())));
+  }
+#endif
+
   processor::processor(jtl::immutable_string const &binary_version)
   {
     profile::timer const timer{ "jit ctor" };
+
+#if defined(__APPLE__)
+    std::optional<std::string> clang_runtime_archive_path;
+#endif
 
     for(auto const &library_dir : util::cli::opts.library_dirs)
     {
@@ -121,14 +235,36 @@ namespace jank::jit
     args.emplace_back("-I");
     args.emplace_back(strdup((clang_dir / "../include").c_str()));
 
-    auto const clang_resource_dir{ util::find_clang_resource_dir() };
-    if(clang_resource_dir.is_none())
+    auto const clang_resource_dir_opt{ util::find_clang_resource_dir() };
+    if(clang_resource_dir_opt.is_none())
     {
       throw error::system_failure(
         util::format("Unable to find Clang {} resource dir.", JANK_CLANG_MAJOR_VERSION));
     }
     args.emplace_back("-resource-dir");
-    args.emplace_back(clang_resource_dir.unwrap().c_str());
+    auto const &clang_resource_dir{ clang_resource_dir_opt.unwrap() };
+    args.emplace_back(clang_resource_dir.c_str());
+
+#if defined(__APPLE__)
+    {
+      std::filesystem::path clang_rt_dir{ clang_resource_dir.c_str() };
+      clang_rt_dir /= "lib";
+      clang_rt_dir /= "darwin";
+      if(std::filesystem::exists(clang_rt_dir))
+      {
+        auto const clang_rt_dir_str{ clang_rt_dir.string() };
+        args.emplace_back("-L");
+        args.emplace_back(strdup(clang_rt_dir_str.c_str()));
+        args.emplace_back("-lclang_rt.osx");
+
+        auto const clang_rt_archive{ clang_rt_dir / "libclang_rt.osx.a" };
+        if(std::filesystem::exists(clang_rt_archive))
+        {
+          clang_runtime_archive_path = clang_rt_archive.string();
+        }
+      }
+    }
+#endif
 
     auto const jank_resource_dir{ util::resource_dir() };
     args.emplace_back("-I");
@@ -175,6 +311,13 @@ namespace jank::jit
 
     interpreter.reset(static_cast<Cpp::Interpreter *>(
       Cpp::CreateInterpreter(args, {}, vfs, static_cast<int>(llvm::CodeModel::Large))));
+
+#if defined(__APPLE__)
+    if(clang_runtime_archive_path)
+    {
+      load_clang_runtime_archive(*interpreter, *clang_runtime_archive_path);
+    }
+#endif
 
     /* Enabling perf support requires registering a couple of plugins with LLVM. These
      * plugins will generate files which perf can then use to inject additional info
@@ -338,27 +481,67 @@ namespace jank::jit
     {
       if(std::filesystem::path{ lib.c_str() }.is_absolute())
       {
-        load_dynamic_library(lib);
+        auto const load_res{ load_dynamic_library(lib) };
+        if(load_res.is_err())
+        {
+          return err(load_res.expect_err());
+        }
+        continue;
       }
-      else
+
+      auto const result{ processor::find_dynamic_lib(lib) };
+      if(result.is_some())
       {
-        auto const result{ processor::find_dynamic_lib(lib) };
-        if(result.is_none())
+        auto const load_res{ load_dynamic_library(result.unwrap()) };
+        if(load_res.is_err())
         {
-          return err(util::format("Failed to load dynamic library '{}'.", lib));
+          return err(load_res.expect_err());
         }
-        else
-        {
-          load_dynamic_library(result.unwrap());
-        }
+        continue;
       }
+
+      auto const &default_lib_name{ default_shared_lib_name(lib) };
+      auto const load_default_res{ load_dynamic_library(default_lib_name) };
+      if(load_default_res.is_ok())
+      {
+        continue;
+      }
+
+      auto const load_raw_res{ load_dynamic_library(lib) };
+      if(load_raw_res.is_ok())
+      {
+        continue;
+      }
+
+      return err(load_raw_res.expect_err());
     }
 
     return ok();
   }
 
-  void processor::load_dynamic_library(jtl::immutable_string const &path) const
+  jtl::string_result<void> processor::load_dynamic_library(jtl::immutable_string const &path) const
   {
-    llvm::cantFail(static_cast<clang::Interpreter &>(*interpreter).LoadDynamicLibrary(path.data()));
+    if(path.empty())
+    {
+      return err("Attempted to load an empty library path.");
+    }
+
+    auto load_err{ static_cast<clang::Interpreter &>(*interpreter).LoadDynamicLibrary(path.data()) };
+    if(load_err)
+    {
+      std::string err_message;
+      llvm::handleAllErrors(std::move(load_err), [&](llvm::ErrorInfoBase &info)
+      {
+        err_message = info.message();
+      });
+      if(err_message.empty())
+      {
+        err_message = "unknown error";
+      }
+
+      return err(util::format("Failed to load dynamic library '{}': {}", path, err_message));
+    }
+
+    return ok();
   }
 }
