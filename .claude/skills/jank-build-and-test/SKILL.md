@@ -24,7 +24,19 @@ description: Build and test the jank compiler+runtime; use when running ./bin/te
    - Investigate `expected-output` diffs before updating fixtures; earlier output drift ("11" vs "10") proved the harness correctly flags regressions.
    - After fixes, rerun `bb pass-test` until the suite is green and the `target/` directory is cleaned automatically.
 
-For compiling Jank (from the `compiler+runtime` folder)
+For AIs: for compiling Jank (from the `compiler+runtime` folder)
+
+``` bash
+export SDKROOT=$(xcrun --sdk macosx --show-sdk-path) && export CC=$PWD/build/llvm-install/usr/local/bin/clang && export CXX=$PWD/build/llvm-install/usr/local/bin/clang++ && ./bin/compile
+```
+
+For AIs: for running tests (from the `compiler+runtime` folder)
+
+``` bash
+export SDKROOT=$(xcrun --sdk macosx --show-sdk-path) && export CC=$PWD/build/llvm-install/usr/local/bin/clang && export CXX=$PWD/build/llvm-install/usr/local/bin/clang++ && ./bin/test
+```
+
+For humans: for compiling Jank (from the `compiler+runtime` folder)
 
 ``` bash
 ./bin/configure -GNinja -DCMAKE_BUILD_TYPE=Debug -Djank_test=on -Djank_local_clang=on
