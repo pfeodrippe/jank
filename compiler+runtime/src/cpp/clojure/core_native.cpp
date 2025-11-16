@@ -8,6 +8,7 @@
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/sequence_range.hpp>
 #include <jank/util/fmt/print.hpp>
+#include <iostream>
 
 namespace clojure::core_native
 {
@@ -292,6 +293,16 @@ namespace clojure::core_native
     return __rt_ctx->read_string(runtime::to_string(str));
   }
 
+  object_ref read_line()
+  {
+    std::string line;
+    if(!std::getline(std::cin, line))
+    {
+      return jank_nil;
+    }
+    return make_box<obj::persistent_string>(line);
+  }
+
   object_ref jank_version()
   {
     return make_box(JANK_VERSION);
@@ -510,6 +521,7 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
   intern_fn("eval", &core_native::eval);
   intern_fn("hash-unordered-coll", &core_native::hash_unordered);
   intern_fn("read-string", &core_native::read_string);
+  intern_fn("read-line", &core_native::read_line);
   intern_fn("jank-version", &core_native::jank_version);
   intern_fn("parse-long", &parse_long);
   intern_fn("parse-double", &parse_double);

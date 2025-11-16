@@ -54,6 +54,7 @@ namespace clojure::core_native
 
   object_ref eval(object_ref expr);
   object_ref read_string(object_ref /* opts */, object_ref str);
+  object_ref read_line();
 
   object_ref lazy_seq(object_ref o);
 

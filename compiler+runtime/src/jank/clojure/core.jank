@@ -5640,10 +5640,7 @@
 (defn read-line
   "Reads the next line from stream that is the current value of *in* ."
   []
-  ;; (if (instance? clojure.lang.LineNumberingPushbackReader *in*)
-  ;;   (.readLine ^clojure.lang.LineNumberingPushbackReader *in*)
-  ;;   (.readLine ^java.io.BufferedReader *in*))
-  (throw "TODO: port read-line"))
+  (cpp/clojure.core_native.read_line))
 
 (defn read-string
   "Reads one object from the string s. Optionally include reader
