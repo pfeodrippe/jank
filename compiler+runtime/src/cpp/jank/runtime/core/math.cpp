@@ -15,7 +15,7 @@ namespace jank::runtime
   {
     i64 character_to_code_point(obj::character_ref const &character)
     {
-      std::string utf8_bytes{ character->data }; // raw UTF-8 bytes for this character
+      std::string const utf8_bytes{ character->data }; // raw UTF-8 bytes for this character
       if(utf8_bytes.empty())
       {
         throw std::runtime_error("unable to convert empty character to integer");

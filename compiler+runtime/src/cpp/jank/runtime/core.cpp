@@ -1,3 +1,4 @@
+#include <exception>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -13,7 +14,11 @@
 
 namespace
 {
-  thread_local std::vector<std::function<void(std::string)>> output_redirects;
+  std::vector<std::function<void(std::string)>> &output_redirects()
+  {
+    thread_local std::vector<std::function<void(std::string)>> redirects;
+    return redirects;
+  }
 
   void write_to_output(std::string_view const text)
   {
@@ -22,13 +27,14 @@ namespace
       return;
     }
 
-    if(output_redirects.empty())
+    auto &redirects(output_redirects());
+    if(redirects.empty())
     {
       std::fwrite(text.data(), 1, text.size(), stdout);
       return;
     }
 
-    output_redirects.back()(std::string{ text });
+    redirects.back()(std::string{ text });
   }
 }
 
@@ -36,17 +42,18 @@ namespace jank::runtime
 {
   void push_output_redirect(std::function<void(std::string)> sink)
   {
-    output_redirects.emplace_back(std::move(sink));
+    output_redirects().emplace_back(std::move(sink));
   }
 
   void pop_output_redirect()
   {
-    if(output_redirects.empty())
+    auto &redirects(output_redirects());
+    if(redirects.empty())
     {
       throw std::runtime_error{ "no output redirect to pop" };
     }
 
-    output_redirects.pop_back();
+    redirects.pop_back();
   }
 
   scoped_output_redirect::scoped_output_redirect(std::function<void(std::string)> sink)
@@ -56,7 +63,14 @@ namespace jank::runtime
 
   scoped_output_redirect::~scoped_output_redirect()
   {
-    pop_output_redirect();
+    try
+    {
+      pop_output_redirect();
+    }
+    catch(...)
+    {
+      std::terminate();
+    }
   }
 
   jtl::immutable_string type(object_ref const o)

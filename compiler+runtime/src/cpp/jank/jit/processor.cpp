@@ -35,7 +35,7 @@ namespace jank::jit
 {
   namespace
   {
-    static std::string llvm_error_to_string(llvm::Error err)
+    std::string llvm_error_to_string(llvm::Error err)
     {
       std::string message;
       llvm::handleAllErrors(std::move(err),
@@ -107,7 +107,7 @@ namespace jank::jit
     auto load_archive_children = [&](llvm::object::Archive &archive) {
       auto &ee{ *interpreter.getExecutionEngine() };
       llvm::Error child_err{ llvm::Error::success() };
-      for(auto child : archive.children(child_err))
+      for(auto const &child : archive.children(child_err))
       {
         auto child_buffer_ref = child.getMemoryBufferRef();
         if(!child_buffer_ref)
