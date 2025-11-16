@@ -244,18 +244,18 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
       eng.handle(make_message({
-        {   "op", "eval" },
+        {   "op",                                                "eval" },
         { "code", "(ns sample.server) (defn run [] 0) (defn stop [] 1)" }
       }));
       eng.handle(make_message({
-        {   "op", "eval" },
+        {   "op",                                            "eval" },
         { "code", "(ns user (:require [sample.server :as server]))" }
       }));
 
       auto responses(eng.handle(make_message({
         {     "op", "complete" },
-        { "prefix",   "server/" },
-        {    "ns",       "user" }
+        { "prefix",  "server/" },
+        {     "ns",     "user" }
       })));
       REQUIRE(responses.size() == 1);
       auto const &payload(responses.front());
@@ -279,6 +279,51 @@ namespace jank::nrepl_server::asio
       }
 
       CHECK(found_run);
+      CHECK(found_stop);
+    }
+
+    TEST_CASE("namespace-qualified completions exclude referred vars")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                    "eval"                 },
+        { "code",
+         "(ns sample.server (:refer-clojure :refer-all)) (defn start [] 0) (defn stop [] 1)" }
+      }));
+      eng.handle(make_message({
+        {   "op",                                            "eval" },
+        { "code", "(ns user (:require [sample.server :as server]))" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {     "op", "completions" },
+        { "prefix",    "server/s" },
+        {     "ns",        "user" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+
+      bool found_start{ false };
+      bool found_stop{ false };
+      for(auto const &entry_value : completions)
+      {
+        auto const &entry(entry_value.as_dict());
+        auto const candidate(entry.at("candidate").as_string());
+        CHECK(candidate.rfind("server/", 0) == 0);
+        CHECK(candidate != "server/string?");
+        if(candidate == "server/start")
+        {
+          found_start = true;
+        }
+        if(candidate == "server/stop")
+        {
+          found_stop = true;
+        }
+      }
+
+      CHECK(found_start);
       CHECK(found_stop);
     }
 

@@ -705,6 +705,38 @@ namespace jank::nrepl_server::asio
       session.last_exception_type = std::move(type);
     }
 
+    bool is_private_var(var_ref const &var) const
+    {
+      if(var.is_nil() || var->meta.is_none())
+      {
+        return false;
+      }
+
+      auto const meta_obj(var->meta.unwrap());
+      auto const private_kw(__rt_ctx->intern_keyword("private").expect_ok());
+      auto const private_flag(runtime::get(meta_obj, private_kw));
+      if(private_flag == jank_nil)
+      {
+        return false;
+      }
+      return runtime::truthy(private_flag);
+    }
+
+    bool is_public_var_in_namespace(ns_ref target_ns, var_ref const &var) const
+    {
+      if(var.is_nil())
+      {
+        return false;
+      }
+
+      if(var->n != target_ns)
+      {
+        return false;
+      }
+
+      return !is_private_var(var);
+    }
+
     struct completion_candidate
     {
       std::string symbol_name;
@@ -733,8 +765,8 @@ namespace jank::nrepl_server::asio
     };
 
     bencode::value::dict make_done_response(std::string const &session,
-                        std::string const &id,
-                        std::vector<std::string> const &statuses) const
+                                            std::string const &id,
+                                            std::vector<std::string> const &statuses) const
     {
       bencode::value::dict payload;
       if(!id.empty())
@@ -750,14 +782,13 @@ namespace jank::nrepl_server::asio
     }
 
     completion_query prepare_completion_query(session_state &session,
-                          std::string prefix,
-                          std::string requested_ns,
-                          std::string const &raw_symbol) const
+                                              std::string prefix,
+                                              std::string requested_ns,
+                                              std::string const &raw_symbol) const
     {
       completion_query query;
-      auto const &symbol_source = prefix.find('/') != std::string::npos || raw_symbol.empty()
-                                    ? prefix
-                                    : raw_symbol;
+      auto const &symbol_source
+        = prefix.find('/') != std::string::npos || raw_symbol.empty() ? prefix : raw_symbol;
       auto const parts(parse_symbol(symbol_source));
       if(!parts.ns.empty())
       {
@@ -770,7 +801,8 @@ namespace jank::nrepl_server::asio
       return query;
     }
 
-    std::vector<std::string> collect_symbol_names(ns_ref target_ns, std::string const &prefix) const
+    std::vector<std::string>
+    collect_symbol_names(ns_ref target_ns, std::string const &prefix, bool owned_only) const
     {
       std::vector<std::string> matches;
       auto const mappings(target_ns->get_mappings());
@@ -783,6 +815,21 @@ namespace jank::nrepl_server::asio
           if(!key.is_some() || key->type != object_type::symbol)
           {
             continue;
+          }
+
+          if(owned_only)
+          {
+            auto const value(entry.second);
+            if(!value.is_some() || value->type != object_type::var)
+            {
+              continue;
+            }
+
+            auto const var(expect_object<var>(value));
+            if(!is_public_var_in_namespace(target_ns, var))
+            {
+              continue;
+            }
           }
 
           auto const sym(expect_object<obj::symbol>(key));
@@ -804,7 +851,7 @@ namespace jank::nrepl_server::asio
     std::vector<completion_candidate>
     make_completion_candidates(completion_query const &query) const
     {
-      auto names(collect_symbol_names(query.target_ns, query.prefix));
+      auto names(collect_symbol_names(query.target_ns, query.prefix, query.qualifier.has_value()));
       std::vector<completion_candidate> candidates;
       candidates.reserve(names.size());
       for(auto const &name : names)

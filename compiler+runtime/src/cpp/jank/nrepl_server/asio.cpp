@@ -315,7 +315,8 @@ namespace jank::nrepl_server::asio
       ~port_file_guard()
       {
         std::error_code ec;
-        [[maybe_unused]] bool const removed(std::filesystem::remove(path_, ec));
+        [[maybe_unused]]
+        bool const removed(std::filesystem::remove(path_, ec));
         if(ec)
         {
           std::cerr << "failed to remove nREPL port file: " << ec.message() << '\n';
@@ -348,25 +349,25 @@ namespace jank::nrepl_server::asio
       auto accept_loop = std::make_shared<std::function<void()>>();
       *accept_loop = [&io_context, &acceptor, server_engine, accept_loop]() {
         auto socket = std::make_shared<tcp::socket>(io_context);
-        acceptor.async_accept(*socket,
-                             [&acceptor, server_engine, socket, accept_loop](
-                               boost::system::error_code const ec) {
-                               if(ec)
-                               {
-                                 if(ec != boost::asio::error::operation_aborted)
-                                 {
-                                   std::cerr << "accept error: " << ec.message() << '\n';
-                                 }
-                                 return;
-                               }
+        acceptor.async_accept(
+          *socket,
+          [&acceptor, server_engine, socket, accept_loop](boost::system::error_code const ec) {
+            if(ec)
+            {
+              if(ec != boost::asio::error::operation_aborted)
+              {
+                std::cerr << "accept error: " << ec.message() << '\n';
+              }
+              return;
+            }
 
-                               auto conn(std::make_shared<connection>(std::move(*socket), *server_engine));
-                               conn->start();
-                               if(acceptor.is_open())
-                               {
-                                 (*accept_loop)();
-                               }
-                             });
+            auto conn(std::make_shared<connection>(std::move(*socket), *server_engine));
+            conn->start();
+            if(acceptor.is_open())
+            {
+              (*accept_loop)();
+            }
+          });
       };
 
       (*accept_loop)();
