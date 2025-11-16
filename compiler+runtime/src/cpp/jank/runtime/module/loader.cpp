@@ -136,7 +136,11 @@ namespace jank::runtime::module
 
   static native_set<jtl::immutable_string> const &core_modules()
   {
-    static native_set<jtl::immutable_string> const modules{ "clojure.core" };
+    static native_set<jtl::immutable_string> const modules{
+      "clojure.core",
+      // This module is compiled into libjank and does not ship a standalone object file.
+      "jank.nrepl-server.asio",
+    };
     return modules;
   }
 

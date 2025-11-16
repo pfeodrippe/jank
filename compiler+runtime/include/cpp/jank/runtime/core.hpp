@@ -3,6 +3,7 @@
 #include <functional>
 #include <regex>
 #include <string>
+#include <string_view>
 
 /* TODO: Remove these so that people include only what they need. */
 #include <jank/runtime/core/make_box.hpp>
@@ -33,6 +34,8 @@ namespace jank::runtime
   object_ref println(object_ref args);
   object_ref pr(object_ref args);
   object_ref prn(object_ref args);
+
+  void forward_output(std::string_view text);
 
   void push_output_redirect(std::function<void(std::string)> sink);
   void pop_output_redirect();

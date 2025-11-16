@@ -73,6 +73,11 @@ namespace jank::runtime
     }
   }
 
+  void forward_output(std::string_view const text)
+  {
+    write_to_output(text);
+  }
+
   jtl::immutable_string type(object_ref const o)
   {
     return object_type_str(o->type);

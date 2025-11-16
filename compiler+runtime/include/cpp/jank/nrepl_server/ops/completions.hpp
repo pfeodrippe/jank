@@ -7,7 +7,7 @@ namespace jank::nrepl_server::asio
     auto const prefix(msg.get("prefix"));
     auto &session(ensure_session(msg.session()));
     auto const requested_ns(msg.get("ns"));
-    auto const query(prepare_completion_query(session, prefix, requested_ns));
+    auto const query(prepare_completion_query(session, prefix, requested_ns, msg.get("symbol")));
     auto const candidates(make_completion_candidates(query));
 
     bencode::value::list completions;

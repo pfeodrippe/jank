@@ -16,7 +16,7 @@ namespace jank::nrepl_server::asio
     }
 
     auto &session(ensure_session(msg.session()));
-    auto const query(prepare_completion_query(session, prefix, msg.get("ns")));
+    auto const query(prepare_completion_query(session, prefix, msg.get("ns"), msg.get("symbol")));
     auto const candidates(make_completion_candidates(query));
 
     bool include_doc{ true };

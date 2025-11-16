@@ -1,6 +1,9 @@
+#include <string_view>
+
 #include <jank/compiler_native.hpp>
 #include <jank/runtime/convert/function.hpp>
 #include <jank/runtime/context.hpp>
+#include <jank/runtime/core.hpp>
 #include <jank/runtime/core/munge.hpp>
 #include <jank/runtime/obj/nil.hpp>
 #include <jank/runtime/obj/native_function_wrapper.hpp>
@@ -13,6 +16,8 @@
 #include <jank/codegen/processor.hpp>
 #include <jank/util/clang_format.hpp>
 #include <jank/util/fmt/print.hpp>
+#include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
+#include <llvm/Support/raw_ostream.h>
 
 namespace jank::compiler_native
 {
@@ -38,12 +43,20 @@ namespace jank::compiler_native
                                             codegen::compilation_target::eval };
       cg_prc.gen().expect_ok();
       cg_prc.optimize();
-      cg_prc.print();
+      auto const raw_module(cg_prc.get_module().getModuleUnlocked());
+      std::string ir_text;
+      llvm::raw_string_ostream ir_stream{ ir_text };
+      raw_module->print(ir_stream, nullptr);
+      ir_stream.flush();
+      runtime::forward_output(ir_text);
+      runtime::forward_output(std::string_view{ "\n", 1 });
     }
     else
     {
       codegen::processor cg_prc{ wrapped_expr, module, codegen::compilation_target::eval };
-      util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
+      auto formatted(util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
+      runtime::forward_output(std::string_view{ formatted.data(), formatted.size() });
+      runtime::forward_output(std::string_view{ "\n", 1 });
     }
 
     return jank_nil;

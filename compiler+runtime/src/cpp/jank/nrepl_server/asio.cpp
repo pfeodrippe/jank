@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -294,70 +295,41 @@ namespace jank::nrepl_server::asio
 
   namespace
   {
-    struct legacy_server_state
+    class port_file_guard
     {
-      boost::asio::io_context io_context{};
-      std::unique_ptr<tcp::acceptor> acceptor{};
-      std::unique_ptr<tcp::socket> next_socket{};
-      std::shared_ptr<engine> server_engine{};
-      std::filesystem::path port_file{ ".nrepl-port" };
-    };
+    public:
+      explicit port_file_guard(std::filesystem::path path)
+        : path_{ std::move(path) }
+      {
+      }
 
-    legacy_server_state &legacy_state()
-    {
-      static legacy_server_state state;
-      return state;
-    }
+      void write(std::int64_t const port) const
+      {
+        std::ofstream ofs{ path_ };
+        if(ofs)
+        {
+          ofs << port;
+        }
+      }
+
+      ~port_file_guard()
+      {
+        std::error_code ec;
+        [[maybe_unused]] bool const removed(std::filesystem::remove(path_, ec));
+        if(ec)
+        {
+          std::cerr << "failed to remove nREPL port file: " << ec.message() << '\n';
+        }
+      }
+
+    private:
+      std::filesystem::path path_;
+    };
 
     std::map<std::uintptr_t, std::shared_ptr<server>> &server_registry()
     {
       static std::map<std::uintptr_t, std::shared_ptr<server>> servers;
       return servers;
-    }
-
-    void legacy_accept_connection()
-    {
-      auto &state(legacy_state());
-      if(!state.acceptor)
-      {
-        return;
-      }
-      state.next_socket = std::make_unique<tcp::socket>(state.io_context);
-      state.acceptor->async_accept(*state.next_socket, [](boost::system::error_code const ec) {
-        auto &state(legacy_state());
-        if(!ec && state.server_engine)
-        {
-          auto conn(std::make_shared<connection>(std::move(*state.next_socket), *state.server_engine));
-          conn->start();
-        }
-        else if(ec)
-        {
-          std::cerr << "accept error: " << ec.message() << '\n';
-        }
-
-        legacy_accept_connection();
-      });
-    }
-
-    void write_port_file(std::int64_t const port)
-    {
-      auto &state(legacy_state());
-      std::ofstream ofs{ state.port_file };
-      if(ofs)
-      {
-        ofs << port;
-      }
-    }
-
-    void remove_port_file()
-    {
-      auto &state(legacy_state());
-      std::error_code ec;
-      [[maybe_unused]] bool const removed(std::filesystem::remove(state.port_file, ec));
-      if(ec)
-      {
-        std::cerr << "failed to remove nREPL port file: " << ec.message() << '\n';
-      }
     }
 
     object_ref run_server(object_ref const port_obj)
@@ -367,14 +339,38 @@ namespace jank::nrepl_server::asio
       auto const port(to_int(port_obj));
       std::cout << "Starting jank nREPL on port " << port << '\n';
 
-      auto &state(legacy_state());
-      state.server_engine = std::make_shared<engine>();
-      state.acceptor = std::make_unique<tcp::acceptor>(state.io_context, tcp::endpoint(tcp::v4(), port));
-      write_port_file(port);
-      std::atexit(remove_port_file);
+      boost::asio::io_context io_context;
+      auto server_engine = std::make_shared<engine>();
+      tcp::acceptor acceptor{ io_context, tcp::endpoint(tcp::v4(), port) };
+      port_file_guard const port_file{ ".nrepl-port" };
+      port_file.write(port);
 
-      legacy_accept_connection();
-      state.io_context.run();
+      auto accept_loop = std::make_shared<std::function<void()>>();
+      *accept_loop = [&io_context, &acceptor, server_engine, accept_loop]() {
+        auto socket = std::make_shared<tcp::socket>(io_context);
+        acceptor.async_accept(*socket,
+                             [&acceptor, server_engine, socket, accept_loop](
+                               boost::system::error_code const ec) {
+                               if(ec)
+                               {
+                                 if(ec != boost::asio::error::operation_aborted)
+                                 {
+                                   std::cerr << "accept error: " << ec.message() << '\n';
+                                 }
+                                 return;
+                               }
+
+                               auto conn(std::make_shared<connection>(std::move(*socket), *server_engine));
+                               conn->start();
+                               if(acceptor.is_open())
+                               {
+                                 (*accept_loop)();
+                               }
+                             });
+      };
+
+      (*accept_loop)();
+      io_context.run();
       return runtime::jank_nil;
     }
 

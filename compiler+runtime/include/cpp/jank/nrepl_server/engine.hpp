@@ -750,11 +750,15 @@ namespace jank::nrepl_server::asio
     }
 
     completion_query prepare_completion_query(session_state &session,
-                                              std::string prefix,
-                                              std::string requested_ns) const
+                          std::string prefix,
+                          std::string requested_ns,
+                          std::string const &raw_symbol) const
     {
       completion_query query;
-      auto const parts(parse_symbol(prefix));
+      auto const &symbol_source = prefix.find('/') != std::string::npos || raw_symbol.empty()
+                                    ? prefix
+                                    : raw_symbol;
+      auto const parts(parse_symbol(symbol_source));
       if(!parts.ns.empty())
       {
         requested_ns = parts.ns;
