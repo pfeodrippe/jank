@@ -36,8 +36,8 @@ namespace jank::runtime
 
       if(decoded.empty())
       {
-        throw std::runtime_error(util::format("unable to convert character '{}' to integer",
-                                              character->to_code_string()));
+        throw std::runtime_error(
+          util::format("unable to convert character '{}' to integer", character->to_code_string()));
       }
 
       return static_cast<i64>(decoded.front());
