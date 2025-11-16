@@ -1,6 +1,9 @@
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 #include <optional>
+#include <ranges>
+#include <string_view>
 #include <vector>
 
 #include <jank/nrepl_server/engine.hpp>
@@ -37,7 +40,7 @@ namespace jank::nrepl_server::asio
       list.reserve(middleware.size());
       for(auto &entry : middleware)
       {
-        list.emplace_back(bencode::value{ std::move(entry) });
+        list.emplace_back(std::move(entry));
       }
       dict.emplace("middleware", bencode::value{ std::move(list) });
 
@@ -62,7 +65,7 @@ namespace jank::nrepl_server::asio
       return statuses;
     }
 
-    std::vector<std::string> expected_ops{
+    constexpr std::array<std::string_view, 18> expected_ops{
       "clone",     "describe",      "ls-sessions",    "close",
       "eval",      "load-file",     "completions",    "complete",
       "lookup",    "info",          "eldoc",          "forward-system-output",
@@ -70,7 +73,7 @@ namespace jank::nrepl_server::asio
       "stdin",     "caught"
     };
 
-    std::vector<std::string> expected_middleware_stack{
+    constexpr std::array<std::string_view, 10> expected_middleware_stack{
       "nrepl.middleware.session/session",
       "nrepl.middleware.caught/wrap-caught",
       "nrepl.middleware.print/wrap-print",
@@ -112,7 +115,8 @@ namespace jank::nrepl_server::asio
       for(auto const &op_name : expected_ops)
       {
         CAPTURE(op_name);
-        CHECK(ops.find(op_name) != ops.end());
+        auto const op_it(ops.find(std::string{ op_name }));
+        CHECK(op_it != ops.end());
       }
     }
 
@@ -128,7 +132,8 @@ namespace jank::nrepl_server::asio
       auto const &new_session(payload.at("new-session").as_string());
       CHECK(session == new_session);
       auto const statuses(extract_status(payload));
-      CHECK(std::find(statuses.begin(), statuses.end(), "done") != statuses.end());
+      auto const done(std::ranges::find(statuses, "done"));
+      CHECK(done != statuses.end());
     }
 
     TEST_CASE("eval returns value and done")
@@ -257,7 +262,8 @@ namespace jank::nrepl_server::asio
       auto const &arglists(info.at("arglists").as_list());
       REQUIRE(arglists.size() == 2);
       auto const statuses(extract_status(payload));
-      CHECK(std::find(statuses.begin(), statuses.end(), "done") != statuses.end());
+      auto const done(std::ranges::find(statuses, "done"));
+      CHECK(done != statuses.end());
     }
 
     TEST_CASE("eldoc returns function signatures")
@@ -278,7 +284,8 @@ namespace jank::nrepl_server::asio
       CHECK(eldoc.front().as_string().find("sample-fn") != std::string::npos);
       CHECK(payload.at("ns").as_string() == "user");
       auto const statuses(extract_status(payload));
-      CHECK(std::find(statuses.begin(), statuses.end(), "done") != statuses.end());
+      auto const done(std::ranges::find(statuses, "done"));
+      CHECK(done != statuses.end());
     }
 
     TEST_CASE("lookup reports namespace and miss state")
@@ -326,10 +333,9 @@ namespace jank::nrepl_server::asio
         { "code", "(throw (ex-info \"boom\" {}))" },
         {   "id",                    "req-caught" }
       })));
-      auto err_payload
-        = std::find_if(eval_responses.begin(), eval_responses.end(), [](auto const &payload) {
-            return payload.find("err") != payload.end();
-          });
+      auto err_payload = std::ranges::find_if(eval_responses, [](auto const &payload) {
+        return payload.find("err") != payload.end();
+      });
       REQUIRE(err_payload != eval_responses.end());
       auto const session(err_payload->at("session").as_string());
 
@@ -339,8 +345,8 @@ namespace jank::nrepl_server::asio
       })));
       REQUIRE(caught.size() == 1);
       auto const caught_status(extract_status(caught.front()));
-      CHECK(std::find(caught_status.begin(), caught_status.end(), "no-error")
-            == caught_status.end());
+      auto const caught_found(std::ranges::find(caught_status, "no-error"));
+      CHECK(caught_found == caught_status.end());
       CHECK(caught.front().at("err").as_string().find("boom") != std::string::npos);
 
       eng.handle(make_message({
@@ -354,8 +360,8 @@ namespace jank::nrepl_server::asio
       })));
       REQUIRE(cleared.size() == 1);
       auto const cleared_status(extract_status(cleared.front()));
-      CHECK(std::find(cleared_status.begin(), cleared_status.end(), "no-error")
-            != cleared_status.end());
+      auto const cleared_found(std::ranges::find(cleared_status, "no-error"));
+      CHECK(cleared_found != cleared_status.end());
     }
 
     TEST_CASE("unsupported ops report reason")
@@ -366,7 +372,8 @@ namespace jank::nrepl_server::asio
       })));
       REQUIRE(responses.size() == 1);
       auto const statuses(extract_status(responses.front()));
-      CHECK(std::find(statuses.begin(), statuses.end(), "unsupported") != statuses.end());
+      auto const unsupported(std::ranges::find(statuses, "unsupported"));
+      CHECK(unsupported != statuses.end());
       CHECK(responses.front().at("err").as_string() == "unknown-op");
     }
 
@@ -388,7 +395,8 @@ namespace jank::nrepl_server::asio
       })));
       REQUIRE(interrupt.size() == 1);
       auto const statuses(extract_status(interrupt.front()));
-      CHECK(std::find(statuses.begin(), statuses.end(), "session-idle") != statuses.end());
+      auto const idle(std::ranges::find(statuses, "session-idle"));
+      CHECK(idle != statuses.end());
       CHECK(interrupt.front().at("interrupt-id").as_string() == "req-42");
     }
 
