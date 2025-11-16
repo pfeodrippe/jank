@@ -31,6 +31,10 @@ jobs:
           packages: curl git build-essential libssl-dev libdouble-conversion-dev pkg-config ninja-build cmake zlib1g-dev libffi-dev libboost-dev libboost-system-dev
           # Increment this when the package list changes.
           version: 3
+      - name: Ensure Boost headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libboost-dev libboost-system-dev
       - name: Cache Clang/LLVM
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
@@ -180,6 +184,11 @@ jobs:
           packages: default-jdk software-properties-common lsb-release npm lcov leiningen ccache curl git git-lfs build-essential entr libssl-dev libdouble-conversion-dev pkg-config ninja-build cmake zlib1g-dev libffi-dev doctest-dev gcc g++ libgc-dev libboost-dev libboost-system-dev
           # Increment this when the package list changes.
           version: 11
+      - name: Install boost headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libboost-dev libboost-system-dev
       - name: Install Homebrew packages
         if: runner.os == 'macOS'
         run: |
