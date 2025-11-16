@@ -42,34 +42,17 @@ namespace jank::nrepl_server::asio
       return { make_done_response(session.id, msg.id(), { "done", "no-info" }) };
     }
 
-    bencode::value::dict info_dict;
-    info_dict.emplace("name", info->name);
-    info_dict.emplace("ns", info->ns_name);
-    info_dict.emplace("type", info->is_macro ? std::string{ "macro" } : std::string{ "var" });
-    if(info->doc.has_value())
-    {
-      info_dict.emplace("doc", info->doc.value());
-    }
-    if(!info->arglists.empty())
-    {
-      info_dict.emplace("arglists", bencode::list_of_strings(info->arglists));
-    }
-    if(info->arglists_str.has_value())
-    {
-      info_dict.emplace("arglists-str", info->arglists_str.value());
-    }
-    if(info->file.has_value())
-    {
-      info_dict.emplace("file", info->file.value());
-    }
-    if(info->line.has_value())
-    {
-      info_dict.emplace("line", bencode::value{ info->line.value() });
-    }
-    if(info->column.has_value())
-    {
-      info_dict.emplace("column", bencode::value{ info->column.value() });
-    }
+    auto const type = [&]() {
+      if(info->is_macro)
+      {
+        return std::string{ "macro" };
+      }
+      if(info->arglists.empty())
+      {
+        return std::string{ "variable" };
+      }
+      return std::string{ "function" };
+    }();
 
     bencode::value::dict payload;
     if(!msg.id().empty())
@@ -77,7 +60,38 @@ namespace jank::nrepl_server::asio
       payload.emplace("id", msg.id());
     }
     payload.emplace("session", session.id);
-    payload.emplace("info", bencode::value{ std::move(info_dict) });
+    payload.emplace("name", info->name);
+    payload.emplace("ns", info->ns_name);
+    payload.emplace("type", type);
+    if(info->is_macro)
+    {
+      payload.emplace("macro", std::string{ "true" });
+    }
+    if(info->doc.has_value())
+    {
+      payload.emplace("doc", info->doc.value());
+      payload.emplace("docstring", info->doc.value());
+    }
+    if(!info->arglists.empty())
+    {
+      payload.emplace("arglists", bencode::list_of_strings(info->arglists));
+    }
+    if(info->arglists_str.has_value())
+    {
+      payload.emplace("arglists-str", info->arglists_str.value());
+    }
+    if(info->file.has_value())
+    {
+      payload.emplace("file", info->file.value());
+    }
+    if(info->line.has_value())
+    {
+      payload.emplace("line", bencode::value{ info->line.value() });
+    }
+    if(info->column.has_value())
+    {
+      payload.emplace("column", bencode::value{ info->column.value() });
+    }
     payload.emplace("status", bencode::list_of_strings({ "done" }));
     return { std::move(payload) };
   }

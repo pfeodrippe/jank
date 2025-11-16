@@ -253,13 +253,11 @@ namespace jank::nrepl_server::asio
       })));
       REQUIRE(responses.size() == 1);
       auto const &payload(responses.front());
-      auto const &info(payload.at("info").as_dict());
-      CHECK(info.at("name").as_string() == "sample-fn");
-      CHECK(info.at("ns").as_string() == "user");
-      auto const doc_it(info.find("doc"));
-      REQUIRE(doc_it != info.end());
-      CHECK(doc_it->second.as_string().find("demo doc") != std::string::npos);
-      auto const &arglists(info.at("arglists").as_list());
+      CHECK(payload.at("name").as_string() == "sample-fn");
+      CHECK(payload.at("ns").as_string() == "user");
+      auto const doc(payload.at("docstring").as_string());
+      CHECK(doc.find("demo doc") != std::string::npos);
+      auto const &arglists(payload.at("arglists").as_list());
       REQUIRE(arglists.size() == 2);
       auto const statuses(extract_status(payload));
       auto const done(std::ranges::find(statuses, "done"));
@@ -281,8 +279,16 @@ namespace jank::nrepl_server::asio
       auto const &payload(responses.front());
       auto const &eldoc(payload.at("eldoc").as_list());
       REQUIRE(eldoc.size() == 2);
-      CHECK(eldoc.front().as_string().find("sample-fn") != std::string::npos);
+      auto const &first_sig(eldoc.front().as_list());
+      auto const &second_sig(eldoc.back().as_list());
+      REQUIRE(first_sig.size() == 1);
+      CHECK(first_sig.front().as_string() == "x");
+      REQUIRE(second_sig.size() == 2);
+      CHECK(second_sig.front().as_string() == "x");
+      CHECK(second_sig.back().as_string() == "y");
+      CHECK(payload.at("name").as_string() == "sample-fn");
       CHECK(payload.at("ns").as_string() == "user");
+      CHECK(payload.at("docstring").as_string().find("demo doc") != std::string::npos);
       auto const statuses(extract_status(payload));
       auto const done(std::ranges::find(statuses, "done"));
       CHECK(done != statuses.end());
@@ -309,9 +315,8 @@ namespace jank::nrepl_server::asio
       })));
       REQUIRE(info_responses.size() == 1);
       auto const &info_payload(info_responses.front());
-      auto const &info_dict(info_payload.at("info").as_dict());
-      CHECK(info_dict.at("name").as_string() == "sample-fn");
-      CHECK(info_dict.at("ns").as_string() == "cpp_raw_inline.core");
+      CHECK(info_payload.at("name").as_string() == "sample-fn");
+      CHECK(info_payload.at("ns").as_string() == "cpp_raw_inline.core");
       auto const info_status(extract_status(info_payload));
       CHECK(std::ranges::find(info_status, "done") != info_status.end());
 
@@ -324,7 +329,7 @@ namespace jank::nrepl_server::asio
       auto const &eldoc_payload(eldoc_responses.front());
       auto const &eldoc_list(eldoc_payload.at("eldoc").as_list());
       REQUIRE(!eldoc_list.empty());
-      CHECK(eldoc_list.front().as_string().find("sample-fn") != std::string::npos);
+      CHECK(eldoc_payload.at("name").as_string() == "sample-fn");
       auto const eldoc_status(extract_status(eldoc_payload));
       CHECK(std::ranges::find(eldoc_status, "done") != eldoc_status.end());
     }

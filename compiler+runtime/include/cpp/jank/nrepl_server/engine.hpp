@@ -887,7 +887,27 @@ namespace jank::nrepl_server::asio
         }
         if(auto const arglists(runtime::get(meta, arglists_kw)); arglists != jank_nil)
         {
-          info.arglists = render_sequence_strings(arglists);
+          // Arglists are typically quoted: '([x] [x y])
+          // We need to unwrap the quote if present
+          auto arglists_seq(arglists);
+
+          // Try to get the first element to check if it's a quote
+          auto first_elem(runtime::first(arglists_seq));
+          if(first_elem != jank_nil && first_elem->type == object_type::symbol)
+          {
+            auto const sym(expect_object<obj::symbol>(first_elem));
+            if(sym->name == "quote")
+            {
+              // Get the second element (the actual arglists)
+              auto const rest(runtime::next(arglists_seq));
+              if(rest != jank_nil)
+              {
+                arglists_seq = runtime::first(rest);
+              }
+            }
+          }
+
+          info.arglists = render_sequence_strings(arglists_seq);
           if(!info.arglists.empty())
           {
             info.arglists_str = join_with_newline(info.arglists);
