@@ -11,6 +11,11 @@ namespace jank::nrepl_server::asio
       return handle_unsupported(msg, "unknown-session");
     }
 
+    if(!default_session_id_.empty() && default_session_id_ == session_id)
+    {
+      default_session_id_.clear();
+    }
+
     return { make_done_response(session_id, msg.id(), { "done" }) };
   }
 }

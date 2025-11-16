@@ -35,6 +35,7 @@ namespace jank::jit
 {
   namespace
   {
+#if defined(__APPLE__)
     std::string llvm_error_to_string(llvm::Error err)
     {
       std::string message;
@@ -42,6 +43,7 @@ namespace jank::jit
                             [&](llvm::ErrorInfoBase &info) { message = info.message(); });
       return message;
     }
+#endif
   }
 
   static jtl::immutable_string default_shared_lib_name(jtl::immutable_string const &lib)

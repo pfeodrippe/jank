@@ -9,6 +9,7 @@ namespace jank::nrepl_server::asio
     {
       sym_input = msg.get("symbol");
     }
+    sym_input = strip_text_properties(sym_input);
     if(sym_input.empty())
     {
       return handle_unsupported(msg, "missing-symbol");
@@ -20,7 +21,7 @@ namespace jank::nrepl_server::asio
       return handle_unsupported(msg, "missing-symbol");
     }
 
-    auto ns_request(msg.get("ns"));
+    auto ns_request(strip_text_properties(msg.get("ns")));
     if(!parts.ns.empty())
     {
       ns_request = parts.ns;

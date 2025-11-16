@@ -102,6 +102,23 @@ namespace jank::nrepl_server::asio
     return parts;
   }
 
+  inline std::string strip_text_properties(std::string const &raw)
+  {
+    if(raw.size() > 3 && raw[0] == '#' && raw[1] == '(')
+    {
+      auto const open_quote(raw.find('"', 2));
+      if(open_quote != std::string::npos)
+      {
+        auto const close_quote(raw.find('"', open_quote + 1));
+        if(close_quote != std::string::npos && close_quote > open_quote)
+        {
+          return raw.substr(open_quote + 1, close_quote - open_quote - 1);
+        }
+      }
+    }
+    return raw;
+  }
+
   namespace bencode
   {
     struct value
@@ -543,6 +560,7 @@ namespace jank::nrepl_server::asio
 
   private:
     std::unordered_map<std::string, session_state> sessions_;
+    std::string default_session_id_;
     std::vector<std::string> middleware_stack_{
       "nrepl.middleware.session/session",
       "nrepl.middleware.caught/wrap-caught",
@@ -561,7 +579,15 @@ namespace jank::nrepl_server::asio
     {
       if(session_id.empty())
       {
-        session_id = next_session_id();
+        if(default_session_id_.empty())
+        {
+          default_session_id_ = next_session_id();
+        }
+        session_id = default_session_id_;
+      }
+      else if(default_session_id_.empty())
+      {
+        default_session_id_ = session_id;
       }
 
       auto const [it, inserted](sessions_.try_emplace(session_id));
