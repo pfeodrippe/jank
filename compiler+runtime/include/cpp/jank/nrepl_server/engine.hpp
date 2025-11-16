@@ -91,7 +91,7 @@ namespace jank::nrepl_server::asio
   {
     parsed_symbol parts;
     auto const slash(raw.find('/'));
-    if(slash == std::string::npos || slash == 0 || slash == raw.size() - 1)
+    if(slash == std::string::npos || slash == 0)
     {
       parts.name = raw;
       return parts;
@@ -662,14 +662,22 @@ namespace jank::nrepl_server::asio
     ns_ref resolve_namespace(session_state &session, std::string const &requested_ns) const
     {
       auto target_ns(expect_object<ns>(session.current_ns));
-      if(!requested_ns.empty())
+      if(requested_ns.empty())
       {
-        auto const symbol(make_box<obj::symbol>(make_immutable_string(requested_ns)));
-        if(auto const found = __rt_ctx->find_ns(symbol); found.is_some())
-        {
-          target_ns = found;
-        }
+        return target_ns;
       }
+
+      auto const symbol(make_box<obj::symbol>(make_immutable_string(requested_ns)));
+      if(auto const alias = target_ns->find_alias(symbol); alias.is_some())
+      {
+        return alias;
+      }
+
+      if(auto const found = __rt_ctx->find_ns(symbol); found.is_some())
+      {
+        return found;
+      }
+
       return target_ns;
     }
 

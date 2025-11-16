@@ -240,6 +240,48 @@ namespace jank::nrepl_server::asio
       REQUIRE(arglists.size() == 2);
     }
 
+    TEST_CASE("complete resolves namespace aliases with trailing slash prefixes")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op", "eval" },
+        { "code", "(ns sample.server) (defn run [] 0) (defn stop [] 1)" }
+      }));
+      eng.handle(make_message({
+        {   "op", "eval" },
+        { "code", "(ns user (:require [sample.server :as server]))" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",   "server/" },
+        {    "ns",       "user" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+
+      bool found_run{ false };
+      bool found_stop{ false };
+      for(auto const &entry_value : completions)
+      {
+        auto const &entry(entry_value.as_dict());
+        auto const candidate(entry.at("candidate").as_string());
+        if(candidate == "server/run")
+        {
+          found_run = true;
+        }
+        if(candidate == "server/stop")
+        {
+          found_stop = true;
+        }
+      }
+
+      CHECK(found_run);
+      CHECK(found_stop);
+    }
+
     TEST_CASE("info returns doc and arglists")
     {
       engine eng;
