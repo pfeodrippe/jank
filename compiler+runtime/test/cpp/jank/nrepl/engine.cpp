@@ -288,6 +288,47 @@ namespace jank::nrepl_server::asio
       CHECK(done != statuses.end());
     }
 
+    TEST_CASE("info and eldoc normalize metadata-rich inputs")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                     "eval" },
+        { "code", "(ns cpp_raw_inline.core)" }
+      }));
+      eng.handle(make_message({
+        {   "op",                                                  "eval" },
+        { "code", "(defn sample-fn \"demo doc\" ([x] x) ([x y] (+ x y)))" }
+      }));
+      auto const metadata_ns = "#(\"cpp_raw_inline.core\" 0 1 (face font-lock-type-face))";
+      auto const metadata_sym = "#(\"sample-fn\" 0 9 (face font-lock-type-face))";
+
+      auto info_responses(eng.handle(make_message({
+        {  "op",       "info" },
+        { "sym", metadata_sym },
+        {  "ns",  metadata_ns }
+      })));
+      REQUIRE(info_responses.size() == 1);
+      auto const &info_payload(info_responses.front());
+      auto const &info_dict(info_payload.at("info").as_dict());
+      CHECK(info_dict.at("name").as_string() == "sample-fn");
+      CHECK(info_dict.at("ns").as_string() == "cpp_raw_inline.core");
+      auto const info_status(extract_status(info_payload));
+      CHECK(std::ranges::find(info_status, "done") != info_status.end());
+
+      auto eldoc_responses(eng.handle(make_message({
+        {  "op",      "eldoc" },
+        { "sym", metadata_sym },
+        {  "ns",  metadata_ns }
+      })));
+      REQUIRE(eldoc_responses.size() == 1);
+      auto const &eldoc_payload(eldoc_responses.front());
+      auto const &eldoc_list(eldoc_payload.at("eldoc").as_list());
+      REQUIRE(!eldoc_list.empty());
+      CHECK(eldoc_list.front().as_string().find("sample-fn") != std::string::npos);
+      auto const eldoc_status(extract_status(eldoc_payload));
+      CHECK(std::ranges::find(eldoc_status, "done") != eldoc_status.end());
+    }
+
     TEST_CASE("lookup reports namespace and miss state")
     {
       engine eng;
