@@ -14,7 +14,7 @@ namespace jank::nrepl_server::asio
     eval_dict.erase("file");
     eval_dict["code"] = file_contents;
 
-    message eval_msg{ std::move(eval_dict) };
+    message const eval_msg{ std::move(eval_dict) };
     auto responses(handle_eval(eval_msg));
     for(auto &payload : responses)
     {

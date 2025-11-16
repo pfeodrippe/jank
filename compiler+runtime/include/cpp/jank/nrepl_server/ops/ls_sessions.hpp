@@ -10,7 +10,7 @@ namespace jank::nrepl_server::asio
     {
       ids.push_back(entry.first);
     }
-    std::sort(ids.begin(), ids.end());
+    std::ranges::sort(ids);
 
     bencode::value::dict payload;
     if(!msg.id().empty())

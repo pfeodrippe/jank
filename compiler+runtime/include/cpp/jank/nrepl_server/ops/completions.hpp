@@ -17,7 +17,7 @@ namespace jank::nrepl_server::asio
       bencode::value::dict entry;
       entry.emplace("candidate", candidate.display_name);
       entry.emplace("type", std::string{ "var" });
-      completions.emplace_back(bencode::value{ std::move(entry) });
+      completions.emplace_back(std::move(entry));
     }
 
     bencode::value::dict payload;

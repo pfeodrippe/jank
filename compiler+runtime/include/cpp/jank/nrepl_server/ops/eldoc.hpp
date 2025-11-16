@@ -64,7 +64,7 @@ namespace jank::nrepl_server::asio
 
       std::vector<std::string> tokens;
       std::string current;
-      for(char ch : signature)
+      for(char const ch : signature)
       {
         if(std::isspace(static_cast<unsigned char>(ch)))
         {
@@ -103,7 +103,7 @@ namespace jank::nrepl_server::asio
         {
           token_values.emplace_back(token);
         }
-        eldoc_entries.emplace_back(bencode::value{ std::move(token_values) });
+        eldoc_entries.emplace_back(std::move(token_values));
       }
     }
 

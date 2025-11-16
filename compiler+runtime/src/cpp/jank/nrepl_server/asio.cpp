@@ -20,7 +20,6 @@
   #define BOOST_SYSTEM_NO_DEPRECATED
 #endif
 
-#define JANK_NREPL_REDEFINE_ACCESS 1
 /* Boost.Asio injects several inline definitions for private nested helpers.        */
 /* Clang strictly enforces access there when compiling generated snippets, so we   */
 /* temporarily relax the access keywords during the includes.                      */
@@ -38,7 +37,6 @@
 #if defined(__clang__)
   #pragma clang diagnostic pop
 #endif
-#undef JANK_NREPL_REDEFINE_ACCESS
 
 #include <jank/nrepl_server/engine.hpp>
 #include <jank/runtime/behavior/callable.hpp>
@@ -109,26 +107,34 @@ namespace jank::nrepl_server::asio
         if(decoded.state != bencode::parse_state::ok)
         {
           std::cerr << "bencode decode error: " << decoded.error << '\n';
-          boost::system::error_code ignored;
-          socket_.close(ignored);
+          boost::system::error_code close_ec;
+          auto const close_result(socket_.close(close_ec));
+          if(close_result)
+          {
+            std::cerr << "socket close error: " << close_result.message() << '\n';
+          }
           return;
         }
 
         if(!decoded.data.is_dict())
         {
           std::cerr << "invalid nREPL payload" << '\n';
-          boost::system::error_code ignored;
-          socket_.close(ignored);
+          boost::system::error_code close_ec;
+          auto const close_result(socket_.close(close_ec));
+          if(close_result)
+          {
+            std::cerr << "socket close error: " << close_result.message() << '\n';
+          }
           return;
         }
 
-        message msg{ decoded.data.as_dict() };
+        message const msg{ decoded.data.as_dict() };
         auto responses(engine_.handle(msg));
         for(auto &payload : responses)
         {
           std::string encoded;
           encoded.reserve(256);
-          bencode::value wrapper{ payload };
+          bencode::value const wrapper{ payload };
           bencode::encode_value(wrapper, encoded);
           enqueue_write(std::move(encoded));
         }
@@ -229,7 +235,11 @@ namespace jank::nrepl_server::asio
       if(acceptor_)
       {
         boost::system::error_code ec;
-        acceptor_->close(ec);
+        auto const close_result(acceptor_->close(ec));
+        if(close_result)
+        {
+          std::cerr << "acceptor close error: " << close_result.message() << '\n';
+        }
         acceptor_.reset();
       }
 
@@ -282,131 +292,154 @@ namespace jank::nrepl_server::asio
     bool running_{ true };
   };
 
-  // Legacy global state for run! function
-  boost::asio::io_context io_context;
-  std::unique_ptr<tcp::acceptor> acceptor;
-  std::unique_ptr<tcp::socket> next_socket;
-  std::shared_ptr<engine> server_engine;
-  std::filesystem::path const port_file{ ".nrepl-port" };
-
-  void accept_connection()
+  namespace
   {
-    next_socket = std::make_unique<tcp::socket>(io_context);
-    acceptor->async_accept(*next_socket, [](boost::system::error_code const ec) {
-      if(!ec && server_engine)
-      {
-        auto conn(std::make_shared<connection>(std::move(*next_socket), *server_engine));
-        conn->start();
-      }
-      else if(ec)
-      {
-        std::cerr << "accept error: " << ec.message() << '\n';
-      }
-
-      accept_connection();
-    });
-  }
-
-  void write_port_file(int const port)
-  {
-    std::ofstream ofs{ port_file };
-    if(ofs)
+    struct legacy_server_state
     {
-      ofs << port;
+      boost::asio::io_context io_context{};
+      std::unique_ptr<tcp::acceptor> acceptor{};
+      std::unique_ptr<tcp::socket> next_socket{};
+      std::shared_ptr<engine> server_engine{};
+      std::filesystem::path port_file{ ".nrepl-port" };
+    };
+
+    legacy_server_state &legacy_state()
+    {
+      static legacy_server_state state;
+      return state;
     }
-  }
 
-  void remove_port_file()
-  {
-    std::error_code ec;
-    std::filesystem::remove(port_file, ec);
-  }
-
-  object_ref run_server(object_ref const port_obj)
-  {
-    bootstrap_runtime_once();
-
-    auto const port(to_int(port_obj));
-    std::cout << "Starting jank nREPL on port " << port << '\n';
-
-    server_engine = std::make_shared<engine>();
-    acceptor = std::make_unique<tcp::acceptor>(io_context, tcp::endpoint(tcp::v4(), port));
-    write_port_file(port);
-    std::atexit(remove_port_file);
-
-    accept_connection();
-    io_context.run();
-    return runtime::jank_nil;
-  }
-
-  // Embeddable server functions
-  object_ref start_server(object_ref const port_obj, object_ref const bind_obj)
-  {
-    bootstrap_runtime_once();
-
-    auto const port(to_int(port_obj));
-    auto const bind_address(to_std_string(runtime::to_string(bind_obj)));
-
-    try
+    std::map<std::uintptr_t, std::shared_ptr<server>> &server_registry()
     {
-      auto srv = std::make_shared<server>(port, bind_address);
-      // Keep the server alive by storing in a static map
       static std::map<std::uintptr_t, std::shared_ptr<server>> servers;
-      auto const ptr_val = reinterpret_cast<std::uintptr_t>(srv.get());
-      servers[ptr_val] = srv;
+      return servers;
+    }
 
-      // Create a hash map to return server info
+    void legacy_accept_connection()
+    {
+      auto &state(legacy_state());
+      if(!state.acceptor)
+      {
+        return;
+      }
+      state.next_socket = std::make_unique<tcp::socket>(state.io_context);
+      state.acceptor->async_accept(*state.next_socket, [](boost::system::error_code const ec) {
+        auto &state(legacy_state());
+        if(!ec && state.server_engine)
+        {
+          auto conn(std::make_shared<connection>(std::move(*state.next_socket), *state.server_engine));
+          conn->start();
+        }
+        else if(ec)
+        {
+          std::cerr << "accept error: " << ec.message() << '\n';
+        }
+
+        legacy_accept_connection();
+      });
+    }
+
+    void write_port_file(std::int64_t const port)
+    {
+      auto &state(legacy_state());
+      std::ofstream ofs{ state.port_file };
+      if(ofs)
+      {
+        ofs << port;
+      }
+    }
+
+    void remove_port_file()
+    {
+      auto &state(legacy_state());
+      std::error_code ec;
+      [[maybe_unused]] bool const removed(std::filesystem::remove(state.port_file, ec));
+      if(ec)
+      {
+        std::cerr << "failed to remove nREPL port file: " << ec.message() << '\n';
+      }
+    }
+
+    object_ref run_server(object_ref const port_obj)
+    {
+      bootstrap_runtime_once();
+
+      auto const port(to_int(port_obj));
+      std::cout << "Starting jank nREPL on port " << port << '\n';
+
+      auto &state(legacy_state());
+      state.server_engine = std::make_shared<engine>();
+      state.acceptor = std::make_unique<tcp::acceptor>(state.io_context, tcp::endpoint(tcp::v4(), port));
+      write_port_file(port);
+      std::atexit(remove_port_file);
+
+      legacy_accept_connection();
+      state.io_context.run();
+      return runtime::jank_nil;
+    }
+
+    object_ref start_server(object_ref const port_obj, object_ref const bind_obj)
+    {
+      bootstrap_runtime_once();
+
+      auto const port(to_int(port_obj));
+      auto const bind_address(to_std_string(runtime::to_string(bind_obj)));
+
+      try
+      {
+        auto srv = std::make_shared<server>(port, bind_address);
+        auto const ptr_val = reinterpret_cast<std::uintptr_t>(srv.get());
+        server_registry()[ptr_val] = srv;
+
+        auto const srv_ptr_kw(__rt_ctx->intern_keyword("server-ptr").expect_ok());
+        auto const port_kw(__rt_ctx->intern_keyword("port").expect_ok());
+
+        auto result = make_box<obj::persistent_hash_map>();
+        result = runtime::assoc(result, srv_ptr_kw, make_box(static_cast<int64_t>(ptr_val)));
+        result = runtime::assoc(result, port_kw, make_box(static_cast<int64_t>(srv->get_port())));
+
+        return result;
+      }
+      catch(std::exception const &e)
+      {
+        std::cerr << "Failed to start nREPL server: " << e.what() << '\n';
+        return runtime::jank_nil;
+      }
+    }
+
+    object_ref stop_server(object_ref const server_obj)
+    {
+      if(server_obj == runtime::jank_nil)
+      {
+        return runtime::jank_nil;
+      }
+
+      auto const server_map(expect_object<obj::persistent_hash_map>(server_obj));
       auto const srv_ptr_kw(__rt_ctx->intern_keyword("server-ptr").expect_ok());
+      auto const ptr_obj(runtime::get(server_map, srv_ptr_kw));
+
+      if(ptr_obj == runtime::jank_nil)
+      {
+        return runtime::jank_nil;
+      }
+
+      auto const ptr_val(static_cast<std::uintptr_t>(to_int(ptr_obj)));
+      server_registry().erase(ptr_val);
+
+      return runtime::jank_nil;
+    }
+
+    object_ref get_server_port(object_ref const server_obj)
+    {
+      if(server_obj == runtime::jank_nil)
+      {
+        return runtime::jank_nil;
+      }
+
+      auto const server_map(expect_object<obj::persistent_hash_map>(server_obj));
       auto const port_kw(__rt_ctx->intern_keyword("port").expect_ok());
-
-      auto result = make_box<obj::persistent_hash_map>();
-      result = runtime::assoc(result, srv_ptr_kw, make_box(static_cast<int64_t>(ptr_val)));
-      result = runtime::assoc(result, port_kw, make_box(static_cast<int64_t>(srv->get_port())));
-
-      return result;
+      return runtime::get(server_map, port_kw);
     }
-    catch(std::exception const &e)
-    {
-      std::cerr << "Failed to start nREPL server: " << e.what() << '\n';
-      return runtime::jank_nil;
-    }
-  }
-
-  object_ref stop_server(object_ref const server_obj)
-  {
-    if(server_obj == runtime::jank_nil)
-    {
-      return runtime::jank_nil;
-    }
-
-    auto const server_map(expect_object<obj::persistent_hash_map>(server_obj));
-    auto const srv_ptr_kw(__rt_ctx->intern_keyword("server-ptr").expect_ok());
-    auto const ptr_obj(runtime::get(server_map, srv_ptr_kw));
-
-    if(ptr_obj == runtime::jank_nil)
-    {
-      return runtime::jank_nil;
-    }
-
-    auto const ptr_val(static_cast<std::uintptr_t>(to_int(ptr_obj)));
-
-    // Remove from the static map, which will destroy the server
-    static std::map<std::uintptr_t, std::shared_ptr<server>> servers;
-    servers.erase(ptr_val);
-
-    return runtime::jank_nil;
-  }
-
-  object_ref get_server_port(object_ref const server_obj)
-  {
-    if(server_obj == runtime::jank_nil)
-    {
-      return runtime::jank_nil;
-    }
-
-    auto const server_map(expect_object<obj::persistent_hash_map>(server_obj));
-    auto const port_kw(__rt_ctx->intern_keyword("port").expect_ok());
-    return runtime::get(server_map, port_kw);
   }
 
   struct __ns : behavior::callable
@@ -427,7 +460,7 @@ namespace jank::nrepl_server::asio
       {
         __rt_ctx->module_loader.set_is_loaded(module_name);
         auto const locked_modules{ __rt_ctx->loaded_modules_in_order.wlock() };
-        locked_modules->push_back(module_name);
+        locked_modules->emplace_back(module_name);
       }
       return runtime::jank_nil;
     }

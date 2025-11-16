@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <compare>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -186,7 +188,7 @@ namespace jank::nrepl_server::asio
       }
     };
 
-    enum class parse_state
+    enum class parse_state : std::uint8_t
     {
       ok,
       need_more,
@@ -318,14 +320,15 @@ namespace jank::nrepl_server::asio
       }
 
       auto const remaining(input.size() - (colon + 1));
-      if(static_cast<std::size_t>(size) > remaining)
+      auto const size_as_size(static_cast<std::size_t>(size));
+      if(size_as_size > remaining)
       {
         return parse_state::need_more;
       }
 
       auto const start(colon + 1);
-      out = value{ std::string{ input.substr(start, static_cast<std::size_t>(size)) } };
-      offset = start + static_cast<std::size_t>(size);
+      out = value{ std::string{ input.substr(start, size_as_size) } };
+      offset = start + size_as_size;
       return parse_state::ok;
     }
 
@@ -730,8 +733,8 @@ namespace jank::nrepl_server::asio
     };
 
     bencode::value::dict make_done_response(std::string const &session,
-                                            std::string const &id,
-                                            std::vector<std::string> statuses) const
+                        std::string const &id,
+                        std::vector<std::string> const &statuses) const
     {
       bencode::value::dict payload;
       if(!id.empty())
@@ -788,8 +791,9 @@ namespace jank::nrepl_server::asio
         }
       }
 
-      std::sort(matches.begin(), matches.end());
-      matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
+      std::ranges::sort(matches);
+      auto const unique_end(std::ranges::unique(matches));
+      matches.erase(unique_end.begin(), unique_end.end());
       return matches;
     }
 
@@ -816,7 +820,7 @@ namespace jank::nrepl_server::asio
       {
         token.erase(token.begin());
       }
-      std::transform(token.begin(), token.end(), token.begin(), [](unsigned char c) {
+      std::ranges::transform(token, token.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
       });
       return token;
@@ -879,7 +883,7 @@ namespace jank::nrepl_server::asio
         info.name = to_std_string(var->name->name);
       }
 
-      object_ref var_obj{ var };
+      object_ref const var_obj{ var };
       auto const meta(runtime::meta(var_obj));
       if(meta != jank_nil)
       {

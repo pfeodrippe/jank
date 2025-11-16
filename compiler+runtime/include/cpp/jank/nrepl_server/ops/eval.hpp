@@ -25,8 +25,8 @@ namespace jank::nrepl_server::asio
 
     std::vector<bencode::value::dict> responses;
     std::string captured_out;
-    runtime::scoped_output_redirect const redirect{ [&](std::string chunk) {
-      captured_out += std::move(chunk);
+    runtime::scoped_output_redirect const redirect{ [&](std::string const &chunk) {
+      captured_out += chunk;
     } };
 
     auto emit_pending_output([&]() {

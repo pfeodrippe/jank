@@ -12,7 +12,7 @@ namespace jank::nrepl_server::asio
 
     for(auto const &entry : maybe_items.value())
     {
-      auto const already(std::find(middleware_stack_.begin(), middleware_stack_.end(), entry));
+      auto const already(std::ranges::find(middleware_stack_, entry));
       if(already == middleware_stack_.end())
       {
         middleware_stack_.push_back(entry);

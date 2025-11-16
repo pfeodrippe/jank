@@ -10,8 +10,8 @@ namespace jank::nrepl_server::asio
       return handle_unsupported(msg, "missing-middleware");
     }
 
-    std::set<std::string> existing{ middleware_stack_.begin(), middleware_stack_.end() };
-    std::set<std::string> incoming{ maybe_items->begin(), maybe_items->end() };
+    std::set<std::string> const existing{ middleware_stack_.begin(), middleware_stack_.end() };
+    std::set<std::string> const incoming{ maybe_items->begin(), maybe_items->end() };
     if(existing != incoming)
     {
       return handle_unsupported(msg, "middleware-mismatch");

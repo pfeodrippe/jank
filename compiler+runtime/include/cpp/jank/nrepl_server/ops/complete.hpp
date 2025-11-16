@@ -26,7 +26,7 @@ namespace jank::nrepl_server::asio
     {
       std::unordered_set<std::string> normalized;
       normalized.reserve(extra->size());
-      for(auto entry : extra.value())
+      for(auto const &entry : extra.value())
       {
         auto const normalized_entry(normalize_metadata_key(entry));
         normalized.insert(normalized_entry);
@@ -72,7 +72,7 @@ namespace jank::nrepl_server::asio
           entry.emplace("arglists-str", var_info->arglists_str.value());
         }
       }
-      completion_payloads.emplace_back(bencode::value{ std::move(entry) });
+      completion_payloads.emplace_back(std::move(entry));
     }
 
     bencode::value::dict payload;
