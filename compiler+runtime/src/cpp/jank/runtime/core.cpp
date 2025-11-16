@@ -1,3 +1,8 @@
+#include <exception>
+#include <string_view>
+#include <utility>
+#include <vector>
+
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/behavior/nameable.hpp>
@@ -7,8 +12,67 @@
 #include <jank/runtime/sequence_range.hpp>
 #include <jank/util/fmt.hpp>
 
+namespace
+{
+  std::vector<std::function<void(std::string)>> &output_redirects()
+  {
+    thread_local std::vector<std::function<void(std::string)>> redirects;
+    return redirects;
+  }
+
+  void write_to_output(std::string_view const text)
+  {
+    if(text.empty())
+    {
+      return;
+    }
+
+    auto &redirects(output_redirects());
+    if(redirects.empty())
+    {
+      std::fwrite(text.data(), 1, text.size(), stdout);
+      return;
+    }
+
+    redirects.back()(std::string{ text });
+  }
+}
+
 namespace jank::runtime
 {
+  void push_output_redirect(std::function<void(std::string)> sink)
+  {
+    output_redirects().emplace_back(std::move(sink));
+  }
+
+  void pop_output_redirect()
+  {
+    auto &redirects(output_redirects());
+    if(redirects.empty())
+    {
+      throw std::runtime_error{ "no output redirect to pop" };
+    }
+
+    redirects.pop_back();
+  }
+
+  scoped_output_redirect::scoped_output_redirect(std::function<void(std::string)> sink)
+  {
+    push_output_redirect(std::move(sink));
+  }
+
+  scoped_output_redirect::~scoped_output_redirect()
+  {
+    try
+    {
+      pop_output_redirect();
+    }
+    catch(...)
+    {
+      std::terminate();
+    }
+  }
+
   jtl::immutable_string type(object_ref const o)
   {
     return object_type_str(o->type);
@@ -110,7 +174,7 @@ namespace jank::runtime
             buff(' ');
             runtime::to_string(e.erase(), buff);
           }
-          std::fwrite(buff.data(), 1, buff.size(), stdout);
+          write_to_output(std::string_view{ buff.data(), buff.size() });
         }
         else
         {
@@ -130,7 +194,7 @@ namespace jank::runtime
 
         if constexpr(std::same_as<T, obj::nil>)
         {
-          std::putc('\n', stdout);
+          write_to_output(std::string_view{ "\n", 1 });
         }
         else if constexpr(behavior::sequenceable<T>)
         {
@@ -141,8 +205,8 @@ namespace jank::runtime
             buff(' ');
             runtime::to_string(e.erase(), buff);
           }
-          std::fwrite(buff.data(), 1, buff.size(), stdout);
-          std::putc('\n', stdout);
+          write_to_output(std::string_view{ buff.data(), buff.size() });
+          write_to_output(std::string_view{ "\n", 1 });
         }
         else
         {
@@ -169,7 +233,7 @@ namespace jank::runtime
             buff(' ');
             runtime::to_code_string(e.erase(), buff);
           }
-          std::fwrite(buff.data(), 1, buff.size(), stdout);
+          write_to_output(std::string_view{ buff.data(), buff.size() });
         }
         else
         {
@@ -189,7 +253,7 @@ namespace jank::runtime
 
         if constexpr(std::same_as<T, obj::nil>)
         {
-          std::putc('\n', stdout);
+          write_to_output(std::string_view{ "\n", 1 });
         }
         else if constexpr(behavior::sequenceable<T>)
         {
@@ -200,8 +264,8 @@ namespace jank::runtime
             buff(' ');
             runtime::to_code_string(e.erase(), buff);
           }
-          std::fwrite(buff.data(), 1, buff.size(), stdout);
-          std::putc('\n', stdout);
+          write_to_output(std::string_view{ buff.data(), buff.size() });
+          write_to_output(std::string_view{ "\n", 1 });
         }
         else
         {

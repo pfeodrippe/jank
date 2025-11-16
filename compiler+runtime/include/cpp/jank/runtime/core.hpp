@@ -1,6 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <regex>
+#include <string>
 
 /* TODO: Remove these so that people include only what they need. */
 #include <jank/runtime/core/make_box.hpp>
@@ -31,6 +33,19 @@ namespace jank::runtime
   object_ref println(object_ref args);
   object_ref pr(object_ref args);
   object_ref prn(object_ref args);
+
+  void push_output_redirect(std::function<void(std::string)> sink);
+  void pop_output_redirect();
+
+  struct scoped_output_redirect
+  {
+    explicit scoped_output_redirect(std::function<void(std::string)> sink);
+    scoped_output_redirect(scoped_output_redirect const &) = delete;
+    scoped_output_redirect(scoped_output_redirect &&) = delete;
+    scoped_output_redirect &operator=(scoped_output_redirect const &) = delete;
+    scoped_output_redirect &operator=(scoped_output_redirect &&) = delete;
+    ~scoped_output_redirect();
+  };
 
   obj::persistent_string_ref subs(object_ref s, object_ref start);
   obj::persistent_string_ref subs(object_ref s, object_ref start, object_ref end);
