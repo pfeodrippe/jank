@@ -288,7 +288,7 @@ namespace jank::nrepl_server::asio
       eng.handle(make_message({
         {   "op",                                                    "eval"                 },
         { "code",
-         "(ns sample.server (:refer-clojure :refer-all)) (defn start [] 0) (defn stop [] 1)" }
+         "(ns sample.server (:refer-clojure :refer :all)) (defn start [] 0) (defn stop [] 1)" }
       }));
       eng.handle(make_message({
         {   "op",                                            "eval" },

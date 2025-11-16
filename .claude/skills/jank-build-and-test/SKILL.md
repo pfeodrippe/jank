@@ -58,6 +58,12 @@ JANK_PRINT_IR=1 jank --codegen llvm_ir --module-path="$(clojure -A:cpp-raw-inlin
 jank --codegen llvm_ir --module-path="$(clojure -A:cpp-raw-inline -Spath)" run-main cpp_raw_inline.core
 ```
 
+For compiling (e.g. from compiler+runtime)
+
+``` bash
+./build/jank --module-path . run-main jank.demo.nrepl-server-demo
+```
+
 ## Examples
 ```bash
 # Full suite from compiler+runtime/

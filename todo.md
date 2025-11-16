@@ -1,1 +1,2 @@
+- [ ] compile it to a standalone and check the nREPL server
 - [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
