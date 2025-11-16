@@ -38,10 +38,8 @@ namespace jank::jit
     static std::string llvm_error_to_string(llvm::Error err)
     {
       std::string message;
-      llvm::handleAllErrors(std::move(err), [&](llvm::ErrorInfoBase &info)
-      {
-        message = info.message();
-      });
+      llvm::handleAllErrors(std::move(err),
+                            [&](llvm::ErrorInfoBase &info) { message = info.message(); });
       return message;
     }
   }
@@ -96,19 +94,17 @@ namespace jank::jit
   }
 
 #if defined(__APPLE__)
-  static void load_clang_runtime_archive(clang::Interpreter &interpreter,
-                                         std::string const &archive_path)
+  static void
+  load_clang_runtime_archive(clang::Interpreter &interpreter, std::string const &archive_path)
   {
     auto archive_buffer = llvm::MemoryBuffer::getFile(archive_path);
     if(!archive_buffer)
     {
-      throw error::system_failure(util::format("Failed to open '{}': {}",
-                                               archive_path,
-                                               archive_buffer.getError().message()));
+      throw error::system_failure(
+        util::format("Failed to open '{}': {}", archive_path, archive_buffer.getError().message()));
     }
 
-    auto load_archive_children = [&](llvm::object::Archive &archive)
-    {
+    auto load_archive_children = [&](llvm::object::Archive &archive) {
       auto &ee{ *interpreter.getExecutionEngine() };
       llvm::Error child_err{ llvm::Error::success() };
       for(auto child : archive.children(child_err))
@@ -120,8 +116,9 @@ namespace jank::jit
           continue;
         }
 
-        auto child_buffer{ llvm::MemoryBuffer::getMemBufferCopy(child_buffer_ref->getBuffer(),
-                                                               child_buffer_ref->getBufferIdentifier()) };
+        auto child_buffer{ llvm::MemoryBuffer::getMemBufferCopy(
+          child_buffer_ref->getBuffer(),
+          child_buffer_ref->getBufferIdentifier()) };
         llvm::cantFail(ee.addObjectFile(std::move(child_buffer)));
       }
 
@@ -150,10 +147,11 @@ namespace jank::jit
         auto archive_or_err = obj.getAsArchive();
         if(!archive_or_err)
         {
-          throw error::system_failure(util::format("Failed to parse '{}' slice '{}': {}",
-                                                   archive_path,
-                                                   obj.getArchFlagName(),
-                                                   llvm_error_to_string(archive_or_err.takeError())));
+          throw error::system_failure(
+            util::format("Failed to parse '{}' slice '{}': {}",
+                         archive_path,
+                         obj.getArchFlagName(),
+                         llvm_error_to_string(archive_or_err.takeError())));
         }
 
         load_archive_children(**archive_or_err);
@@ -163,9 +161,10 @@ namespace jank::jit
 
       if(!loaded_slice)
       {
-        throw error::system_failure(util::format("Unable to find architecture '{}' in '{}'.",
-                                                 std::string{ llvm::Triple::getArchTypeName(host_arch) },
-                                                 archive_path));
+        throw error::system_failure(
+          util::format("Unable to find architecture '{}' in '{}'.",
+                       std::string{ llvm::Triple::getArchTypeName(host_arch) },
+                       archive_path));
       }
 
       return;
@@ -526,14 +525,14 @@ namespace jank::jit
       return err("Attempted to load an empty library path.");
     }
 
-    auto load_err{ static_cast<clang::Interpreter &>(*interpreter).LoadDynamicLibrary(path.data()) };
+    auto load_err{
+      static_cast<clang::Interpreter &>(*interpreter).LoadDynamicLibrary(path.data())
+    };
     if(load_err)
     {
       std::string err_message;
-      llvm::handleAllErrors(std::move(load_err), [&](llvm::ErrorInfoBase &info)
-      {
-        err_message = info.message();
-      });
+      llvm::handleAllErrors(std::move(load_err),
+                            [&](llvm::ErrorInfoBase &info) { err_message = info.message(); });
       if(err_message.empty())
       {
         err_message = "unknown error";

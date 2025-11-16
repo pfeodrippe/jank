@@ -69,6 +69,9 @@ jank --codegen llvm_ir --module-path="$(clojure -A:cpp-raw-inline -Spath)" run-m
 # Watch mode (press Ctrl+C to exit)
 ./bin/watch ./bin/test
 
+# Run a test case
+./build/jank-test --test-case="nREPL engine"
+
 # Ahead-of-time bash harness
 cd compiler+runtime/test/bash/ahead-of-time
 export PATH="/Users/pfeodrippe/dev/jank/compiler+runtime/build:$PATH"
