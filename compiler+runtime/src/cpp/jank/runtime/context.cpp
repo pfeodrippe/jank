@@ -233,6 +233,10 @@ namespace jank::runtime
   {
     profile::timer const timer{ "rt eval_cpp_string" };
 
+    /* Capture stderr output (C++ compilation errors) and forward them through
+     * the output redirection system so they appear in the IDE REPL. */
+    scoped_stderr_redirect const stderr_redirect{};
+
     auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
     if(!parse_res)
     {

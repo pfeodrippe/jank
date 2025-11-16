@@ -2148,6 +2148,9 @@ namespace jank::codegen
   /* NOLINTNEXTLINE(readability-make-member-function-const): Affects overload resolution. */
   llvm::Value *llvm_processor::impl::gen(expr::cpp_raw_ref const expr, expr::function_arity const &)
   {
+    /* Capture stderr output (C++ compilation errors) so they appear in output. */
+    runtime::scoped_stderr_redirect const stderr_redirect{};
+
     auto parse_res{ __rt_ctx->jit_prc.interpreter->Parse(expr->code.c_str()) };
     if(!parse_res)
     {

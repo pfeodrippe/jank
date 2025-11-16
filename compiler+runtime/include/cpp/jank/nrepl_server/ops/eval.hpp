@@ -28,6 +28,7 @@ namespace jank::nrepl_server::asio
     runtime::scoped_output_redirect const redirect{ [&](std::string const &chunk) {
       captured_out += chunk;
     } };
+    runtime::scoped_stderr_redirect const stderr_redirect{};
 
     auto emit_pending_output([&]() {
       if(captured_out.empty())

@@ -2,6 +2,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <cstdio>
+#include <unistd.h>
 
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/visit.hpp>
@@ -74,6 +76,11 @@ namespace jank::runtime
   }
 
   void forward_output(std::string_view const text)
+  {
+    write_to_output(text);
+  }
+
+  void forward_error(std::string_view const text)
   {
     write_to_output(text);
   }
@@ -778,4 +785,116 @@ namespace jank::runtime
 
     return reference;
   }
+}
+
+/* Implementation of scoped_stderr_redirect using file descriptor redirection. */
+namespace jank::runtime
+{
+  struct scoped_stderr_redirect::impl
+  {
+    impl()
+      : temp_file{ tmpfile() }
+    {
+      if(!temp_file)
+      {
+        return;
+      }
+
+      /* Save the original stderr file descriptor. */
+      original_stderr_fd = dup(STDERR_FILENO);
+      if(original_stderr_fd < 0)
+      {
+        fclose(temp_file);
+        temp_file = nullptr;
+        return;
+      }
+
+      /* Flush stderr before redirecting. */
+      fflush(stderr);
+
+      /* Redirect stderr to the temporary file. */
+      if(dup2(fileno(temp_file), STDERR_FILENO) < 0)
+      {
+        close(original_stderr_fd);
+        original_stderr_fd = -1;
+        fclose(temp_file);
+        temp_file = nullptr;
+      }
+    }
+
+    ~impl() noexcept
+    {
+      if(!temp_file || original_stderr_fd < 0)
+      {
+        return;
+      }
+
+      /* Flush any remaining data to the temporary file. */
+      fflush(stderr);
+
+      /* Restore the original stderr. */
+      dup2(original_stderr_fd, STDERR_FILENO);
+      close(original_stderr_fd);
+
+      /* Read the captured content from the temporary file. */
+      fseek(temp_file, 0L, SEEK_END);
+      long const bufsize{ ftell(temp_file) };
+      if(bufsize > 0)
+      {
+        fseek(temp_file, 0L, SEEK_SET);
+
+        /* Use a fixed-size buffer to avoid allocations in noexcept destructor.
+         * Read in chunks if the content is larger than the buffer. */
+        constexpr size_t buffer_size{ 4096 };
+        char buffer[buffer_size];
+
+        bool const has_redirects{ !output_redirects().empty() };
+
+        size_t remaining{ static_cast<size_t>(bufsize) };
+        while(remaining > 0)
+        {
+          size_t const to_read{ remaining < buffer_size ? remaining : buffer_size };
+          size_t const bytes_read{ fread(buffer, sizeof(char), to_read, temp_file) };
+          if(bytes_read == 0)
+          {
+            break;
+          }
+
+          /* Forward the captured stderr content.
+           * If redirects are active, use them; otherwise write directly to stderr.
+           * Wrap in try-catch since this is noexcept. */
+          try
+          {
+            if(has_redirects)
+            {
+              forward_error(std::string_view{ buffer, bytes_read });
+            }
+            else
+            {
+              /* No redirects active, write directly to stderr. */
+              fwrite(buffer, sizeof(char), bytes_read, stderr);
+            }
+          }
+          catch(...) // NOLINT(bugprone-empty-catch)
+          {
+            /* Silently ignore errors during destructor cleanup to maintain noexcept guarantee. */
+          }
+
+          remaining -= bytes_read;
+        }
+      }
+
+      fclose(temp_file);
+    }
+
+    FILE *temp_file{};
+    int original_stderr_fd{ -1 };
+  };
+
+  scoped_stderr_redirect::scoped_stderr_redirect()
+    : pimpl{ std::make_unique<impl>() }
+  {
+  }
+
+  scoped_stderr_redirect::~scoped_stderr_redirect() = default;
 }

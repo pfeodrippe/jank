@@ -28,6 +28,7 @@
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/clang.hpp>
 #include <jank/runtime/context.hpp>
+#include <jank/runtime/core.hpp>
 #include <jank/profile/time.hpp>
 #include <jank/error/system.hpp>
 
@@ -373,6 +374,11 @@ namespace jank::jit
   {
     profile::timer const timer{ "jit eval_string" };
     //util::println("// eval_string:\n{}\n", s);
+
+    /* Capture stderr output (C++ compilation errors) and forward them through
+     * the output redirection system so they appear in the IDE REPL. */
+    runtime::scoped_stderr_redirect const stderr_redirect{};
+
     auto err(interpreter->ParseAndExecute({ s.data(), s.size() }));
     /* TODO: Throw on errors. */
     llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");

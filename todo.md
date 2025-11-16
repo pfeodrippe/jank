@@ -1,2 +1,4 @@
-- [ ] compile it to a standalone and check the nREPL server
+- [x] compile it to a standalone and check the nREPL server
+  - [x] compile
+- [ ] use it to hotreload in SC
 - [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)

@@ -36,6 +36,7 @@ namespace jank::runtime
   object_ref prn(object_ref args);
 
   void forward_output(std::string_view text);
+  void forward_error(std::string_view text);
 
   void push_output_redirect(std::function<void(std::string)> sink);
   void pop_output_redirect();
@@ -48,6 +49,22 @@ namespace jank::runtime
     scoped_output_redirect &operator=(scoped_output_redirect const &) = delete;
     scoped_output_redirect &operator=(scoped_output_redirect &&) = delete;
     ~scoped_output_redirect();
+  };
+
+  /* A scoped guard that captures stderr output during C++ compilation and forwards it
+   * to the same output redirect as stdout. This allows C++ compilation errors to appear
+   * in the IDE REPL. */
+  struct scoped_stderr_redirect
+  {
+    scoped_stderr_redirect();
+    scoped_stderr_redirect(scoped_stderr_redirect const &) = delete;
+    scoped_stderr_redirect(scoped_stderr_redirect &&) = delete;
+    scoped_stderr_redirect &operator=(scoped_stderr_redirect const &) = delete;
+    scoped_stderr_redirect &operator=(scoped_stderr_redirect &&) = delete;
+    ~scoped_stderr_redirect();
+
+    struct impl;
+    std::unique_ptr<impl> pimpl;
   };
 
   obj::persistent_string_ref subs(object_ref s, object_ref start);

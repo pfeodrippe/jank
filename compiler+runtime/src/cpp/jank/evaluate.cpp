@@ -604,6 +604,10 @@ namespace jank::evaluate
     }
     else
     {
+      /* Capture stderr output (C++ compilation errors) and forward them through
+       * the output redirection system so they appear in the IDE REPL. */
+      runtime::scoped_stderr_redirect const stderr_redirect{};
+
       codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
       util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
       __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
