@@ -45,6 +45,7 @@ extern "C" int jank_init_with_pch(int const argc,
 extern "C" jank_object_ref jank_load_clojure_core_native();
 extern "C" jank_object_ref jank_load_clojure_core();
 extern "C" jank_object_ref jank_load_jank_compiler_native();
+extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
 extern "C" jank_object_ref jank_var_intern_c(char const *, char const *);
 extern "C" jank_object_ref jank_deref(jank_object_ref);
 extern "C" jank_object_ref jank_call2(jank_object_ref, jank_object_ref, jank_object_ref);
@@ -83,6 +84,8 @@ int main(int argc, const char** argv)
     jank_load_clojure_core();
     jank_module_set_loaded("/clojure.core");
     jank_load_jank_compiler_native();
+          jank_load_jank_nrepl_server_asio();
+          jank_module_set_loaded("/jank.nrepl-server.asio");
 
     )");
 

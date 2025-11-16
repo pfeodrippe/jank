@@ -9,7 +9,8 @@
          :include-dirs ["/opt/homebrew/include"]
          :library-dirs ["/opt/homebrew/lib"
                         "/usr/lib"]}
-  :source-paths ["src/jank"
+  :source-paths ["../compiler+runtime/src/jank"
+                 "src/jank"
                  "src/cpp"]
   :profiles {:uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}})

@@ -47,7 +47,27 @@ set(jank_resource_dir
   "../lib/jank/${CMAKE_PROJECT_VERSION}"
   CACHE STRING
   "Where jank's runtime files are installed. Relative paths are based on the runtime jank binary path")
-set(jank_clojure_core_o "${CMAKE_BINARY_DIR}/core-libs/clojure/core.o")
+set(jank_core_modules
+  clojure.core
+  jank.nrepl-server.core
+  jank.nrepl-server.server
+)
+
+set(jank_core_module_paths "")
+set(jank_core_module_sources "")
+set(jank_core_library_objects "")
+foreach(module ${jank_core_modules})
+  string(REPLACE "." "/" module_rel_path ${module})
+  string(REPLACE "-" "_" module_rel_path ${module_rel_path})
+  list(APPEND jank_core_module_paths ${module_rel_path})
+  set(source_path "${CMAKE_SOURCE_DIR}/src/jank/${module_rel_path}.jank")
+  if(NOT EXISTS ${source_path})
+    message(FATAL_ERROR "Missing bundled module source: ${source_path}")
+  endif()
+  list(APPEND jank_core_module_sources ${source_path})
+  set(object_path "${CMAKE_BINARY_DIR}/core-libs/${module_rel_path}.o")
+  list(APPEND jank_core_library_objects ${object_path})
+endforeach()
 
 find_package(Git REQUIRED)
 execute_process(
@@ -372,6 +392,17 @@ include(cmake/dependency/cppinterop.cmake)
 include(cmake/dependency/boost-multiprecision.cmake)
 
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+
+find_path(
+  jank_boost_include_dir
+  NAMES boost/asio.hpp
+  HINTS ENV BOOST_ROOT
+  PATH_SUFFIXES include
+  PATHS /opt/homebrew/include /usr/local/include /usr/include
+)
+if(NOT jank_boost_include_dir)
+  message(FATAL_ERROR "Unable to find boost/asio.hpp. Install Boost headers or set BOOST_ROOT.")
+endif()
 # ---- Other dependencies ----
 
 # ---- libjank.a ----
@@ -526,6 +557,7 @@ add_library(
   src/cpp/jank/codegen/processor.cpp
   src/cpp/jank/codegen/llvm_processor.cpp
   src/cpp/jank/jit/processor.cpp
+  src/cpp/jank/nrepl_server/asio.cpp
   src/cpp/jank/aot/processor.cpp
   src/cpp/jank/aot/resource.cpp
 
@@ -565,6 +597,7 @@ target_include_directories(
   "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-preprocessor/include>"
   "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-multiprecision/include>"
   "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/stduuid/include/>"
+  ${jank_boost_include_dir}
   ${OPENSSL_INCLUDE_DIR}
 )
 
@@ -754,7 +787,7 @@ if(jank_enable_phase_2)
   target_link_libraries(
     jank_exe_phase_2 PUBLIC
     "$<TARGET_PROPERTY:jank_exe_phase_1,LINK_LIBRARIES>"
-    ${jank_clojure_core_o}
+    ${jank_core_library_objects}
   )
 
   jank_hook_llvm(jank_exe_phase_2)
@@ -764,7 +797,7 @@ if(jank_enable_phase_2)
   #set_target_properties(jank_exe_phase_2 PROPERTIES LINK_FLAGS_RELEASE "-s")
 else()
   add_custom_command(
-    DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1 ${jank_clojure_core_o} ${jank_incremental_pch_flag}
+    DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1 ${jank_core_library_objects} ${jank_incremental_pch_flag}
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     OUTPUT ${CMAKE_BINARY_DIR}/jank
     COMMAND ln -sf jank-phase-1 jank
@@ -884,11 +917,26 @@ add_custom_target(
 # first build or after a clean), when any of the jank sources for these libs
 # change, or whenever the jank binary changes.
 set(jank_core_libraries_flag "${CMAKE_BINARY_DIR}/classes/core-libraries")
+set(jank_core_library_commands "")
+list(LENGTH jank_core_modules jank_core_module_count)
+if(jank_core_module_count GREATER 0)
+  math(EXPR jank_core_module_last_index "${jank_core_module_count} - 1")
+  foreach(module_index RANGE 0 ${jank_core_module_last_index})
+    list(GET jank_core_modules ${module_index} jank_core_module_name)
+    list(GET jank_core_module_paths ${module_index} jank_core_module_path)
+    list(GET jank_core_library_objects ${module_index} jank_core_module_object)
+    get_filename_component(jank_core_module_dir ${jank_core_module_object} DIRECTORY)
+    list(APPEND jank_core_library_commands
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${jank_core_module_dir}
+      COMMAND ${CMAKE_BINARY_DIR}/jank-phase-1 compile-module -o ${jank_core_module_object} ${jank_core_module_name}
+    )
+  endforeach()
+endif()
 add_custom_command(
-  DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1 ${CMAKE_SOURCE_DIR}/src/jank/clojure/core.jank ${jank_incremental_pch_flag}
+  DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1 ${jank_core_module_sources} ${jank_incremental_pch_flag}
   OUTPUT ${jank_core_libraries_flag}
-  BYPRODUCTS ${jank_clojure_core_o}
-  COMMAND ${CMAKE_BINARY_DIR}/jank-phase-1 compile-module -o ${jank_clojure_core_o} clojure.core
+  BYPRODUCTS ${jank_core_library_objects}
+  ${jank_core_library_commands}
   COMMAND touch ${jank_core_libraries_flag}
 )
 add_custom_target(

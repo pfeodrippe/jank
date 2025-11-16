@@ -34,6 +34,7 @@
 #ifdef JANK_PHASE_2
 extern "C" jank_object_ref jank_load_clojure_core();
 #endif
+extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
 
 namespace jank
 {
@@ -304,6 +305,7 @@ int main(int const argc, char const **argv)
     jank_load_clojure_core_native();
     jank_load_jank_compiler_native();
     jank_load_jank_perf_native();
+    jank_load_jank_nrepl_server_asio();
 
 #ifdef JANK_PHASE_2
     jank_load_clojure_core();

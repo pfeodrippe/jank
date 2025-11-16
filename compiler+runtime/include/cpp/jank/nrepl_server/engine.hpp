@@ -718,6 +718,7 @@ namespace jank::nrepl_server::asio
       std::optional<std::int64_t> line;
       std::optional<std::int64_t> column;
       bool is_macro{ false };
+      bool is_function{ false };
     };
 
     bencode::value::dict make_done_response(std::string const &session,
@@ -913,6 +914,7 @@ namespace jank::nrepl_server::asio
             info.arglists_str = join_with_newline(info.arglists);
           }
         }
+        // Try standard Clojure metadata keys first
         if(auto const file(runtime::get(meta, file_kw)); file != jank_nil)
         {
           info.file = to_std_string(runtime::to_string(file));
@@ -925,10 +927,48 @@ namespace jank::nrepl_server::asio
         {
           info.column = runtime::to_int(column);
         }
+
+        // Also check jank-specific :jank/source metadata
+        // Format: {:jank/source {:start {:line 20, :col 7, :offset 260}, :end {...}}}
+        auto const jank_source_kw(__rt_ctx->intern_keyword("jank", "source").expect_ok());
+        if(auto const jank_source(runtime::get(meta, jank_source_kw)); jank_source != jank_nil)
+        {
+          auto const start_kw(__rt_ctx->intern_keyword("start").expect_ok());
+          if(auto const start_map(runtime::get(jank_source, start_kw)); start_map != jank_nil)
+          {
+            // Extract line from :start map
+            if(!info.line.has_value())
+            {
+              if(auto const start_line(runtime::get(start_map, line_kw)); start_line != jank_nil)
+              {
+                info.line = runtime::to_int(start_line);
+              }
+            }
+            // Extract column from :start map (note: jank uses :col, not :column)
+            if(!info.column.has_value())
+            {
+              auto const col_kw(__rt_ctx->intern_keyword("col").expect_ok());
+              if(auto const start_col(runtime::get(start_map, col_kw)); start_col != jank_nil)
+              {
+                info.column = runtime::to_int(start_col);
+              }
+            }
+          }
+        }
         if(auto const macro_flag(runtime::get(meta, macro_kw)); macro_flag != jank_nil)
         {
           info.is_macro = runtime::truthy(macro_flag);
         }
+      }
+
+      // Check if the var's value is actually a function by examining its type
+      auto const var_value(runtime::deref(var_obj));
+      if(var_value != jank_nil)
+      {
+        auto const val_type(var_value->type);
+        info.is_function = (val_type == object_type::jit_function
+                            || val_type == object_type::native_function_wrapper
+                            || val_type == object_type::multi_function);
       }
 
       return info;

@@ -1,0 +1,24 @@
+(ns jank.nrepl-server.core
+  (:require [jank.nrepl-server.asio]))
+
+(def ^:const default-port 5555)
+
+(defn- digits? [s]
+  (and (string? s)
+       (pos? (count s))
+       (every? #(<= (int \0) (int %) (int \9)) s)))
+
+(defn- parse-port [args]
+  (let [candidate (first args)]
+    (if (digits? candidate)
+      (reduce (fn [acc ch]
+                (+ (* 10 acc)
+                   (- (int ch) (int \0))))
+              0
+              candidate)
+      default-port)))
+
+(defn -main [& args]
+  (let [port (parse-port args)]
+    (println (str "Starting jank nREPL server on port " port))
+    (jank.nrepl-server.asio/run! port)))

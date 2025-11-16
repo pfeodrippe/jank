@@ -47,11 +47,12 @@ namespace jank::nrepl_server::asio
       {
         return std::string{ "macro" };
       }
-      if(info->arglists.empty())
+      // Check if it's actually a function, even if arglists is missing
+      if(info->is_function || !info->arglists.empty())
       {
-        return std::string{ "variable" };
+        return std::string{ "function" };
       }
-      return std::string{ "function" };
+      return std::string{ "variable" };
     }();
 
     bencode::value::dict payload;
