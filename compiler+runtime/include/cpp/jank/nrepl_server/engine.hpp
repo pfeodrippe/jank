@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <deque>
 #include <map>
@@ -13,6 +14,7 @@
 #include <system_error>
 #include <typeinfo>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -23,10 +25,12 @@
 #include <jank/runtime/behavior/callable.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core.hpp>
+#include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/core/to_string.hpp>
 #include <jank/runtime/module/loader.hpp>
 #include <jank/runtime/ns.hpp>
 #include <jank/runtime/object.hpp>
+#include <jank/runtime/obj/keyword.hpp>
 #include <jank/runtime/obj/native_function_wrapper.hpp>
 #include <jank/runtime/obj/nil.hpp>
 #include <jank/runtime/obj/persistent_hash_map.hpp>
@@ -489,9 +493,21 @@ namespace jank::nrepl_server::asio
       {
         return handle_completions(msg);
       }
+      if(op == "complete")
+      {
+        return handle_complete(msg);
+      }
       if(op == "lookup")
       {
         return handle_lookup(msg);
+      }
+      if(op == "info")
+      {
+        return handle_info(msg);
+      }
+      if(op == "eldoc")
+      {
+        return handle_eldoc(msg);
       }
       if(op == "forward-system-output")
       {
@@ -600,7 +616,11 @@ namespace jank::nrepl_server::asio
       ops.emplace("eval", bencode::make_doc_value("Evaluate code in the given session"));
       ops.emplace("load-file", bencode::make_doc_value("Load and evaluate a file"));
       ops.emplace("completions", bencode::make_doc_value("Return completion candidates"));
+      ops.emplace("complete",
+                  bencode::make_doc_value("Return metadata-rich completion candidates"));
       ops.emplace("lookup", bencode::make_doc_value("Lookup metadata about a symbol"));
+      ops.emplace("info", bencode::make_doc_value("Return CIDER-compatible symbol info"));
+      ops.emplace("eldoc", bencode::make_doc_value("Return eldoc hints for a symbol"));
       ops.emplace("forward-system-output",
                   bencode::make_doc_value("Enable forwarding of System/out and System/err"));
       ops.emplace("interrupt", bencode::make_doc_value("Attempt to interrupt a running eval"));
@@ -792,40 +812,15 @@ namespace jank::nrepl_server::asio
       auto const prefix(msg.get("prefix"));
       auto &session(ensure_session(msg.session()));
       auto const requested_ns(msg.get("ns"));
-      auto target_ns(resolve_namespace(session, requested_ns));
-
-      std::vector<std::string> matches;
-      auto const mappings(target_ns->get_mappings());
-      if(mappings.is_some())
-      {
-        matches.reserve(static_cast<std::size_t>(mappings->count()));
-        for(auto const &entry : mappings->data)
-        {
-          auto const key(entry.first);
-          if(!key.is_some() || key->type != object_type::symbol)
-          {
-            continue;
-          }
-
-          auto const sym(expect_object<obj::symbol>(key));
-          auto const candidate_name(to_std_string(sym->name));
-          if(!prefix.empty() && !starts_with(candidate_name, prefix))
-          {
-            continue;
-          }
-          matches.push_back(candidate_name);
-        }
-      }
-
-      std::sort(matches.begin(), matches.end());
-      matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
+      auto const query(prepare_completion_query(session, prefix, requested_ns));
+      auto const candidates(make_completion_candidates(query));
 
       bencode::value::list completions;
-      completions.reserve(matches.size());
-      for(auto const &candidate : matches)
+      completions.reserve(candidates.size());
+      for(auto const &candidate : candidates)
       {
         bencode::value::dict entry;
-        entry.emplace("candidate", candidate);
+        entry.emplace("candidate", candidate.display_name);
         entry.emplace("type", std::string{ "var" });
         completions.emplace_back(bencode::value{ std::move(entry) });
       }
@@ -837,6 +832,90 @@ namespace jank::nrepl_server::asio
       }
       payload.emplace("session", session.id);
       payload.emplace("completions", bencode::value{ std::move(completions) });
+      payload.emplace("status", bencode::list_of_strings({ "done" }));
+      return { std::move(payload) };
+    }
+
+    std::vector<bencode::value::dict> handle_complete(message const &msg)
+    {
+      auto prefix(msg.get("prefix"));
+      auto const symbol_input(msg.get("symbol"));
+      if(prefix.empty())
+      {
+        prefix = symbol_input;
+      }
+      if(prefix.empty())
+      {
+        return handle_unsupported(msg, "missing-prefix");
+      }
+
+      auto &session(ensure_session(msg.session()));
+      auto const query(prepare_completion_query(session, prefix, msg.get("ns")));
+      auto const candidates(make_completion_candidates(query));
+
+      bool include_doc{ true };
+      bool include_arglists{ true };
+      bool include_ns_info{ true };
+      if(auto const extra = parse_string_list(msg.data, "extra-metadata"))
+      {
+        std::unordered_set<std::string> normalized;
+        normalized.reserve(extra->size());
+        for(auto entry : extra.value())
+        {
+          auto const normalized_entry(normalize_metadata_key(entry));
+          normalized.insert(normalized_entry);
+        }
+        include_doc = normalized.contains("doc");
+        include_arglists = normalized.contains("arglists");
+        include_ns_info = normalized.contains("ns");
+      }
+
+      bencode::value::list completion_payloads;
+      completion_payloads.reserve(candidates.size());
+      for(auto const &candidate : candidates)
+      {
+        auto const symbol(make_box<obj::symbol>(make_immutable_string(candidate.symbol_name)));
+        auto const var(query.target_ns->find_var(symbol));
+        if(var.is_nil())
+        {
+          continue;
+        }
+
+        auto const var_info(describe_var(query.target_ns, var, candidate.symbol_name));
+        if(!var_info.has_value())
+        {
+          continue;
+        }
+
+        bencode::value::dict entry;
+        entry.emplace("candidate", candidate.display_name);
+        entry.emplace("type", var_info->is_macro ? std::string{ "macro" } : std::string{ "var" });
+        if(include_ns_info)
+        {
+          entry.emplace("ns", var_info->ns_name);
+        }
+        if(include_doc && var_info->doc.has_value())
+        {
+          entry.emplace("doc", var_info->doc.value());
+        }
+        if(include_arglists && !var_info->arglists.empty())
+        {
+          entry.emplace("arglists", bencode::list_of_strings(var_info->arglists));
+          if(var_info->arglists_str.has_value())
+          {
+            entry.emplace("arglists-str", var_info->arglists_str.value());
+          }
+        }
+        completion_payloads.emplace_back(bencode::value{ std::move(entry) });
+      }
+
+      bencode::value::dict payload;
+      if(!msg.id().empty())
+      {
+        payload.emplace("id", msg.id());
+      }
+      payload.emplace("session", session.id);
+      payload.emplace("completions", bencode::value{ std::move(completion_payloads) });
       payload.emplace("status", bencode::list_of_strings({ "done" }));
       return { std::move(payload) };
     }
@@ -886,6 +965,154 @@ namespace jank::nrepl_server::asio
       }
       payload.emplace("session", session.id);
       payload.emplace("info", bencode::value{ std::move(info) });
+      payload.emplace("status", bencode::list_of_strings({ "done" }));
+      return { std::move(payload) };
+    }
+
+    std::vector<bencode::value::dict> handle_info(message const &msg)
+    {
+      auto sym_input(msg.get("sym"));
+      if(sym_input.empty())
+      {
+        sym_input = msg.get("symbol");
+      }
+      if(sym_input.empty())
+      {
+        return handle_unsupported(msg, "missing-symbol");
+      }
+
+      auto const parts(parse_symbol(sym_input));
+      if(parts.name.empty())
+      {
+        return handle_unsupported(msg, "missing-symbol");
+      }
+
+      auto ns_request(msg.get("ns"));
+      if(!parts.ns.empty())
+      {
+        ns_request = parts.ns;
+      }
+
+      auto &session(ensure_session(msg.session()));
+      auto target_ns(resolve_namespace(session, ns_request));
+      auto const symbol(make_box<obj::symbol>(make_immutable_string(parts.name)));
+      auto const var(target_ns->find_var(symbol));
+      if(var.is_nil())
+      {
+        return { make_done_response(session.id, msg.id(), { "done", "no-info" }) };
+      }
+
+      auto const info(describe_var(target_ns, var, parts.name));
+      if(!info.has_value())
+      {
+        return { make_done_response(session.id, msg.id(), { "done", "no-info" }) };
+      }
+
+      bencode::value::dict info_dict;
+      info_dict.emplace("name", info->name);
+      info_dict.emplace("ns", info->ns_name);
+      info_dict.emplace("type", info->is_macro ? std::string{ "macro" } : std::string{ "var" });
+      if(info->doc.has_value())
+      {
+        info_dict.emplace("doc", info->doc.value());
+      }
+      if(!info->arglists.empty())
+      {
+        info_dict.emplace("arglists", bencode::list_of_strings(info->arglists));
+      }
+      if(info->arglists_str.has_value())
+      {
+        info_dict.emplace("arglists-str", info->arglists_str.value());
+      }
+      if(info->file.has_value())
+      {
+        info_dict.emplace("file", info->file.value());
+      }
+      if(info->line.has_value())
+      {
+        info_dict.emplace("line", bencode::value{ info->line.value() });
+      }
+      if(info->column.has_value())
+      {
+        info_dict.emplace("column", bencode::value{ info->column.value() });
+      }
+
+      bencode::value::dict payload;
+      if(!msg.id().empty())
+      {
+        payload.emplace("id", msg.id());
+      }
+      payload.emplace("session", session.id);
+      payload.emplace("info", bencode::value{ std::move(info_dict) });
+      payload.emplace("status", bencode::list_of_strings({ "done" }));
+      return { std::move(payload) };
+    }
+
+    std::vector<bencode::value::dict> handle_eldoc(message const &msg)
+    {
+      auto sym_input(msg.get("sym"));
+      if(sym_input.empty())
+      {
+        sym_input = msg.get("symbol");
+      }
+      if(sym_input.empty())
+      {
+        return handle_unsupported(msg, "missing-symbol");
+      }
+
+      auto const parts(parse_symbol(sym_input));
+      if(parts.name.empty())
+      {
+        return handle_unsupported(msg, "missing-symbol");
+      }
+
+      auto ns_request(msg.get("ns"));
+      if(!parts.ns.empty())
+      {
+        ns_request = parts.ns;
+      }
+
+      auto &session(ensure_session(msg.session()));
+      auto target_ns(resolve_namespace(session, ns_request));
+      auto const symbol(make_box<obj::symbol>(make_immutable_string(parts.name)));
+      auto const var(target_ns->find_var(symbol));
+      if(var.is_nil())
+      {
+        return { make_done_response(session.id, msg.id(), { "done", "no-eldoc" }) };
+      }
+
+      auto const info(describe_var(target_ns, var, parts.name));
+      if(!info.has_value())
+      {
+        return { make_done_response(session.id, msg.id(), { "done", "no-eldoc" }) };
+      }
+
+      bencode::value::list eldoc_entries;
+      if(!info->arglists.empty())
+      {
+        eldoc_entries.reserve(info->arglists.size());
+        for(auto const &sig : info->arglists)
+        {
+          eldoc_entries.emplace_back(info->name + " " + sig);
+        }
+      }
+      else
+      {
+        eldoc_entries.emplace_back(info->name);
+      }
+
+      bencode::value::dict payload;
+      if(!msg.id().empty())
+      {
+        payload.emplace("id", msg.id());
+      }
+      payload.emplace("session", session.id);
+      payload.emplace("ns", info->ns_name);
+      payload.emplace("eldoc", bencode::value{ std::move(eldoc_entries) });
+      if(info->doc.has_value())
+      {
+        payload.emplace("doc", info->doc.value());
+      }
       payload.emplace("status", bencode::list_of_strings({ "done" }));
       return { std::move(payload) };
     }
@@ -1112,6 +1339,32 @@ namespace jank::nrepl_server::asio
       session.last_exception_type = std::move(type);
     }
 
+    struct completion_candidate
+    {
+      std::string symbol_name;
+      std::string display_name;
+    };
+
+    struct completion_query
+    {
+      ns_ref target_ns;
+      std::string prefix;
+      std::optional<std::string> qualifier;
+    };
+
+    struct var_documentation
+    {
+      std::string ns_name;
+      std::string name;
+      std::optional<std::string> doc;
+      std::vector<std::string> arglists;
+      std::optional<std::string> arglists_str;
+      std::optional<std::string> file;
+      std::optional<std::int64_t> line;
+      std::optional<std::int64_t> column;
+      bool is_macro{ false };
+    };
+
     bencode::value::dict make_done_response(std::string const &session,
                                             std::string const &id,
                                             std::vector<std::string> statuses) const
@@ -1127,6 +1380,183 @@ namespace jank::nrepl_server::asio
       }
       payload.emplace("status", bencode::list_of_strings(statuses));
       return payload;
+    }
+
+    completion_query prepare_completion_query(session_state &session,
+                                              std::string prefix,
+                                              std::string requested_ns) const
+    {
+      completion_query query;
+      auto const parts(parse_symbol(prefix));
+      if(!parts.ns.empty())
+      {
+        requested_ns = parts.ns;
+        prefix = parts.name;
+        query.qualifier = parts.ns;
+      }
+      query.target_ns = resolve_namespace(session, requested_ns);
+      query.prefix = prefix;
+      return query;
+    }
+
+    std::vector<std::string> collect_symbol_names(ns_ref target_ns, std::string const &prefix) const
+    {
+      std::vector<std::string> matches;
+      auto const mappings(target_ns->get_mappings());
+      if(mappings.is_some())
+      {
+        matches.reserve(static_cast<std::size_t>(mappings->count()));
+        for(auto const &entry : mappings->data)
+        {
+          auto const key(entry.first);
+          if(!key.is_some() || key->type != object_type::symbol)
+          {
+            continue;
+          }
+
+          auto const sym(expect_object<obj::symbol>(key));
+          auto const candidate_name(to_std_string(sym->name));
+          if(!prefix.empty() && !starts_with(candidate_name, prefix))
+          {
+            continue;
+          }
+          matches.push_back(candidate_name);
+        }
+      }
+
+      std::sort(matches.begin(), matches.end());
+      matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
+      return matches;
+    }
+
+    std::vector<completion_candidate>
+    make_completion_candidates(completion_query const &query) const
+    {
+      auto names(collect_symbol_names(query.target_ns, query.prefix));
+      std::vector<completion_candidate> candidates;
+      candidates.reserve(names.size());
+      for(auto const &name : names)
+      {
+        completion_candidate entry;
+        entry.symbol_name = name;
+        entry.display_name
+          = query.qualifier.has_value() ? query.qualifier.value() + "/" + name : name;
+        candidates.emplace_back(std::move(entry));
+      }
+      return candidates;
+    }
+
+    std::string normalize_metadata_key(std::string token) const
+    {
+      if(!token.empty() && token.front() == ':')
+      {
+        token.erase(token.begin());
+      }
+      std::transform(token.begin(), token.end(), token.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+      return token;
+    }
+
+    std::vector<std::string> render_sequence_strings(object_ref seq_obj) const
+    {
+      std::vector<std::string> values;
+      if(seq_obj.is_nil())
+      {
+        return values;
+      }
+
+      auto current(runtime::seq(seq_obj));
+      while(current != jank_nil)
+      {
+        auto const head(runtime::first(current));
+        values.push_back(to_std_string(runtime::to_code_string(head)));
+        current = runtime::next(current);
+      }
+      return values;
+    }
+
+    std::string join_with_newline(std::vector<std::string> const &items) const
+    {
+      if(items.empty())
+      {
+        return {};
+      }
+
+      std::string joined;
+      joined.reserve(64 * items.size());
+      for(size_t i{}; i < items.size(); ++i)
+      {
+        if(i != 0)
+        {
+          joined.push_back('\n');
+        }
+        joined += items[i];
+      }
+      return joined;
+    }
+
+    std::optional<var_documentation>
+    describe_var(ns_ref target_ns, var_ref var, std::string const &display_name) const
+    {
+      if(var.is_nil())
+      {
+        return std::nullopt;
+      }
+
+      var_documentation info;
+      info.ns_name = current_ns_name(target_ns);
+      if(!display_name.empty())
+      {
+        info.name = display_name;
+      }
+      else if(var->name.is_some())
+      {
+        info.name = to_std_string(var->name->name);
+      }
+
+      object_ref var_obj{ var };
+      auto const meta(runtime::meta(var_obj));
+      if(meta != jank_nil)
+      {
+        auto const doc_kw(__rt_ctx->intern_keyword("doc").expect_ok());
+        auto const arglists_kw(__rt_ctx->intern_keyword("arglists").expect_ok());
+        auto const file_kw(__rt_ctx->intern_keyword("file").expect_ok());
+        auto const line_kw(__rt_ctx->intern_keyword("line").expect_ok());
+        auto const column_kw(__rt_ctx->intern_keyword("column").expect_ok());
+        auto const macro_kw(__rt_ctx->intern_keyword("macro").expect_ok());
+
+        if(auto const doc(runtime::get(meta, doc_kw)); doc != jank_nil)
+        {
+          info.doc = to_std_string(runtime::to_string(doc));
+        }
+        if(auto const arglists(runtime::get(meta, arglists_kw)); arglists != jank_nil)
+        {
+          info.arglists = render_sequence_strings(arglists);
+          if(!info.arglists.empty())
+          {
+            info.arglists_str = join_with_newline(info.arglists);
+          }
+        }
+        if(auto const file(runtime::get(meta, file_kw)); file != jank_nil)
+        {
+          info.file = to_std_string(runtime::to_string(file));
+        }
+        if(auto const line(runtime::get(meta, line_kw)); line != jank_nil)
+        {
+          info.line = runtime::to_int(line);
+        }
+        if(auto const column(runtime::get(meta, column_kw)); column != jank_nil)
+        {
+          info.column = runtime::to_int(column);
+        }
+        if(auto const macro_flag(runtime::get(meta, macro_kw)); macro_flag != jank_nil)
+        {
+          info.is_macro = runtime::truthy(macro_flag);
+        }
+      }
+
+      return info;
     }
 
     static std::optional<std::vector<std::string>>

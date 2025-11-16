@@ -63,11 +63,11 @@ namespace jank::nrepl_server::asio
     }
 
     std::vector<std::string> expected_ops{
-      "clone",           "describe",      "ls-sessions",
-      "close",           "eval",          "load-file",
-      "completions",     "lookup",        "forward-system-output",
-      "interrupt",       "ls-middleware", "add-middleware",
-      "swap-middleware", "stdin",         "caught"
+      "clone",     "describe",      "ls-sessions",    "close",
+      "eval",      "load-file",     "completions",    "complete",
+      "lookup",    "info",          "eldoc",          "forward-system-output",
+      "interrupt", "ls-middleware", "add-middleware", "swap-middleware",
+      "stdin",     "caught"
     };
 
     std::vector<std::string> expected_middleware_stack{
@@ -205,6 +205,80 @@ namespace jank::nrepl_server::asio
         }
       }
       CHECK(found);
+    }
+
+    TEST_CASE("complete returns metadata-rich candidates")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                  "eval" },
+        { "code", "(defn sample-fn \"demo doc\" ([x] x) ([x y] (+ x y)))" }
+      }));
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",   "sample" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+      auto const &entry(completions.front().as_dict());
+      CHECK(entry.at("candidate").as_string() == "sample-fn");
+      CHECK(entry.at("type").as_string() == "var");
+      CHECK(entry.at("ns").as_string() == "user");
+      auto const doc_it(entry.find("doc"));
+      REQUIRE(doc_it != entry.end());
+      CHECK(doc_it->second.as_string().find("demo doc") != std::string::npos);
+      auto const arglists_it(entry.find("arglists"));
+      REQUIRE(arglists_it != entry.end());
+      auto const &arglists(arglists_it->second.as_list());
+      REQUIRE(arglists.size() == 2);
+    }
+
+    TEST_CASE("info returns doc and arglists")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                  "eval" },
+        { "code", "(defn sample-fn \"demo doc\" ([x] x) ([x y] (+ x y)))" }
+      }));
+      auto responses(eng.handle(make_message({
+        {  "op",      "info" },
+        { "sym", "sample-fn" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &info(payload.at("info").as_dict());
+      CHECK(info.at("name").as_string() == "sample-fn");
+      CHECK(info.at("ns").as_string() == "user");
+      auto const doc_it(info.find("doc"));
+      REQUIRE(doc_it != info.end());
+      CHECK(doc_it->second.as_string().find("demo doc") != std::string::npos);
+      auto const &arglists(info.at("arglists").as_list());
+      REQUIRE(arglists.size() == 2);
+      auto const statuses(extract_status(payload));
+      CHECK(std::find(statuses.begin(), statuses.end(), "done") != statuses.end());
+    }
+
+    TEST_CASE("eldoc returns function signatures")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                  "eval" },
+        { "code", "(defn sample-fn \"demo doc\" ([x] x) ([x y] (+ x y)))" }
+      }));
+      auto responses(eng.handle(make_message({
+        {  "op",     "eldoc" },
+        { "sym", "sample-fn" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &eldoc(payload.at("eldoc").as_list());
+      REQUIRE(eldoc.size() == 2);
+      CHECK(eldoc.front().as_string().find("sample-fn") != std::string::npos);
+      CHECK(payload.at("ns").as_string() == "user");
+      auto const statuses(extract_status(payload));
+      CHECK(std::find(statuses.begin(), statuses.end(), "done") != statuses.end());
     }
 
     TEST_CASE("lookup reports namespace and miss state")
