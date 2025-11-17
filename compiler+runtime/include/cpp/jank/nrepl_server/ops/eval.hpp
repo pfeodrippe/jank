@@ -14,6 +14,16 @@ namespace jank::nrepl_server::asio
     {
       file_path = msg.get("file");
     }
+    auto const to_positive_size
+      = [](std::optional<std::int64_t> raw) -> std::optional<std::size_t> {
+      if(!raw.has_value() || raw.value() <= 0)
+      {
+        return std::nullopt;
+      }
+      return static_cast<std::size_t>(raw.value());
+    };
+    auto const line_hint(to_positive_size(msg.get_integer("line")));
+    auto const column_hint(to_positive_size(msg.get_integer("column")));
     if(code.empty())
     {
       return handle_unsupported(msg, "missing-code");
@@ -118,10 +128,13 @@ namespace jank::nrepl_server::asio
       emit_pending_output();
       std::string const base_err_string{ err->message.data(), err->message.size() };
       std::string const err_type{ error::kind_str(err->kind) };
-      auto const serialized_error(build_serialized_error(err));
+      auto adjusted_source(err->source);
+      apply_source_hints(adjusted_source, line_hint, column_hint);
+      auto serialized_error(build_serialized_error(err));
+      apply_serialized_error_hints(serialized_error, line_hint, column_hint);
       auto const display_err_string(
-        format_error_with_location(base_err_string, err->kind, err->source, file_path));
-      record_exception(session, display_err_string, err_type, err->source, serialized_error);
+        format_error_with_location(base_err_string, err->kind, adjusted_source, file_path));
+      record_exception(session, display_err_string, err_type, adjusted_source, serialized_error);
       responses.emplace_back(make_eval_error_response(session.id, msg.id(), err_type, err_type));
       bencode::value::dict err_msg;
       if(!msg.id().empty())
@@ -132,18 +145,18 @@ namespace jank::nrepl_server::asio
       err_msg.emplace("status", bencode::list_of_strings({ "error" }));
       err_msg.emplace("err", display_err_string);
       err_msg.emplace("exception-type", err_type);
-      auto const file_string(to_std_string(err->source.file));
+      auto const file_string(to_std_string(adjusted_source.file));
       if(file_string != jank::read::no_source_path)
       {
         err_msg.emplace("file", file_string);
       }
-      if(err->source.start.line != 0)
+      if(adjusted_source.start.line != 0)
       {
-        err_msg.emplace("line", std::to_string(err->source.start.line));
+        err_msg.emplace("line", std::to_string(adjusted_source.start.line));
       }
-      if(err->source.start.col != 0)
+      if(adjusted_source.start.col != 0)
       {
-        err_msg.emplace("column", std::to_string(err->source.start.col));
+        err_msg.emplace("column", std::to_string(adjusted_source.start.col));
       }
       err_msg.emplace("jank/error", bencode::value{ encode_error(serialized_error) });
       responses.emplace_back(std::move(err_msg));

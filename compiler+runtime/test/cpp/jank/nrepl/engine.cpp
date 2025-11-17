@@ -293,6 +293,43 @@ namespace jank::nrepl_server::asio
       CHECK(std::ranges::find(statuses, "error") != statuses.end());
     }
 
+    TEST_CASE("eval applies line hints to error payloads")
+    {
+      engine eng;
+      std::string const path{ "/tmp/nrepl-line-hint.jank" };
+      auto msg(make_message({
+        {   "op",         "eval" },
+        { "code", "(printjln 4)" },
+        { "path",           path }
+      }));
+      msg.data.emplace("line", bencode::value{ static_cast<std::int64_t>(36) });
+      auto responses(eng.handle(msg));
+      REQUIRE(responses.size() == 3);
+
+      auto err_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            return payload.find("err") != payload.end();
+          });
+      REQUIRE(err_payload != responses.end());
+      auto const line_it(err_payload->find("line"));
+      REQUIRE(line_it != err_payload->end());
+      CHECK(line_it->second.as_string() == "36");
+      auto const &err_value(err_payload->at("err").as_string());
+      auto const location_prefix = std::string{ "Syntax error compiling at (" } + path + ":36";
+      CHECK(err_value.find(location_prefix) != std::string::npos);
+      CHECK(err_value.find(":36:") != std::string::npos);
+
+      auto const structured_it(err_payload->find("jank/error"));
+      REQUIRE(structured_it != err_payload->end());
+      auto const &error_dict(structured_it->second.as_dict());
+      auto const source_it(error_dict.find("source"));
+      REQUIRE(source_it != error_dict.end());
+      auto const &source_dict(source_it->second.as_dict());
+      auto const encoded_line_it(source_dict.find("line"));
+      REQUIRE(encoded_line_it != source_dict.end());
+      CHECK(encoded_line_it->second.as_integer() == 36);
+    }
+
     TEST_CASE("eval includes structured error payload")
     {
       engine eng;

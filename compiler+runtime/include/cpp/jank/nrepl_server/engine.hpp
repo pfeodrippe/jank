@@ -180,6 +180,11 @@ namespace jank::nrepl_server::asio
         return std::get<std::string>(data);
       }
 
+      std::int64_t as_integer() const
+      {
+        return std::get<std::int64_t>(data);
+      }
+
       list const &as_list() const
       {
         return std::get<list>(data);
@@ -422,6 +427,38 @@ namespace jank::nrepl_server::asio
         return default_value;
       }
       return found->second.as_string();
+    }
+
+    std::optional<std::int64_t> get_integer(std::string const &key) const
+    {
+      auto const found(data.find(key));
+      if(found == data.end())
+      {
+        return std::nullopt;
+      }
+
+      auto const &val(found->second);
+      if(val.is_integer())
+      {
+        return val.as_integer();
+      }
+      if(val.is_string())
+      {
+        auto const &str(val.as_string());
+        if(str.empty())
+        {
+          return std::nullopt;
+        }
+        std::int64_t parsed{};
+        auto const * const begin(str.data());
+        auto const * const end(str.data() + str.size());
+        auto const result(std::from_chars(begin, end, parsed));
+        if(result.ec == std::errc{} && result.ptr == end)
+        {
+          return parsed;
+        }
+      }
+      return std::nullopt;
     }
 
     std::string id() const
@@ -954,6 +991,60 @@ namespace jank::nrepl_server::asio
       formatted.append(").\n");
       formatted.append(message);
       return formatted;
+    }
+
+    void apply_source_hints(read::source &source,
+                            std::optional<std::size_t> const &line_hint,
+                            std::optional<std::size_t> const &column_hint) const
+    {
+      if(!line_hint && !column_hint)
+      {
+        return;
+      }
+
+      auto adjust_position = [&](read::source_position &position) {
+        auto const relative_line(position.line);
+        if(relative_line == 0)
+        {
+          return;
+        }
+
+        if(line_hint && *line_hint > 0)
+        {
+          position.line += *line_hint - 1;
+        }
+
+        if(column_hint && relative_line == 1)
+        {
+          if(position.col != 0)
+          {
+            position.col += *column_hint - 1;
+          }
+        }
+      };
+
+      adjust_position(source.start);
+      adjust_position(source.end);
+    }
+
+    void apply_serialized_error_hints(serialized_error &error,
+                                      std::optional<std::size_t> const &line_hint,
+                                      std::optional<std::size_t> const &column_hint) const
+    {
+      if(!line_hint && !column_hint)
+      {
+        return;
+      }
+
+      apply_source_hints(error.source, line_hint, column_hint);
+      for(auto &note : error.notes)
+      {
+        apply_source_hints(note.source, line_hint, column_hint);
+      }
+      for(auto &cause : error.causes)
+      {
+        apply_serialized_error_hints(cause, line_hint, column_hint);
+      }
     }
 
     std::string make_file_url(std::string const &path) const
