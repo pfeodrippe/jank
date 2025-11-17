@@ -1113,7 +1113,7 @@ namespace jank::nrepl_server::asio
       bencode::value::list flags;
       flags.emplace_back("jank");
       frame.emplace("flags", bencode::value{ std::move(flags) });
-      frames.emplace_back(bencode::value{ std::move(frame) });
+      frames.emplace_back(std::move(frame));
 
       for(auto const &cause : error.causes)
       {

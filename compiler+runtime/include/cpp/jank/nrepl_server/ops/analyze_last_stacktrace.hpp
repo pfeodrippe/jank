@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ranges>
+
 namespace jank::nrepl_server::asio
 {
   inline std::vector<bencode::value::dict>
@@ -57,7 +59,7 @@ namespace jank::nrepl_server::asio
         notes.reserve(error.notes.size());
         for(auto const &note : error.notes)
         {
-          notes.emplace_back(bencode::value{ encode_note(note) });
+          notes.emplace_back(encode_note(note));
         }
         payload.emplace("notes", bencode::value{ std::move(notes) });
       }
@@ -91,9 +93,9 @@ namespace jank::nrepl_server::asio
       auto const *current(pending.back());
       pending.pop_back();
       responses.emplace_back(build_cause_payload(*current));
-      for(auto it(current->causes.rbegin()); it != current->causes.rend(); ++it)
+      for(auto const &cause : std::ranges::reverse_view(current->causes))
       {
-        pending.push_back(&*it);
+        pending.push_back(&cause);
       }
     }
 

@@ -442,6 +442,52 @@ namespace jank::nrepl_server::asio
       CHECK(statuses == std::vector<std::string>{ "done" });
     }
 
+    TEST_CASE("load-file surfaces syntax errors with file path")
+    {
+      engine eng;
+      std::string const file_path{ "src/eita.jank" };
+      std::string const file_contents = "(+ 1 2)\n(printjln 4)";
+      auto responses(eng.handle(make_message({
+        {        "op",   "load-file" },
+        {      "file", file_contents },
+        { "file-path",     file_path }
+      })));
+      REQUIRE(responses.size() == 3);
+      auto eval_error_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            auto const statuses(extract_status(payload));
+            return std::ranges::find(statuses, "eval-error") != statuses.end();
+          });
+      REQUIRE(eval_error_payload != responses.end());
+      CHECK(eval_error_payload->at("ex").as_string() == "analyze/unresolved-symbol");
+
+      auto err_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            return payload.find("err") != payload.end();
+          });
+      REQUIRE(err_payload != responses.end());
+
+      auto const file_it(err_payload->find("file"));
+      REQUIRE(file_it != err_payload->end());
+      CHECK(file_it->second.as_string() == file_path);
+
+      auto const line_it(err_payload->find("line"));
+      REQUIRE(line_it != err_payload->end());
+      CHECK(line_it->second.as_string() == "2");
+
+      auto const column_it(err_payload->find("column"));
+      REQUIRE(column_it != err_payload->end());
+      CHECK(!column_it->second.as_string().empty());
+
+      auto const &err_value(err_payload->at("err").as_string());
+      auto const location_prefix = std::string{ "Syntax error compiling at (" } + file_path + ":2";
+      CHECK(err_value.find(location_prefix) != std::string::npos);
+      CHECK(err_value.find(":2:") != std::string::npos);
+
+      auto const statuses(extract_status(responses.back()));
+      CHECK(std::ranges::find(statuses, "error") != statuses.end());
+    }
+
     TEST_CASE("completions respect prefix")
     {
       engine eng;
