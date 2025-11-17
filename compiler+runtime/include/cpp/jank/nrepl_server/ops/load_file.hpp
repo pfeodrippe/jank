@@ -13,6 +13,10 @@ namespace jank::nrepl_server::asio
     auto eval_dict(msg.data);
     eval_dict.erase("file");
     eval_dict["code"] = file_contents;
+    if(auto const path_value = msg.get("path"); !path_value.empty())
+    {
+      eval_dict.emplace("path", bencode::value{ path_value });
+    }
 
     message const eval_msg{ std::move(eval_dict) };
     auto responses(handle_eval(eval_msg));

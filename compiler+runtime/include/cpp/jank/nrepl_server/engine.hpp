@@ -24,6 +24,7 @@
 #include <jtl/immutable_string.hpp>
 #include <jtl/immutable_string_view.hpp>
 
+#include <jank/error.hpp>
 #include <jank/runtime/behavior/callable.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core.hpp>
@@ -38,6 +39,7 @@
 #include <jank/runtime/obj/persistent_hash_map.hpp>
 #include <jank/runtime/obj/persistent_string.hpp>
 #include <jank/runtime/obj/symbol.hpp>
+#include <jank/read/source.hpp>
 #include <jank/runtime/rtti.hpp>
 #include <jank/runtime/var.hpp>
 #include <jank/util/scope_exit.hpp>
@@ -450,6 +452,41 @@ namespace jank::nrepl_server::asio
   class engine
   {
   public:
+    struct serialized_note
+    {
+      serialized_note(std::string message, read::source source, std::string kind)
+        : message{ std::move(message) }
+        , source{ std::move(source) }
+        , kind{ std::move(kind) }
+      {
+      }
+
+      std::string message;
+      read::source source;
+      std::string kind;
+    };
+
+    struct serialized_error
+    {
+      serialized_error(std::string kind, std::string message, read::source source)
+        : kind{ std::move(kind) }
+        , message{ std::move(message) }
+        , source{ std::move(source) }
+      {
+      }
+
+      serialized_error(serialized_error const &) = default;
+      serialized_error(serialized_error &&) noexcept = default;
+      serialized_error &operator=(serialized_error const &) = default;
+      serialized_error &operator=(serialized_error &&) noexcept = default;
+
+      std::string kind;
+      std::string message;
+      read::source source;
+      std::vector<serialized_note> notes;
+      std::vector<serialized_error> causes;
+    };
+
     struct session_state
     {
       std::string id;
@@ -460,6 +497,8 @@ namespace jank::nrepl_server::asio
       bool running_eval{ false };
       std::optional<std::string> last_exception_message;
       std::optional<std::string> last_exception_type;
+      std::optional<read::source> last_exception_source;
+      std::optional<serialized_error> last_exception_details;
     };
 
     engine()
@@ -693,16 +732,148 @@ namespace jank::nrepl_server::asio
       return to_std_string(expect_object<ns>(ns_obj)->name->to_string());
     }
 
+    serialized_error build_serialized_error(error_ref const &error) const
+    {
+      serialized_error data{ std::string{ error::kind_str(error->kind) },
+                             to_std_string(error->message),
+                             error->source };
+      data.notes.reserve(error->notes.size());
+      for(auto const &note : error->notes)
+      {
+        data.notes.emplace_back(to_std_string(note.message),
+                               note.source,
+                               std::string{ error::note::kind_str(note.kind) });
+      }
+      std::stable_sort(data.notes.begin(),
+                       data.notes.end(),
+                       [](serialized_note const &lhs, serialized_note const &rhs) {
+                         auto const lhs_unknown(lhs.source == read::source::unknown);
+                         auto const rhs_unknown(rhs.source == read::source::unknown);
+                         if(lhs_unknown != rhs_unknown)
+                         {
+                           return !lhs_unknown;
+                         }
+                         if(lhs.source.file != rhs.source.file)
+                         {
+                           return lhs.source.file < rhs.source.file;
+                         }
+                         if(lhs.source.start.line != rhs.source.start.line)
+                         {
+                           return lhs.source.start.line < rhs.source.start.line;
+                         }
+                         return lhs.source.start.col < rhs.source.start.col;
+                       });
+      if(error->cause)
+      {
+        data.causes.emplace_back(build_serialized_error(error->cause.as_ref()));
+      }
+      return data;
+    }
+
+    bencode::value::dict encode_source(read::source const &source) const
+    {
+      bencode::value::dict dict;
+      auto const file_value(to_std_string(source.file));
+      if(file_value != jank::read::no_source_path)
+      {
+        dict.emplace("file", file_value);
+      }
+      auto const module_value(to_std_string(source.module));
+      if(module_value != jank::read::no_source_path)
+      {
+        dict.emplace("module", module_value);
+      }
+      if(source.start.line != 0)
+      {
+        dict.emplace("line", static_cast<std::int64_t>(source.start.line));
+      }
+      if(source.start.col != 0)
+      {
+        dict.emplace("column", static_cast<std::int64_t>(source.start.col));
+      }
+      if(source.end.line != 0)
+      {
+        dict.emplace("end-line", static_cast<std::int64_t>(source.end.line));
+      }
+      if(source.end.col != 0)
+      {
+        dict.emplace("end-column", static_cast<std::int64_t>(source.end.col));
+      }
+      if(source.start.offset != 0)
+      {
+        dict.emplace("start-offset", static_cast<std::int64_t>(source.start.offset));
+      }
+      if(source.end.offset != 0)
+      {
+        dict.emplace("end-offset", static_cast<std::int64_t>(source.end.offset));
+      }
+      return dict;
+    }
+
+    bencode::value::dict encode_note(serialized_note const &note) const
+    {
+      bencode::value::dict dict;
+      dict.emplace("message", bencode::value{ note.message });
+      dict.emplace("kind", bencode::value{ note.kind });
+      auto source_dict(encode_source(note.source));
+      if(!source_dict.empty())
+      {
+        dict.emplace("source", bencode::value{ std::move(source_dict) });
+      }
+      return dict;
+    }
+
+    bencode::value::dict encode_error(serialized_error const &error) const
+    {
+      bencode::value::dict dict;
+      dict.emplace("kind", bencode::value{ error.kind });
+      dict.emplace("message", bencode::value{ error.message });
+      auto source_dict(encode_source(error.source));
+      if(!source_dict.empty())
+      {
+        dict.emplace("source", bencode::value{ std::move(source_dict) });
+      }
+      if(!error.notes.empty())
+      {
+        bencode::value::list notes;
+        notes.reserve(error.notes.size());
+        for(auto const &note : error.notes)
+        {
+          notes.emplace_back(encode_note(note));
+        }
+        dict.emplace("notes", bencode::value{ std::move(notes) });
+      }
+      if(!error.causes.empty())
+      {
+        bencode::value::list causes;
+        causes.reserve(error.causes.size());
+        for(auto const &cause : error.causes)
+        {
+          causes.emplace_back(encode_error(cause));
+        }
+        dict.emplace("causes", bencode::value{ std::move(causes) });
+      }
+      return dict;
+    }
+
     void clear_last_exception(session_state &session)
     {
       session.last_exception_message.reset();
       session.last_exception_type.reset();
+      session.last_exception_source.reset();
+      session.last_exception_details.reset();
     }
 
-    void record_exception(session_state &session, std::string message, std::string type)
+    void record_exception(session_state &session,
+                          std::string message,
+                          std::string type,
+                          std::optional<read::source> source = std::nullopt,
+                          std::optional<serialized_error> detailed = std::nullopt)
     {
       session.last_exception_message = std::move(message);
       session.last_exception_type = std::move(type);
+      session.last_exception_source = std::move(source);
+      session.last_exception_details = std::move(detailed);
     }
 
     bool is_private_var(var_ref const &var) const

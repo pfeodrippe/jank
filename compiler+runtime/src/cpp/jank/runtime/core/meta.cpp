@@ -113,12 +113,18 @@ namespace jank::runtime
     }
 
     auto const file(get(source, __rt_ctx->intern_keyword("file").expect_ok()));
-    if(file == jank_nil)
+    jtl::immutable_string file_str{ read::no_source_path };
+    if(file != jank_nil)
     {
-      return read::source::unknown;
+      file_str = runtime::to_string(file);
     }
 
     auto const module(get(source, __rt_ctx->intern_keyword("module").expect_ok()));
+    jtl::immutable_string module_str{ read::no_source_path };
+    if(module != jank_nil)
+    {
+      module_str = runtime::to_string(module);
+    }
 
     auto const start(get(source, __rt_ctx->intern_keyword("start").expect_ok()));
     auto const end(get(source, __rt_ctx->intern_keyword("end").expect_ok()));
@@ -135,8 +141,8 @@ namespace jank::runtime
       get(meta, __rt_ctx->intern_keyword("jank/macro-expansion").expect_ok()));
 
     return {
-      runtime::to_string(file),
-      module.is_some() ? to_string(module) : "",
+      file_str,
+      module_str,
       { static_cast<size_t>(to_int(start_offset)),
                                            static_cast<size_t>(to_int(start_line)),
                                            static_cast<size_t>(to_int(start_col)) },

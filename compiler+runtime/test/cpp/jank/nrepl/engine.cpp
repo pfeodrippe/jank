@@ -1,9 +1,12 @@
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <initializer_list>
+#include <iostream>
 #include <optional>
 #include <ranges>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include <jank/nrepl_server/engine.hpp>
@@ -161,6 +164,130 @@ namespace jank::nrepl_server::asio
       CHECK(ns_it->second.as_string() == "user");
       auto const statuses(extract_status(responses.back()));
       CHECK(statuses == std::vector<std::string>{ "done" });
+    }
+
+    TEST_CASE("eval surfaces syntax errors")
+    {
+      engine eng;
+      auto responses(eng.handle(make_message({
+        {   "op",    "eval" },
+        { "code", "(printjln 4)" }
+      })));
+      REQUIRE(responses.size() == 2);
+      auto err_payload = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+        return payload.find("err") != payload.end();
+      });
+      REQUIRE(err_payload != responses.end());
+      auto const &err_value(err_payload->at("err").as_string());
+      CHECK(err_value.find("Unable to resolve symbol") != std::string::npos);
+      CHECK(err_value.find("printjln") != std::string::npos);
+      if(auto const line_it = err_payload->find("line"); line_it != err_payload->end())
+      {
+        CHECK(!line_it->second.as_string().empty());
+        CHECK(std::stoi(line_it->second.as_string()) >= 1);
+      }
+      auto const statuses(extract_status(responses.back()));
+      CHECK(std::ranges::find(statuses, "error") != statuses.end());
+    }
+
+    TEST_CASE("eval surfaces file and line when path given")
+    {
+      engine eng;
+      std::string const path{ "/tmp/nrepl-error.jank" };
+      std::string const code = "(+ 1 2)\n(printjln 4)";
+      auto responses(eng.handle(make_message({
+        {   "op",    "eval" },
+        { "code",    code },
+        { "path",    path }
+      })));
+      REQUIRE(responses.size() == 2);
+      auto err_payload = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+        return payload.find("err") != payload.end();
+      });
+      REQUIRE(err_payload != responses.end());
+      auto const &file_it(err_payload->find("file"));
+      REQUIRE(file_it != err_payload->end());
+      CHECK(file_it->second.as_string() == path);
+      auto const &line_it(err_payload->find("line"));
+      REQUIRE(line_it != err_payload->end());
+      CHECK(line_it->second.as_string() == "2");
+      auto const statuses(extract_status(responses.back()));
+      CHECK(std::ranges::find(statuses, "error") != statuses.end());
+    }
+
+    TEST_CASE("eval includes structured error payload")
+    {
+      engine eng;
+      auto responses(eng.handle(make_message({
+        {   "op",    "eval" },
+        { "code", "(printjln 4)" }
+      })));
+      for(auto const &payload : responses)
+      {
+        if(auto const out_it = payload.find("out"); out_it != payload.end())
+        {
+          INFO("captured out: " << out_it->second.as_string());
+        }
+      }
+      auto err_payload = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+        return payload.find("err") != payload.end();
+      });
+      REQUIRE(err_payload != responses.end());
+      auto const structured_it(err_payload->find("jank/error"));
+      REQUIRE(structured_it != err_payload->end());
+      auto const &error_dict(structured_it->second.as_dict());
+      CHECK(error_dict.at("kind").as_string() == "analyze/unresolved-symbol");
+      CHECK(error_dict.at("message").as_string().find("Unable to resolve symbol")
+            != std::string::npos);
+      if(auto const source_it = error_dict.find("source"); source_it != error_dict.end())
+      {
+        INFO("error source keys: " << dict_keys(source_it->second.as_dict()));
+      }
+      auto const notes_it(error_dict.find("notes"));
+      REQUIRE(notes_it != error_dict.end());
+      auto const &notes(notes_it->second.as_list());
+      REQUIRE_FALSE(notes.empty());
+      INFO("notes count: " << notes.size());
+      for(std::size_t idx{}; idx < notes.size(); ++idx)
+      {
+        auto const &note_dict(notes[idx].as_dict());
+        auto const note_keys(dict_keys(note_dict));
+        std::cerr << "note[" << idx << "] keys: " << note_keys << '\n';
+        std::cerr << "note[" << idx << "] message: " << note_dict.at("message").as_string()
+                  << '\n';
+        if(auto const note_source_it = note_dict.find("source"); note_source_it != note_dict.end())
+        {
+          std::cerr << "note[" << idx << "] source keys: "
+                    << dict_keys(note_source_it->second.as_dict()) << '\n';
+        }
+      }
+      auto const &first_note(notes.front().as_dict());
+      INFO("first note keys: " << dict_keys(first_note));
+      auto const source_it(first_note.find("source"));
+      REQUIRE(source_it != first_note.end());
+      auto const &source_dict(source_it->second.as_dict());
+      auto const line_it(source_dict.find("line"));
+      REQUIRE(line_it != source_dict.end());
+      REQUIRE(line_it->second.is_integer());
+      CHECK(std::get<std::int64_t>(line_it->second.data) >= 1);
+    }
+
+    TEST_CASE("caught returns structured errors")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",    "eval" },
+        { "code", "(printjln 4)" }
+      }));
+      auto responses(eng.handle(make_message({
+        { "op", "caught" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const structured_it(payload.find("jank/error"));
+      REQUIRE(structured_it != payload.end());
+      auto const &error_dict(structured_it->second.as_dict());
+      CHECK(error_dict.at("kind").as_string() == "analyze/unresolved-symbol");
     }
 
     TEST_CASE("load-file omits ns in response")

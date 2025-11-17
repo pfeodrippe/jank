@@ -19,6 +19,28 @@ namespace jank::nrepl_server::asio
       {
         payload.emplace("exception-type", session.last_exception_type.value());
       }
+      if(session.last_exception_source.has_value())
+      {
+        auto const &source = session.last_exception_source.value();
+        auto const file_value = to_std_string(source.file);
+        if(file_value != jank::read::no_source_path)
+        {
+          payload.emplace("file", file_value);
+        }
+        if(source.start.line != 0)
+        {
+          payload.emplace("line", std::to_string(source.start.line));
+        }
+        if(source.start.col != 0)
+        {
+          payload.emplace("column", std::to_string(source.start.col));
+        }
+      }
+      if(session.last_exception_details.has_value())
+      {
+        payload.emplace("jank/error",
+                        bencode::value{ encode_error(*session.last_exception_details) });
+      }
       payload.emplace("status", bencode::list_of_strings({ "done" }));
     }
     else
