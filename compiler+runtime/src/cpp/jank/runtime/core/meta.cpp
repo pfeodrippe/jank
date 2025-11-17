@@ -14,7 +14,11 @@ namespace jank::runtime
 {
   namespace
   {
-    thread_local std::vector<read::source> source_hint_stack;
+    auto &source_hint_stack()
+    {
+      thread_local std::vector<read::source> stack;
+      return stack;
+    }
 
     obj::persistent_hash_map_ref build_source_meta(read::source const &source)
     {
@@ -246,9 +250,10 @@ namespace jank::runtime
   {
     auto meta(build_source_meta(source));
 
-    if(!source_hint_stack.empty())
+    auto &hint_stack(source_hint_stack());
+    if(!hint_stack.empty())
     {
-      auto const hint_meta(build_source_meta(source_hint_stack.back()));
+      auto const hint_meta(build_source_meta(hint_stack.back()));
       auto const transient(meta->to_transient());
       transient->assoc_in_place(source_hint_keyword(), hint_meta);
       meta = transient->to_persistent();
@@ -259,14 +264,15 @@ namespace jank::runtime
 
   void push_source_hint(read::source const &source)
   {
-    source_hint_stack.emplace_back(source);
+    source_hint_stack().emplace_back(source);
   }
 
   void pop_source_hint()
   {
-    if(!source_hint_stack.empty())
+    auto &hint_stack(source_hint_stack());
+    if(!hint_stack.empty())
     {
-      source_hint_stack.pop_back();
+      hint_stack.pop_back();
     }
   }
 
