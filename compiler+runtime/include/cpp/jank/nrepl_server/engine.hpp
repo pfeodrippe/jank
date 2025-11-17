@@ -15,6 +15,7 @@
 #include <string_view>
 #include <system_error>
 #include <typeinfo>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -596,6 +597,10 @@ namespace jank::nrepl_server::asio
       {
         return handle_caught(msg);
       }
+      if(op == "analyze-last-stacktrace")
+      {
+        return handle_analyze_last_stacktrace(msg);
+      }
 
       return handle_unsupported(msg, "unknown-op");
     }
@@ -667,6 +672,8 @@ namespace jank::nrepl_server::asio
     std::vector<bencode::value::dict> handle_forward_system_output(message const &msg);
 
     std::vector<bencode::value::dict> handle_caught(message const &msg);
+
+    std::vector<bencode::value::dict> handle_analyze_last_stacktrace(message const &msg);
 
     std::vector<bencode::value::dict> handle_interrupt(message const &msg);
 
@@ -741,28 +748,27 @@ namespace jank::nrepl_server::asio
       for(auto const &note : error->notes)
       {
         data.notes.emplace_back(to_std_string(note.message),
-                               note.source,
-                               std::string{ error::note::kind_str(note.kind) });
+                                note.source,
+                                std::string{ error::note::kind_str(note.kind) });
       }
-      std::stable_sort(data.notes.begin(),
-                       data.notes.end(),
-                       [](serialized_note const &lhs, serialized_note const &rhs) {
-                         auto const lhs_unknown(lhs.source == read::source::unknown);
-                         auto const rhs_unknown(rhs.source == read::source::unknown);
-                         if(lhs_unknown != rhs_unknown)
-                         {
-                           return !lhs_unknown;
-                         }
-                         if(lhs.source.file != rhs.source.file)
-                         {
-                           return lhs.source.file < rhs.source.file;
-                         }
-                         if(lhs.source.start.line != rhs.source.start.line)
-                         {
-                           return lhs.source.start.line < rhs.source.start.line;
-                         }
-                         return lhs.source.start.col < rhs.source.start.col;
-                       });
+      std::ranges::stable_sort(data.notes,
+                               [](serialized_note const &lhs, serialized_note const &rhs) {
+                                 auto const lhs_unknown(lhs.source == read::source::unknown);
+                                 auto const rhs_unknown(rhs.source == read::source::unknown);
+                                 if(lhs_unknown != rhs_unknown)
+                                 {
+                                   return !lhs_unknown;
+                                 }
+                                 if(lhs.source.file != rhs.source.file)
+                                 {
+                                   return lhs.source.file < rhs.source.file;
+                                 }
+                                 if(lhs.source.start.line != rhs.source.start.line)
+                                 {
+                                   return lhs.source.start.line < rhs.source.start.line;
+                                 }
+                                 return lhs.source.start.col < rhs.source.start.col;
+                               });
       if(error->cause)
       {
         data.causes.emplace_back(build_serialized_error(error->cause.as_ref()));
@@ -854,6 +860,272 @@ namespace jank::nrepl_server::asio
         dict.emplace("causes", bencode::value{ std::move(causes) });
       }
       return dict;
+    }
+
+    std::string_view describe_error_phase(error::kind const kind) const
+    {
+      using underlying = std::underlying_type_t<error::kind>;
+      auto const value(static_cast<underlying>(kind));
+      constexpr auto parse_max = static_cast<underlying>(error::kind::internal_parse_failure);
+      if(value <= parse_max)
+      {
+        return "Syntax error reading source";
+      }
+      constexpr auto analyze_max = static_cast<underlying>(error::kind::internal_analyze_failure);
+      if(value <= analyze_max)
+      {
+        return "Syntax error compiling";
+      }
+      constexpr auto codegen_max = static_cast<underlying>(error::kind::internal_codegen_failure);
+      if(value <= codegen_max)
+      {
+        return "Compilation error";
+      }
+      constexpr auto aot_max = static_cast<underlying>(error::kind::internal_aot_failure);
+      if(value <= aot_max)
+      {
+        return "Compilation error";
+      }
+      constexpr auto system_max = static_cast<underlying>(error::kind::system_failure);
+      if(value <= system_max)
+      {
+        return "System error";
+      }
+      constexpr auto runtime_max = static_cast<underlying>(error::kind::internal_runtime_failure);
+      if(value <= runtime_max)
+      {
+        return "Execution error";
+      }
+      return "Internal error";
+    }
+
+    std::string
+    format_source_location(read::source const &source, std::string const &path_hint) const
+    {
+      auto const file_value(to_std_string(source.file));
+      std::string location;
+      if(file_value != jank::read::no_source_path)
+      {
+        location = file_value;
+      }
+      else if(!path_hint.empty())
+      {
+        location = path_hint;
+      }
+
+      if(source.start.line != 0)
+      {
+        if(!location.empty())
+        {
+          location.push_back(':');
+        }
+        location += std::to_string(source.start.line);
+        if(source.start.col != 0)
+        {
+          location.push_back(':');
+          location += std::to_string(source.start.col);
+        }
+      }
+      return location;
+    }
+
+    std::string format_error_with_location(std::string const &message,
+                                           error::kind const kind,
+                                           read::source const &source,
+                                           std::string const &path_hint) const
+    {
+      auto const location(format_source_location(source, path_hint));
+      if(location.empty())
+      {
+        return message;
+      }
+
+      auto const prefix(describe_error_phase(kind));
+      if(prefix.empty())
+      {
+        return message;
+      }
+
+      std::string formatted;
+      formatted.reserve(prefix.size() + location.size() + message.size() + 5);
+      formatted.append(prefix);
+      formatted.append(" at (");
+      formatted.append(location);
+      formatted.append(").\n");
+      formatted.append(message);
+      return formatted;
+    }
+
+    std::string make_file_url(std::string const &path) const
+    {
+      if(path.empty())
+      {
+        return {};
+      }
+      if(starts_with(path, "file:"))
+      {
+        return path;
+      }
+      return "file:" + path;
+    }
+
+    std::string deduce_phase_from_error(std::string const &kind) const
+    {
+      if(starts_with(kind, "lex/") || starts_with(kind, "parse/"))
+      {
+        return "read-source";
+      }
+      if(starts_with(kind, "analyze/"))
+      {
+        return "compile-syntax-check";
+      }
+      if(starts_with(kind, "runtime/"))
+      {
+        return "execution";
+      }
+      if(starts_with(kind, "aot/") || kind == "internal/codegen-failure")
+      {
+        return "compile";
+      }
+      if(starts_with(kind, "system/"))
+      {
+        return "system";
+      }
+      return {};
+    }
+
+    std::string escape_for_edn(std::string const &value) const
+    {
+      std::string escaped;
+      escaped.reserve(value.size());
+      for(char const ch : value)
+      {
+        switch(ch)
+        {
+          case '\\':
+          case '"':
+            escaped.push_back('\\');
+            escaped.push_back(ch);
+            break;
+          case '\n':
+            escaped.append("\\n");
+            break;
+          case '\r':
+            escaped.append("\\r");
+            break;
+          case '\t':
+            escaped.append("\\t");
+            break;
+          default:
+            escaped.push_back(ch);
+            break;
+        }
+      }
+      return escaped;
+    }
+
+    std::string format_error_data(serialized_error const &error,
+                                  read::source const *source,
+                                  std::string const &phase) const
+    {
+      std::string data{ "{:jank/error-kind \"" };
+      data += escape_for_edn(error.kind);
+      data += "\" :jank/error-message \"";
+      data += escape_for_edn(error.message);
+      data += "\"";
+      if(!phase.empty())
+      {
+        data += " :clojure.error/phase :";
+        data += phase;
+      }
+      if(source != nullptr)
+      {
+        auto const file_value(to_std_string(source->file));
+        if(file_value != jank::read::no_source_path)
+        {
+          data += " :clojure.error/source \"";
+          data += escape_for_edn(file_value);
+          data += "\"";
+        }
+        if(source->start.line != 0)
+        {
+          data += " :clojure.error/line ";
+          data += std::to_string(source->start.line);
+        }
+        if(source->start.col != 0)
+        {
+          data += " :clojure.error/column ";
+          data += std::to_string(source->start.col);
+        }
+      }
+      data.push_back('}');
+      return data;
+    }
+
+    bencode::value::dict build_location(read::source const *source, std::string const &phase) const
+    {
+      bencode::value::dict dict;
+      if(source != nullptr)
+      {
+        auto const file_value(to_std_string(source->file));
+        if(file_value != jank::read::no_source_path)
+        {
+          dict.emplace("clojure.error/source", file_value);
+        }
+        if(source->start.line != 0)
+        {
+          dict.emplace("clojure.error/line", static_cast<std::int64_t>(source->start.line));
+        }
+        if(source->start.col != 0)
+        {
+          dict.emplace("clojure.error/column", static_cast<std::int64_t>(source->start.col));
+        }
+      }
+      if(!phase.empty())
+      {
+        dict.emplace("clojure.error/phase", phase);
+      }
+      return dict;
+    }
+
+    void append_stacktrace_frames(serialized_error const &error, bencode::value::list &frames) const
+    {
+      bencode::value::dict frame;
+      frame.emplace("class", error.kind);
+      frame.emplace("message", error.message);
+      frame.emplace("type", std::string{ "jank" });
+      frame.emplace("method", error.kind);
+      frame.emplace("name", error.kind);
+      auto const file_value(to_std_string(error.source.file));
+      if(file_value != jank::read::no_source_path)
+      {
+        frame.emplace("file", file_value);
+        frame.emplace("file-url", make_file_url(file_value));
+      }
+      if(error.source.start.line != 0)
+      {
+        frame.emplace("line", static_cast<std::int64_t>(error.source.start.line));
+      }
+      if(error.source.start.col != 0)
+      {
+        frame.emplace("column", static_cast<std::int64_t>(error.source.start.col));
+      }
+      bencode::value::list flags;
+      flags.emplace_back("jank");
+      frame.emplace("flags", bencode::value{ std::move(flags) });
+      frames.emplace_back(bencode::value{ std::move(frame) });
+
+      for(auto const &cause : error.causes)
+      {
+        append_stacktrace_frames(cause, frames);
+      }
+    }
+
+    bencode::value::list build_stacktrace(serialized_error const &error) const
+    {
+      bencode::value::list frames;
+      append_stacktrace_frames(error, frames);
+      return frames;
     }
 
     void clear_last_exception(session_state &session)
@@ -949,6 +1221,26 @@ namespace jank::nrepl_server::asio
         payload.emplace("session", session);
       }
       payload.emplace("status", bencode::list_of_strings(statuses));
+      return payload;
+    }
+
+    bencode::value::dict make_eval_error_response(std::string const &session,
+                                                  std::string const &id,
+                                                  std::string const &ex,
+                                                  std::string const &root_ex) const
+    {
+      bencode::value::dict payload;
+      if(!id.empty())
+      {
+        payload.emplace("id", id);
+      }
+      if(!session.empty())
+      {
+        payload.emplace("session", session);
+      }
+      payload.emplace("ex", ex);
+      payload.emplace("root-ex", root_ex);
+      payload.emplace("status", bencode::list_of_strings({ "eval-error" }));
       return payload;
     }
 
@@ -1245,6 +1537,7 @@ namespace jank::nrepl_server::asio
 #include <jank/nrepl_server/ops/eldoc.hpp>
 #include <jank/nrepl_server/ops/forward_system_output.hpp>
 #include <jank/nrepl_server/ops/caught.hpp>
+#include <jank/nrepl_server/ops/analyze_last_stacktrace.hpp>
 #include <jank/nrepl_server/ops/interrupt.hpp>
 #include <jank/nrepl_server/ops/ls_middleware.hpp>
 #include <jank/nrepl_server/ops/add_middleware.hpp>

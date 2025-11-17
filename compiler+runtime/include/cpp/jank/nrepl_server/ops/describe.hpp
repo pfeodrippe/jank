@@ -35,6 +35,8 @@ namespace jank::nrepl_server::asio
     ops.emplace("stdin", bencode::make_doc_value("Provide stdin content"));
     ops.emplace("caught",
                 bencode::make_doc_value("Return details about the last evaluation error"));
+    ops.emplace("analyze-last-stacktrace",
+                bencode::make_doc_value("Return stacktrace analysis for the last error"));
     payload.emplace("ops", bencode::value{ std::move(ops) });
 
     payload.emplace("status", bencode::list_of_strings({ "done" }));

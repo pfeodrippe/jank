@@ -68,13 +68,25 @@ namespace jank::nrepl_server::asio
       return statuses;
     }
 
-    constexpr std::array<std::string_view, 18> expected_ops{
-      "clone",     "describe",      "ls-sessions",    "close",
-      "eval",      "load-file",     "completions",    "complete",
-      "lookup",    "info",          "eldoc",          "forward-system-output",
-      "interrupt", "ls-middleware", "add-middleware", "swap-middleware",
-      "stdin",     "caught"
-    };
+    constexpr std::array<std::string_view, 19> expected_ops{ "clone",
+                                                             "describe",
+                                                             "ls-sessions",
+                                                             "close",
+                                                             "eval",
+                                                             "load-file",
+                                                             "completions",
+                                                             "complete",
+                                                             "lookup",
+                                                             "info",
+                                                             "eldoc",
+                                                             "forward-system-output",
+                                                             "interrupt",
+                                                             "ls-middleware",
+                                                             "add-middleware",
+                                                             "swap-middleware",
+                                                             "stdin",
+                                                             "caught",
+                                                             "analyze-last-stacktrace" };
 
     constexpr std::array<std::string_view, 10> expected_middleware_stack{
       "nrepl.middleware.session/session",
@@ -170,15 +182,26 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
       auto responses(eng.handle(make_message({
-        {   "op",    "eval" },
+        {   "op",         "eval" },
         { "code", "(printjln 4)" }
       })));
-      REQUIRE(responses.size() == 2);
-      auto err_payload = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
-        return payload.find("err") != payload.end();
-      });
+      REQUIRE(responses.size() == 3);
+      auto eval_error_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            auto const statuses(extract_status(payload));
+            return std::ranges::find(statuses, "eval-error") != statuses.end();
+          });
+      REQUIRE(eval_error_payload != responses.end());
+      auto const ex_type(eval_error_payload->at("ex").as_string());
+      CHECK(ex_type.find("analyze/") != std::string::npos);
+      CHECK(eval_error_payload->at("root-ex").as_string() == ex_type);
+      auto err_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            return payload.find("err") != payload.end();
+          });
       REQUIRE(err_payload != responses.end());
       auto const &err_value(err_payload->at("err").as_string());
+      CHECK(err_value.find("Syntax error compiling at (") != std::string::npos);
       CHECK(err_value.find("Unable to resolve symbol") != std::string::npos);
       CHECK(err_value.find("printjln") != std::string::npos);
       if(auto const line_it = err_payload->find("line"); line_it != err_payload->end())
@@ -196,14 +219,22 @@ namespace jank::nrepl_server::asio
       std::string const path{ "/tmp/nrepl-error.jank" };
       std::string const code = "(+ 1 2)\n(printjln 4)";
       auto responses(eng.handle(make_message({
-        {   "op",    "eval" },
-        { "code",    code },
-        { "path",    path }
+        {   "op", "eval" },
+        { "code",   code },
+        { "path",   path }
       })));
-      REQUIRE(responses.size() == 2);
-      auto err_payload = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
-        return payload.find("err") != payload.end();
-      });
+      REQUIRE(responses.size() == 3);
+      auto eval_error_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            auto const statuses(extract_status(payload));
+            return std::ranges::find(statuses, "eval-error") != statuses.end();
+          });
+      REQUIRE(eval_error_payload != responses.end());
+      CHECK(eval_error_payload->at("ex").as_string() == "analyze/unresolved-symbol");
+      auto err_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            return payload.find("err") != payload.end();
+          });
       REQUIRE(err_payload != responses.end());
       auto const &file_it(err_payload->find("file"));
       REQUIRE(file_it != err_payload->end());
@@ -211,6 +242,53 @@ namespace jank::nrepl_server::asio
       auto const &line_it(err_payload->find("line"));
       REQUIRE(line_it != err_payload->end());
       CHECK(line_it->second.as_string() == "2");
+      auto const column_it(err_payload->find("column"));
+      REQUIRE(column_it != err_payload->end());
+      CHECK(!column_it->second.as_string().empty());
+      auto const &err_value(err_payload->at("err").as_string());
+      auto const location_prefix = std::string{ "Syntax error compiling at (" } + path + ":2";
+      CHECK(err_value.find(location_prefix) != std::string::npos);
+      CHECK(err_value.find(":2:") != std::string::npos);
+      auto const statuses(extract_status(responses.back()));
+      CHECK(std::ranges::find(statuses, "error") != statuses.end());
+    }
+
+    TEST_CASE("eval uses file hint when path missing")
+    {
+      engine eng;
+      std::string const file_hint{ "/tmp/nrepl-file-hint.jank" };
+      std::string const code = "(+ 1 2)\n(printjln 4)";
+      auto responses(eng.handle(make_message({
+        {   "op",    "eval" },
+        { "code",      code },
+        { "file", file_hint }
+      })));
+      REQUIRE(responses.size() == 3);
+      auto eval_error_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            auto const statuses(extract_status(payload));
+            return std::ranges::find(statuses, "eval-error") != statuses.end();
+          });
+      REQUIRE(eval_error_payload != responses.end());
+      CHECK(eval_error_payload->at("ex").as_string() == "analyze/unresolved-symbol");
+      auto err_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            return payload.find("err") != payload.end();
+          });
+      REQUIRE(err_payload != responses.end());
+      auto const &file_it(err_payload->find("file"));
+      REQUIRE(file_it != err_payload->end());
+      CHECK(file_it->second.as_string() == file_hint);
+      auto const &line_it(err_payload->find("line"));
+      REQUIRE(line_it != err_payload->end());
+      CHECK(line_it->second.as_string() == "2");
+      auto const column_it(err_payload->find("column"));
+      REQUIRE(column_it != err_payload->end());
+      CHECK(!column_it->second.as_string().empty());
+      auto const &err_value(err_payload->at("err").as_string());
+      auto const location_prefix = std::string{ "Syntax error compiling at (" } + file_hint + ":2";
+      CHECK(err_value.find(location_prefix) != std::string::npos);
+      CHECK(err_value.find(":2:") != std::string::npos);
       auto const statuses(extract_status(responses.back()));
       CHECK(std::ranges::find(statuses, "error") != statuses.end());
     }
@@ -219,9 +297,15 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
       auto responses(eng.handle(make_message({
-        {   "op",    "eval" },
+        {   "op",         "eval" },
         { "code", "(printjln 4)" }
       })));
+      auto eval_error_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            auto const statuses(extract_status(payload));
+            return std::ranges::find(statuses, "eval-error") != statuses.end();
+          });
+      REQUIRE(eval_error_payload != responses.end());
       for(auto const &payload : responses)
       {
         if(auto const out_it = payload.find("out"); out_it != payload.end())
@@ -229,9 +313,10 @@ namespace jank::nrepl_server::asio
           INFO("captured out: " << out_it->second.as_string());
         }
       }
-      auto err_payload = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
-        return payload.find("err") != payload.end();
-      });
+      auto err_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            return payload.find("err") != payload.end();
+          });
       REQUIRE(err_payload != responses.end());
       auto const structured_it(err_payload->find("jank/error"));
       REQUIRE(structured_it != err_payload->end());
@@ -253,12 +338,11 @@ namespace jank::nrepl_server::asio
         auto const &note_dict(notes[idx].as_dict());
         auto const note_keys(dict_keys(note_dict));
         std::cerr << "note[" << idx << "] keys: " << note_keys << '\n';
-        std::cerr << "note[" << idx << "] message: " << note_dict.at("message").as_string()
-                  << '\n';
+        std::cerr << "note[" << idx << "] message: " << note_dict.at("message").as_string() << '\n';
         if(auto const note_source_it = note_dict.find("source"); note_source_it != note_dict.end())
         {
-          std::cerr << "note[" << idx << "] source keys: "
-                    << dict_keys(note_source_it->second.as_dict()) << '\n';
+          std::cerr << "note[" << idx
+                    << "] source keys: " << dict_keys(note_source_it->second.as_dict()) << '\n';
         }
       }
       auto const &first_note(notes.front().as_dict());
@@ -275,9 +359,11 @@ namespace jank::nrepl_server::asio
     TEST_CASE("caught returns structured errors")
     {
       engine eng;
+      std::string const stack_path{ "/tmp/analyze-stacktrace.jank" };
       eng.handle(make_message({
-        {   "op",    "eval" },
-        { "code", "(printjln 4)" }
+        {   "op",         "eval" },
+        { "code", "(printjln 4)" },
+        { "path",     stack_path }
       }));
       auto responses(eng.handle(make_message({
         { "op", "caught" }
@@ -288,6 +374,52 @@ namespace jank::nrepl_server::asio
       REQUIRE(structured_it != payload.end());
       auto const &error_dict(structured_it->second.as_dict());
       CHECK(error_dict.at("kind").as_string() == "analyze/unresolved-symbol");
+    }
+
+    TEST_CASE("analyze-last-stacktrace returns cause payloads")
+    {
+      engine eng;
+      std::string const stack_path{ "/tmp/analyze-stacktrace.jank" };
+      eng.handle(make_message({
+        {   "op",         "eval" },
+        { "code", "(printjln 4)" },
+        { "path",     stack_path }
+      }));
+
+      auto responses(eng.handle(make_message({
+        { "op", "analyze-last-stacktrace" }
+      })));
+      REQUIRE(responses.size() == 2);
+      auto const &analysis(responses.front());
+      CHECK(analysis.at("class").as_string() == "analyze/unresolved-symbol");
+      CHECK(analysis.at("type").as_string() == "jank");
+      auto const file_it(analysis.find("file"));
+      REQUIRE(file_it != analysis.end());
+      CHECK(file_it->second.as_string() == stack_path);
+      auto const column_it(analysis.find("column"));
+      REQUIRE(column_it != analysis.end());
+      CHECK(!column_it->second.as_string().empty());
+      auto const data_it(analysis.find("data"));
+      REQUIRE(data_it != analysis.end());
+      CHECK(data_it->second.as_string().find(":jank/error-kind") != std::string::npos);
+      auto const stack_it(analysis.find("stacktrace"));
+      REQUIRE(stack_it != analysis.end());
+      auto const &stack_frames(stack_it->second.as_list());
+      REQUIRE_FALSE(stack_frames.empty());
+      auto const done_statuses(extract_status(responses.back()));
+      CHECK(done_statuses == std::vector<std::string>{ "done" });
+    }
+
+    TEST_CASE("analyze-last-stacktrace reports absence of errors")
+    {
+      engine eng;
+      auto responses(eng.handle(make_message({
+        { "op", "analyze-last-stacktrace" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const statuses(extract_status(responses.front()));
+      CHECK(std::ranges::find(statuses, "done") != statuses.end());
+      CHECK(std::ranges::find(statuses, "no-error") != statuses.end());
     }
 
     TEST_CASE("load-file omits ns in response")

@@ -9,7 +9,11 @@ namespace jank::nrepl_server::asio
   inline std::vector<bencode::value::dict> engine::handle_eval(message const &msg)
   {
     auto const code(msg.get("code"));
-    auto const file_path(msg.get("path"));
+    auto file_path(msg.get("path"));
+    if(file_path.empty())
+    {
+      file_path = msg.get("file");
+    }
     if(code.empty())
     {
       return handle_unsupported(msg, "missing-code");
@@ -26,8 +30,7 @@ namespace jank::nrepl_server::asio
     {
       bindings = obj::persistent_hash_map::create_unique(
         std::make_pair(__rt_ctx->current_ns_var, session.current_ns),
-        std::make_pair(__rt_ctx->current_file_var,
-                       make_box(make_immutable_string(file_path))));
+        std::make_pair(__rt_ctx->current_file_var, make_box(make_immutable_string(file_path))));
     }
     context::binding_scope const scope{ bindings };
     session.running_eval = true;
@@ -89,7 +92,9 @@ namespace jank::nrepl_server::asio
       update_ns();
       emit_pending_output();
       auto const err_string(to_std_string(runtime::to_code_string(ex_obj)));
-      record_exception(session, err_string, object_type_str(ex_obj->type), std::nullopt);
+      auto const ex_type(object_type_str(ex_obj->type));
+      record_exception(session, err_string, ex_type, std::nullopt);
+      responses.emplace_back(make_eval_error_response(session.id, msg.id(), ex_type, ex_type));
       bencode::value::dict err_msg;
       if(!msg.id().empty())
       {
@@ -111,10 +116,13 @@ namespace jank::nrepl_server::asio
         std::cerr << "first err note line: " << err->notes.front().source.start.line << '\n';
       }
       emit_pending_output();
-      std::string const err_string{ err->message.data(), err->message.size() };
+      std::string const base_err_string{ err->message.data(), err->message.size() };
       std::string const err_type{ error::kind_str(err->kind) };
       auto const serialized_error(build_serialized_error(err));
-      record_exception(session, err_string, err_type, err->source, serialized_error);
+      auto const display_err_string(
+        format_error_with_location(base_err_string, err->kind, err->source, file_path));
+      record_exception(session, display_err_string, err_type, err->source, serialized_error);
+      responses.emplace_back(make_eval_error_response(session.id, msg.id(), err_type, err_type));
       bencode::value::dict err_msg;
       if(!msg.id().empty())
       {
@@ -122,7 +130,7 @@ namespace jank::nrepl_server::asio
       }
       err_msg.emplace("session", session.id);
       err_msg.emplace("status", bencode::list_of_strings({ "error" }));
-      err_msg.emplace("err", err_string);
+      err_msg.emplace("err", display_err_string);
       err_msg.emplace("exception-type", err_type);
       auto const file_string(to_std_string(err->source.file));
       if(file_string != jank::read::no_source_path)
@@ -145,7 +153,9 @@ namespace jank::nrepl_server::asio
     {
       update_ns();
       emit_pending_output();
-      record_exception(session, std::string{ ex.what() }, typeid(ex).name(), std::nullopt);
+      auto const ex_type(std::string{ typeid(ex).name() });
+      record_exception(session, std::string{ ex.what() }, ex_type, std::nullopt);
+      responses.emplace_back(make_eval_error_response(session.id, msg.id(), ex_type, ex_type));
       bencode::value::dict err_msg;
       if(!msg.id().empty())
       {
@@ -161,7 +171,9 @@ namespace jank::nrepl_server::asio
     {
       update_ns();
       emit_pending_output();
-      record_exception(session, "unknown exception", "unknown", std::nullopt);
+      std::string const ex_type{ "unknown" };
+      record_exception(session, "unknown exception", ex_type, std::nullopt);
+      responses.emplace_back(make_eval_error_response(session.id, msg.id(), ex_type, ex_type));
       bencode::value::dict err_msg;
       if(!msg.id().empty())
       {
