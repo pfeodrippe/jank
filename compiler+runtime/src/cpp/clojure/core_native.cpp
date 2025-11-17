@@ -290,7 +290,21 @@ namespace clojure::core_native
   /* TODO: implement opts for `read-string` */
   object_ref read_string(object_ref const /* opts */, object_ref const str)
   {
-    return __rt_ctx->read_string(runtime::to_string(str));
+    auto const hint(runtime::object_source(str));
+    bool const has_hint{ hint != read::source::unknown };
+    if(has_hint)
+    {
+      push_source_hint(hint);
+    }
+
+    auto const result(__rt_ctx->read_string(runtime::to_string(str)));
+
+    if(has_hint)
+    {
+      pop_source_hint();
+    }
+
+    return result;
   }
 
   object_ref read_line()

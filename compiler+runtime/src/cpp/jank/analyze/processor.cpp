@@ -1,5 +1,6 @@
 #include <ranges>
 #include <set>
+#include <cstdlib>
 
 #include <Interpreter/Compatibility.h>
 
@@ -1266,11 +1267,37 @@ namespace jank::analyze
     auto const sym_obj(l->data.rest().first().unwrap());
     if(sym_obj->type != runtime::object_type::symbol)
     {
-      return error::analyze_invalid_def("The var name in a 'def' must be a symbol.",
-                                        object_source(sym_obj),
-                                        "A symbol is needed for the name here.",
-                                        latest_expansion(macro_expansions))
-        ->add_usage(read::parse::reparse_nth(l, 1));
+      auto usage_source(read::parse::reparse_nth(l, 1));
+      if(std::getenv("JANK_DEBUG_DEF"))
+      {
+        auto const list_source(meta_source(l->meta));
+        auto const sym_source_debug(object_source(sym_obj));
+        util::println(
+          "JANK_DEBUG_DEF list_source_unknown={} usage_unknown={} sym_source_unknown={} "
+          "list_file={} usage_file={} sym_file={} sym_line={} sym_col={}",
+          list_source == read::source::unknown,
+          usage_source == read::source::unknown,
+          sym_source_debug == read::source::unknown,
+          list_source.file,
+          usage_source.file,
+          sym_source_debug.file,
+          sym_source_debug.start.line,
+          sym_source_debug.start.col);
+      }
+      auto sym_source(object_source(sym_obj));
+      if(sym_source == read::source::unknown || sym_source.file == read::no_source_path)
+      {
+        sym_source = usage_source;
+      }
+      auto err(error::analyze_invalid_def("The var name in a 'def' must be a symbol.",
+                                          sym_source,
+                                          "A symbol is needed for the name here.",
+                                          latest_expansion(macro_expansions)));
+      if(usage_source != read::source::unknown && usage_source != sym_source)
+      {
+        err = err->add_usage(usage_source);
+      }
+      return err;
     }
 
     auto const sym(runtime::expect_object<runtime::obj::symbol>(sym_obj));
