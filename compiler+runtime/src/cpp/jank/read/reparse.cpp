@@ -67,11 +67,12 @@ namespace jank::read::parse
     auto source(object_source(o));
     if(source.file == read::no_source_path)
     {
-      auto const hint(object_source_hint(o));
+      auto hint(object_source_hint(o));
       if(hint != read::source::unknown)
       {
         return hint;
       }
+      return source::unknown;
     }
     if(source == source::unknown)
     {
@@ -94,11 +95,12 @@ namespace jank::read::parse
     auto source(object_source(o));
     if(source.file == read::no_source_path)
     {
-      auto const hint(object_source_hint(o));
+      auto hint(object_source_hint(o));
       if(hint != read::source::unknown)
       {
         return hint;
       }
+      return source::unknown;
     }
     if(source == source::unknown)
     {

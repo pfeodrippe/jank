@@ -221,7 +221,16 @@ namespace jank::runtime
     {
       return read::source::unknown;
     }
-    return meta_source(meta);
+    auto source(meta_source(meta));
+    if(source == read::source::unknown || source.file == read::no_source_path)
+    {
+      auto const hint(meta_source_hint(meta));
+      if(hint != read::source::unknown)
+      {
+        return hint;
+      }
+    }
+    return source;
   }
 
   read::source meta_source_hint(object_ref const meta)
