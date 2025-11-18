@@ -50,6 +50,7 @@ namespace jank::util::cli
     std::string target_runtime{ "dynamic" };
     std::string output_filename{ "a.out" };
     std::string output_object_filename;
+    bool output_shared_library{};
 
     /* REPL command. */
     bool repl_server{};

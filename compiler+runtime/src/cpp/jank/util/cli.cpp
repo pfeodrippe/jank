@@ -121,6 +121,10 @@ namespace jank::util::cli
       ->default_str(make_default(opts.target_runtime));
     cli_compile.add_option("-o", opts.output_filename, "Output executable name.")
       ->default_str(make_default(opts.output_filename));
+    cli_compile.add_flag(
+      "--shared",
+      opts.output_shared_library,
+      "Emit a dynamic library instead of an executable (exports jank_entrypoint).");
     cli_compile.add_option("module", opts.target_module, "The entrypoint module.")->required();
 
     /* Health check subcommand. */
