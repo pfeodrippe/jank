@@ -1,0 +1,36 @@
+(ns dynamic.shared-entrypoint
+  (:require [jank.export]))
+
+(def point-schema
+  [:struct {:type "shared_point"
+            :fields [[:x :int]
+                     [:y :double]]}])
+
+(def point-pointer-schema
+  [:pointer point-schema])
+
+(defn make-point [x y]
+  {:x x
+   :y y})
+
+(jank.export/register #'make-point
+                      "make_point"
+                      [:=> [:cat :int :double] point-schema])
+
+(defn translate-point [p dx dy]
+  {:x (+ (:x p) dx)
+   :y (+ (:y p) dy)})
+
+(jank.export/register #'translate-point
+                      "translate_point"
+                      [:=> [:cat point-schema :int :double] point-schema])
+
+(defn point-ptr-id [ptr]
+  ptr)
+
+(jank.export/register #'point-ptr-id
+                      "point_ptr_id"
+                      [:=> [:cat point-pointer-schema] point-pointer-schema])
+
+(defn -main [& _]
+  (println "Main called!"))

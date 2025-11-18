@@ -2,7 +2,9 @@
 #include <ranges>
 #include <cctype>
 #include <fstream>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <cstdlib>
 
@@ -32,6 +34,188 @@
 namespace jank::aot
 {
   using namespace jank::runtime;
+
+  struct struct_field_info
+  {
+    std::string name;
+    std::string c_field_name;
+    object_ref type;
+  };
+
+  struct struct_type_info
+  {
+    std::string c_type;
+    std::vector<struct_field_info> fields;
+  };
+
+  struct struct_helper_record
+  {
+    struct_type_info info;
+    std::string helper_suffix;
+  };
+
+  struct export_codegen_context
+  {
+    jtl::string_builder struct_helper_sb;
+    std::unordered_map<std::string, size_t> helper_index;
+    std::vector<struct_helper_record> helpers;
+    size_t helper_counter{};
+  };
+
+  static std::string sanitize_identifier(std::string_view const input)
+  {
+    std::string sanitized;
+    sanitized.reserve(input.size());
+    for(char const ch : input)
+    {
+      if(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')
+      {
+        sanitized.push_back(ch);
+      }
+      else
+      {
+        sanitized.push_back('_');
+      }
+    }
+    if(sanitized.empty() || std::isdigit(static_cast<unsigned char>(sanitized.front())))
+    {
+      sanitized.insert(sanitized.begin(), '_');
+    }
+    return sanitized;
+  }
+
+  static std::string escape_c_string(std::string const &input)
+  {
+    std::string escaped;
+    escaped.reserve(input.size() + 2);
+    escaped.push_back('"');
+    for(char const ch : input)
+    {
+      if(ch == '"' || ch == '\\')
+      {
+        escaped.push_back('\\');
+      }
+      escaped.push_back(ch);
+    }
+    escaped.push_back('"');
+    return escaped;
+  }
+
+  static std::optional<std::string> schema_field_name_to_string(object_ref const obj)
+  {
+    auto const kw(dyn_cast<obj::keyword>(obj));
+    if(kw.is_some())
+    {
+      return kw->sym->name;
+    }
+    auto const sym(dyn_cast<obj::symbol>(obj));
+    if(sym.is_some())
+    {
+      auto const &name(sym->name);
+      return std::string{ name.data(), name.size() };
+    }
+    auto const str(dyn_cast<obj::persistent_string>(obj));
+    if(str.is_some())
+    {
+      return str->data;
+    }
+    return std::nullopt;
+  }
+
+  static std::optional<struct_type_info> parse_struct_info(object_ref const type_obj)
+  {
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_nil() || vec->count() < 2)
+    {
+      return std::nullopt;
+    }
+
+    auto const tag_kw(dyn_cast<obj::keyword>(vec->data[0]));
+    if(tag_kw.is_nil() || tag_kw->sym->name != "struct")
+    {
+      return std::nullopt;
+    }
+
+    auto const spec_map(dyn_cast<obj::persistent_hash_map>(vec->data[1]));
+    if(spec_map.is_nil())
+    {
+      return std::nullopt;
+    }
+
+    auto const type_kw(__rt_ctx->intern_keyword("", "type").expect_ok().erase());
+    auto const fields_kw(__rt_ctx->intern_keyword("", "fields").expect_ok().erase());
+
+    auto const c_type_obj(dyn_cast<obj::persistent_string>(spec_map->get(type_kw)));
+    if(c_type_obj.is_nil())
+    {
+      return std::nullopt;
+    }
+
+    struct_type_info info;
+    info.c_type = c_type_obj->data;
+
+    auto const fields_vec(dyn_cast<obj::persistent_vector>(spec_map->get(fields_kw)));
+    if(fields_vec.is_nil())
+    {
+      return std::nullopt;
+    }
+
+    for(auto const &entry : fields_vec->data)
+    {
+      auto const entry_vec(dyn_cast<obj::persistent_vector>(entry));
+      if(entry_vec.is_nil() || entry_vec->count() != 2)
+      {
+        continue;
+      }
+      auto const name(schema_field_name_to_string(entry_vec->data[0]));
+      if(!name)
+      {
+        continue;
+      }
+      struct_field_info field;
+      field.name = *name;
+      field.c_field_name = sanitize_identifier(field.name);
+      field.type = entry_vec->data[1];
+      info.fields.push_back(field);
+    }
+
+    if(info.fields.empty())
+    {
+      return std::nullopt;
+    }
+
+    return info;
+  }
+
+  static std::string
+  gen_box(object_ref const type_obj, std::string const &val, export_codegen_context &ctx);
+  static std::string
+  gen_unbox(object_ref const type_obj, std::string const &val, export_codegen_context &ctx);
+  static void emit_struct_helpers(export_codegen_context &ctx, struct_helper_record const &record);
+
+  static std::string ensure_struct_helper(object_ref const type_obj, export_codegen_context &ctx)
+  {
+    auto const info(parse_struct_info(type_obj));
+    if(!info)
+    {
+      return {};
+    }
+
+    auto const existing(ctx.helper_index.find(info->c_type));
+    if(existing != ctx.helper_index.end())
+    {
+      return ctx.helpers[existing->second].helper_suffix;
+    }
+
+    struct_helper_record record{
+      *info,
+      util::format("{}_{}", sanitize_identifier(info->c_type), ctx.helper_counter++)
+    };
+    ctx.helper_index.emplace(record.info.c_type, ctx.helpers.size());
+    ctx.helpers.push_back(record);
+    emit_struct_helpers(ctx, ctx.helpers.back());
+    return ctx.helpers.back().helper_suffix;
+  }
 
   static jtl::immutable_string relative_to_cache_dir(jtl::immutable_string const &file_path)
   {
@@ -93,35 +277,62 @@ namespace jank::aot
     }
 
     auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
-    if(vec.is_some())
+    if(vec.is_some() && vec->count() > 0)
     {
-      if(vec->count() > 0)
+      auto const first(vec->data[0]);
+      auto const kw_tag(dyn_cast<obj::keyword>(first));
+      if(kw_tag.is_some())
       {
-        auto const first(vec->data[0]);
-        auto const kw(dyn_cast<obj::keyword>(first));
-        if(kw.is_some())
+        auto const &tag(kw_tag->sym->name);
+        if(tag == "vector" && vec->count() == 2)
         {
-          if(kw->sym->name == "vector" && vec->count() == 2)
+          auto const inner(vec->data[1]);
+          std::string const inner_type = schema_to_c_type(inner);
+          if(inner_type == "char const *")
           {
-            // [:vector :type]
-            auto const inner(vec->data[1]);
-            std::string const inner_type = schema_to_c_type(inner);
-            if(inner_type != "void*")
-            {
-              if(inner_type == "char const *")
-              {
-                return "char const **";
-              }
-              return inner_type + "*";
-            }
+            return "char const **";
+          }
+          if(inner_type != "void*")
+          {
+            return inner_type + "*";
+          }
+        }
+        else if(tag == "pointer" && vec->count() == 2)
+        {
+          auto const inner(vec->data[1]);
+          std::string const inner_type = schema_to_c_type(inner);
+          if(inner_type == "char const *")
+          {
+            return "char const **";
+          }
+          if(inner_type == "void")
+          {
+            return "void*";
+          }
+          return inner_type + "*";
+        }
+        else if(tag == "struct" && vec->count() == 2)
+        {
+          auto const info(parse_struct_info(type_obj));
+          if(info)
+          {
+            return info->c_type;
           }
         }
       }
     }
+
+    auto const struct_info(parse_struct_info(type_obj));
+    if(struct_info)
+    {
+      return struct_info->c_type;
+    }
+
     return "void*";
   }
 
-  static std::string gen_box(object_ref const type_obj, std::string const &val)
+  static std::string
+  gen_box(object_ref const type_obj, std::string const &val, export_codegen_context &ctx)
   {
     auto const kw(dyn_cast<obj::keyword>(type_obj));
     if(kw.is_some())
@@ -152,10 +363,37 @@ namespace jank::aot
         return util::format("jank_string_create({})", val);
       }
     }
-    return util::format("jank_pointer_create({})", val);
+
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_some() && vec->count() > 0)
+    {
+      auto const tag_kw(dyn_cast<obj::keyword>(vec->data[0]));
+      if(tag_kw.is_some())
+      {
+        auto const &tag(tag_kw->sym->name);
+        if((tag == "vector" || tag == "pointer") && vec->count() == 2)
+        {
+          return util::format(
+            "jank_pointer_create(const_cast<void *>(static_cast<void const *>({})))",
+            val);
+        }
+        if(tag == "struct" && vec->count() == 2)
+        {
+          auto const helper(ensure_struct_helper(type_obj, ctx));
+          if(!helper.empty())
+          {
+            return util::format("box_struct_{}({})", helper, val);
+          }
+        }
+      }
+    }
+
+    return util::format("jank_pointer_create(const_cast<void *>(static_cast<void const *>({})))",
+                        val);
   }
 
-  static std::string gen_unbox(object_ref const type_obj, std::string const &val)
+  static std::string
+  gen_unbox(object_ref const type_obj, std::string const &val, export_codegen_context &ctx)
   {
     auto const kw(dyn_cast<obj::keyword>(type_obj));
     if(kw.is_some())
@@ -190,8 +428,123 @@ namespace jank::aot
         return "";
       }
     }
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_some() && vec->count() > 0)
+    {
+      auto const tag_kw(dyn_cast<obj::keyword>(vec->data[0]));
+      if(tag_kw.is_some() && tag_kw->sym->name == "struct" && vec->count() == 2)
+      {
+        auto const helper(ensure_struct_helper(type_obj, ctx));
+        if(!helper.empty())
+        {
+          return util::format("unbox_struct_{}({})", helper, val);
+        }
+      }
+    }
+
     std::string const type_str = schema_to_c_type(type_obj);
     return util::format("reinterpret_cast<{}>(jank_to_pointer({}))", type_str, val);
+  }
+
+  static void emit_struct_helpers(export_codegen_context &ctx, struct_helper_record const &record)
+  {
+    auto &sb(ctx.struct_helper_sb);
+    auto const &info(record.info);
+    auto const &suffix(record.helper_suffix);
+
+    util::format_to(sb, "struct {}\n", info.c_type);
+    sb("{\n");
+    for(auto const &field : info.fields)
+    {
+      util::format_to(sb, "  {} {};\n", schema_to_c_type(field.type), field.c_field_name);
+    }
+    sb("};\n\n");
+
+    std::vector<std::string> field_kw_names;
+    field_kw_names.reserve(info.fields.size());
+    for(auto const &field : info.fields)
+    {
+      auto kw_name(util::format("struct_kw_{}_{}", suffix, sanitize_identifier(field.name)));
+      field_kw_names.push_back(kw_name);
+      util::format_to(sb, "static jank_object_ref {};\n", kw_name);
+    }
+    if(!field_kw_names.empty())
+    {
+      sb("\n");
+    }
+
+    util::format_to(sb,
+                    "static jank_object_ref box_struct_{}({} const &value)\n",
+                    suffix,
+                    info.c_type);
+    sb("{\n");
+
+    for(size_t i{}; i < info.fields.size(); ++i)
+    {
+      util::format_to(sb, "  if(!{})\n", field_kw_names[i]);
+      sb("  {\n");
+      util::format_to(sb,
+                      "    {} = jank_keyword_intern_c(nullptr, {});\n",
+                      field_kw_names[i],
+                      escape_c_string(info.fields[i].name));
+      sb("  }\n");
+    }
+
+    if(info.fields.empty())
+    {
+      sb("  return jank_map_create(0);\n}\n");
+    }
+    else
+    {
+      util::format_to(sb, "  return jank_map_create({}, ", info.fields.size());
+      for(size_t i{}; i < info.fields.size(); ++i)
+      {
+        if(i != 0)
+        {
+          sb(", ");
+        }
+        auto const field_expr(
+          gen_box(info.fields[i].type, util::format("value.{}", info.fields[i].c_field_name), ctx));
+        util::format_to(sb, "{}, {}", field_kw_names[i], field_expr);
+      }
+      sb(");\n}\n");
+    }
+
+    util::format_to(sb,
+                    "\nstatic {} unbox_struct_{}(jank_object_ref const value)\n",
+                    info.c_type,
+                    suffix);
+    sb("{\n");
+    sb("  static jank_object_ref get_var;\n");
+    sb("  static jank_object_ref get_fn;\n");
+    sb("  if(!get_fn)\n  {\n    get_var = jank_var_intern_c(\"clojure.core\", \"get\");\n    "
+       "get_fn = jank_deref(get_var);\n  }\n");
+    sb("  auto const not_found = jank_const_nil();\n");
+    util::format_to(sb, "  {} result;\n", info.c_type);
+    sb("  result = {};\n");
+
+    for(size_t i{}; i < info.fields.size(); ++i)
+    {
+      auto const value_var(
+        util::format("field_value_{}_{}", suffix, sanitize_identifier(info.fields[i].name)));
+      util::format_to(sb, "  if(!{})\n", field_kw_names[i]);
+      sb("  {\n");
+      util::format_to(sb,
+                      "    {} = jank_keyword_intern_c(nullptr, {});\n",
+                      field_kw_names[i],
+                      escape_c_string(info.fields[i].name));
+      sb("  }\n");
+      util::format_to(sb,
+                      "  auto const {} = jank_call3(get_fn, value, {}, not_found);\n",
+                      value_var,
+                      field_kw_names[i]);
+      util::format_to(sb,
+                      "  result.{} = {};\n",
+                      info.fields[i].c_field_name,
+                      gen_unbox(info.fields[i].type, value_var, ctx));
+    }
+
+    sb("  return result;\n}\n");
   }
 
   // TODO: Generate an object file instead of a cpp
@@ -234,9 +587,12 @@ extern "C" jank_object_ref jank_string_create(char const *);
 extern "C" char const *jank_to_string(jank_object_ref);
 extern "C" jank_object_ref jank_pointer_create(void*);
 extern "C" void* jank_to_pointer(jank_object_ref);
+extern "C" jank_object_ref jank_const_nil();
 extern "C" jank_object_ref jank_const_true();
 extern "C" jank_object_ref jank_const_false();
 extern "C" jank_bool jank_truthy(jank_object_ref);
+extern "C" jank_object_ref jank_keyword_intern_c(char const *, char const *);
+extern "C" jank_object_ref jank_map_create(unsigned long long, ...);
 )");
 
     auto const modules_rlocked{ __rt_ctx->loaded_modules_in_order.rlock() };
@@ -267,6 +623,8 @@ namespace
 
     if(emit_shared_library)
     {
+      export_codegen_context codegen_ctx;
+      jtl::string_builder wrappers_sb;
       auto const export_exports_var(__rt_ctx->find_var("jank.export", "exports"));
       if(!export_exports_var.is_nil() && export_exports_var->is_bound())
       {
@@ -329,13 +687,13 @@ namespace
 
                       auto const arg_name = util::format("arg{}", arg_idx);
                       args_sig += util::format("{} {}", schema_to_c_type(arg_type), arg_name);
-                      args_call += gen_box(arg_type, arg_name);
+                      args_call += gen_box(arg_type, arg_name, codegen_ctx);
                       arg_idx++;
                     }
 
                     auto const ret_type_str = schema_to_c_type(return_type_obj);
                     auto const deref_call = util::format("jank_call{}", arg_idx);
-                    auto const unbox_expr = gen_unbox(return_type_obj, "result");
+                    auto const unbox_expr = gen_unbox(return_type_obj, "result", codegen_ctx);
 
                     // Check if return type is void
                     auto const ret_kw(dyn_cast<obj::keyword>(return_type_obj));
@@ -345,7 +703,7 @@ namespace
                       is_void = true;
                     }
 
-                    util::format_to(sb,
+                    util::format_to(wrappers_sb,
                                     R"(
 extern "C" {} {}({})
 {{
@@ -370,6 +728,9 @@ extern "C" {} {}({})
           }
         }
       }
+
+      sb(codegen_ctx.struct_helper_sb.view());
+      sb(wrappers_sb.view());
     }
 
     sb("\n\n");

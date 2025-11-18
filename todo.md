@@ -3,6 +3,6 @@
 - [ ] use it to hotreload in SC
   - [x] dylib from SC
   - [ ] use it
-    - [ ] ability to export symbol from jank
-    - [ ] ability to
+    - [x] ability to export symbol from jank
+    - [ ] ability to receive, return pointers and structs as values
 - [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
