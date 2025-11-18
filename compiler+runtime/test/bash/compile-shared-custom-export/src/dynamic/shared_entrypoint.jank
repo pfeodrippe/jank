@@ -1,0 +1,10 @@
+(ns dynamic.shared-entrypoint
+  (:require [jank.export]))
+
+(defn my-inc [x]
+  (+ x 1))
+
+(jank.export/symbol #'my-inc "my_inc")
+
+(defn -main [& args]
+  (println "Main called!"))

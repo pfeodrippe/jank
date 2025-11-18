@@ -1,0 +1,9 @@
+(ns jank.export
+  (:refer-clojure :exclude [symbol]))
+
+(def exports (atom {}))
+
+(defn symbol
+  "Registers a var to be exported with the given name."
+  [var name]
+  (swap! exports assoc name var))

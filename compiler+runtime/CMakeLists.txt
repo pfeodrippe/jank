@@ -51,6 +51,7 @@ set(jank_core_modules
   clojure.core
   jank.nrepl-server.core
   jank.nrepl-server.server
+  jank.export
 )
 
 set(jank_core_module_paths "")

@@ -14,6 +14,11 @@
 #include <jank/aot/processor.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/module/loader.hpp>
+#include <jank/runtime/obj/atom.hpp>
+#include <jank/runtime/obj/persistent_hash_map.hpp>
+#include <jank/runtime/obj/persistent_string.hpp>
+#include <jank/runtime/obj/symbol.hpp>
+#include <jank/runtime/rtti.hpp>
 #include <jank/util/cli.hpp>
 #include <jank/util/fmt.hpp>
 #include <jank/util/fmt/print.hpp>
@@ -66,9 +71,12 @@ extern "C" jank_object_ref jank_load_jank_compiler_native();
 extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
 extern "C" jank_object_ref jank_var_intern_c(char const *, char const *);
 extern "C" jank_object_ref jank_deref(jank_object_ref);
+extern "C" jank_object_ref jank_call1(jank_object_ref, jank_object_ref);
 extern "C" jank_object_ref jank_call2(jank_object_ref, jank_object_ref, jank_object_ref);
 extern "C" void jank_module_set_loaded(char const *module);
 extern "C" jank_object_ref jank_parse_command_line_args(int, char const **);
+extern "C" jank_object_ref jank_integer_create(long long);
+extern "C" long long jank_to_integer(jank_object_ref);
 )");
 
     auto const modules_rlocked{ __rt_ctx->loaded_modules_in_order.rlock() };
@@ -96,6 +104,52 @@ namespace
     auto const entry_signature(emit_shared_library
                                  ? R"(extern "C" int jank_entrypoint(int argc, const char** argv))"
                                  : "int main(int argc, const char** argv)");
+
+    if(emit_shared_library)
+    {
+      auto const export_exports_var(__rt_ctx->find_var("jank.export", "exports"));
+      if(!export_exports_var.is_nil() && export_exports_var->is_bound())
+      {
+        // util::println("Found jank.export/exports");
+        auto const exports_atom(dyn_cast<obj::atom>(export_exports_var->deref()));
+        if(!exports_atom.is_nil())
+        {
+          // util::println("It is an atom");
+          auto const exports_map(dyn_cast<obj::persistent_hash_map>(exports_atom->deref()));
+          if(!exports_map.is_nil())
+          {
+            // util::println("It contains a map with {} entries", exports_map->count());
+            for(auto const &pair : exports_map->data)
+            {
+              auto const name_obj(dyn_cast<obj::persistent_string>(pair.first));
+              auto const var_obj(dyn_cast<var>(pair.second));
+
+              if(!name_obj.is_nil() && !var_obj.is_nil())
+              {
+                auto const name_str(name_obj->data);
+                // util::println("Exporting {}", name_str);
+                auto const ns_str(var_obj->n->name->name);
+                auto const var_name_str(var_obj->name->name);
+
+                util::format_to(sb,
+                                R"(
+extern "C" int {}(int arg)
+{{
+  auto const var = jank_var_intern_c("{}", "{}");
+  auto const derefed = jank_deref(var);
+  auto const result = jank_call1(derefed, jank_integer_create(arg));
+  return (int)jank_to_integer(result);
+}}
+)",
+                                name_str,
+                                ns_str,
+                                var_name_str);
+              }
+            }
+          }
+        }
+      }
+    }
 
     sb("\n\n");
     sb(entry_signature);

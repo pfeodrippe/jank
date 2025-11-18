@@ -1,4 +1,8 @@
 - [x] compile it to a standalone and check the nREPL server
   - [x] compile
 - [ ] use it to hotreload in SC
+  - [x] dylib from SC
+  - [ ] use it
+    - [ ] ability to export symbol from jank
+    - [ ] ability to
 - [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
