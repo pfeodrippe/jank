@@ -4,7 +4,22 @@
 (defn my-inc [x]
   (+ x 1))
 
-(jank.export/symbol #'my-inc "my_inc")
+(jank.export/register #'my-inc "my_inc" [:=> [:cat :int] :int])
+
+(defn my-add-double [x y]
+  (+ x y))
+
+(jank.export/register #'my-add-double "my_add_double" [:=> [:cat :double :double] :double])
+
+(defn my-str-len [s]
+  (count s))
+
+(jank.export/register #'my-str-len "my_str_len" [:=> [:cat :string] :int])
+
+(defn my-void []
+  (println "Void called!"))
+
+(jank.export/register #'my-void "my_void" [:=> [:cat] :void])
 
 (defn -main [& args]
   (println "Main called!"))

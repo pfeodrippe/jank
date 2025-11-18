@@ -16,6 +16,7 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/meta.hpp>
 #include <jank/aot/resource.hpp>
+#include <jank/runtime/obj/native_pointer_wrapper.hpp>
 #include <jank/error/runtime.hpp>
 #include <jank/profile/time.hpp>
 #include <jank/util/scope_exit.hpp>
@@ -432,6 +433,21 @@ extern "C"
   {
     jank_debug_assert(s);
     return make_box<obj::inst>(s).erase();
+  }
+
+  jank_object_ref jank_pointer_create(void * const p)
+  {
+    return make_box<obj::native_pointer_wrapper>(p).erase();
+  }
+
+  void *jank_to_pointer(jank_object_ref const o)
+  {
+    auto const o_obj(reinterpret_cast<object *>(o));
+    if(o_obj->type == object_type::native_pointer_wrapper)
+    {
+      return expect_object<obj::native_pointer_wrapper>(o_obj)->data;
+    }
+    return nullptr;
   }
 
   jank_object_ref jank_list_create(jank_u64 const size, ...)
@@ -929,6 +945,26 @@ extern "C"
   {
     auto const o_obj(reinterpret_cast<object *>(o));
     return to_integer_or_hash(o_obj);
+  }
+
+  jank_f64 jank_to_real(jank_object_ref const o)
+  {
+    auto const o_obj(reinterpret_cast<object *>(o));
+    if(o_obj->type == object_type::real)
+    {
+      return expect_object<obj::real>(o_obj)->data;
+    }
+    return static_cast<jank_f64>(to_integer_or_hash(o_obj));
+  }
+
+  char const *jank_to_string(jank_object_ref const o)
+  {
+    auto const o_obj(reinterpret_cast<object *>(o));
+    if(o_obj->type == object_type::persistent_string)
+    {
+      return expect_object<obj::persistent_string>(o_obj)->data.c_str();
+    }
+    return nullptr;
   }
 
   jank_i64

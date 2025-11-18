@@ -15,8 +15,11 @@
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/module/loader.hpp>
 #include <jank/runtime/obj/atom.hpp>
+#include <jank/runtime/obj/keyword.hpp>
 #include <jank/runtime/obj/persistent_hash_map.hpp>
 #include <jank/runtime/obj/persistent_string.hpp>
+#include <jank/runtime/obj/persistent_vector.hpp>
+#include <jank/runtime/obj/persistent_vector_sequence.hpp>
 #include <jank/runtime/obj/symbol.hpp>
 #include <jank/runtime/rtti.hpp>
 #include <jank/util/cli.hpp>
@@ -48,6 +51,149 @@ namespace jank::aot
     return sanitized;
   }
 
+  static std::string schema_to_c_type(object_ref const type_obj)
+  {
+    auto const kw(dyn_cast<obj::keyword>(type_obj));
+    if(kw.is_some())
+    {
+      if(!kw->sym->ns.empty())
+      {
+        /* Assume it's a struct name or similar if qualified, or handle specially. */
+        return "void*";
+      }
+      auto const &name(kw->sym->name);
+      if(name == "int")
+      {
+        return "int";
+      }
+      if(name == "long")
+      {
+        return "long";
+      }
+      if(name == "double")
+      {
+        return "double";
+      }
+      if(name == "float")
+      {
+        return "float";
+      }
+      if(name == "bool")
+      {
+        return "bool";
+      }
+      if(name == "string")
+      {
+        return "char const *";
+      }
+      if(name == "void")
+      {
+        return "void";
+      }
+    }
+
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_some())
+    {
+      if(vec->count() > 0)
+      {
+        auto const first(vec->data[0]);
+        auto const kw(dyn_cast<obj::keyword>(first));
+        if(kw.is_some())
+        {
+          if(kw->sym->name == "vector" && vec->count() == 2)
+          {
+            // [:vector :type]
+            auto const inner(vec->data[1]);
+            std::string const inner_type = schema_to_c_type(inner);
+            if(inner_type != "void*")
+            {
+              if(inner_type == "char const *")
+              {
+                return "char const **";
+              }
+              return inner_type + "*";
+            }
+          }
+        }
+      }
+    }
+    return "void*";
+  }
+
+  static std::string gen_box(object_ref const type_obj, std::string const &val)
+  {
+    auto const kw(dyn_cast<obj::keyword>(type_obj));
+    if(kw.is_some())
+    {
+      auto const &name(kw->sym->name);
+      if(name == "int")
+      {
+        return util::format("jank_integer_create({})", val);
+      }
+      if(name == "long")
+      {
+        return util::format("jank_integer_create({})", val);
+      }
+      if(name == "double")
+      {
+        return util::format("jank_real_create({})", val);
+      }
+      if(name == "float")
+      {
+        return util::format("jank_real_create({})", val);
+      }
+      if(name == "bool")
+      {
+        return util::format("({} ? jank_const_true() : jank_const_false())", val);
+      }
+      if(name == "string")
+      {
+        return util::format("jank_string_create({})", val);
+      }
+    }
+    return util::format("jank_pointer_create({})", val);
+  }
+
+  static std::string gen_unbox(object_ref const type_obj, std::string const &val)
+  {
+    auto const kw(dyn_cast<obj::keyword>(type_obj));
+    if(kw.is_some())
+    {
+      auto const &name(kw->sym->name);
+      if(name == "int")
+      {
+        return util::format("(int)jank_to_integer({})", val);
+      }
+      if(name == "long")
+      {
+        return util::format("(long)jank_to_integer({})", val);
+      }
+      if(name == "double")
+      {
+        return util::format("jank_to_real({})", val);
+      }
+      if(name == "float")
+      {
+        return util::format("(float)jank_to_real({})", val);
+      }
+      if(name == "bool")
+      {
+        return util::format("(bool)jank_truthy({})", val);
+      }
+      if(name == "string")
+      {
+        return util::format("jank_to_string({})", val);
+      }
+      if(name == "void")
+      {
+        return "";
+      }
+    }
+    std::string const type_str = schema_to_c_type(type_obj);
+    return util::format("reinterpret_cast<{}>(jank_to_pointer({}))", type_str, val);
+  }
+
   // TODO: Generate an object file instead of a cpp
   static jtl::immutable_string
   gen_entrypoint(jtl::immutable_string const &module, bool const emit_shared_library)
@@ -71,12 +217,26 @@ extern "C" jank_object_ref jank_load_jank_compiler_native();
 extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
 extern "C" jank_object_ref jank_var_intern_c(char const *, char const *);
 extern "C" jank_object_ref jank_deref(jank_object_ref);
+extern "C" jank_object_ref jank_call0(jank_object_ref);
 extern "C" jank_object_ref jank_call1(jank_object_ref, jank_object_ref);
 extern "C" jank_object_ref jank_call2(jank_object_ref, jank_object_ref, jank_object_ref);
+extern "C" jank_object_ref jank_call3(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref);
+extern "C" jank_object_ref jank_call4(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref);
+extern "C" jank_object_ref jank_call5(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref);
+extern "C" jank_object_ref jank_call6(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref);
 extern "C" void jank_module_set_loaded(char const *module);
 extern "C" jank_object_ref jank_parse_command_line_args(int, char const **);
 extern "C" jank_object_ref jank_integer_create(long long);
 extern "C" long long jank_to_integer(jank_object_ref);
+extern "C" jank_object_ref jank_real_create(double);
+extern "C" double jank_to_real(jank_object_ref);
+extern "C" jank_object_ref jank_string_create(char const *);
+extern "C" char const *jank_to_string(jank_object_ref);
+extern "C" jank_object_ref jank_pointer_create(void*);
+extern "C" void* jank_to_pointer(jank_object_ref);
+extern "C" jank_object_ref jank_const_true();
+extern "C" jank_object_ref jank_const_false();
+extern "C" jank_bool jank_truthy(jank_object_ref);
 )");
 
     auto const modules_rlocked{ __rt_ctx->loaded_modules_in_order.rlock() };
@@ -122,28 +282,89 @@ namespace
             for(auto const &pair : exports_map->data)
             {
               auto const name_obj(dyn_cast<obj::persistent_string>(pair.first));
-              auto const var_obj(dyn_cast<var>(pair.second));
+              auto const info_map(dyn_cast<obj::persistent_hash_map>(pair.second));
 
-              if(!name_obj.is_nil() && !var_obj.is_nil())
+              if(!name_obj.is_nil() && !info_map.is_nil())
               {
-                auto const name_str(name_obj->data);
-                // util::println("Exporting {}", name_str);
-                auto const ns_str(var_obj->n->name->name);
-                auto const var_name_str(var_obj->name->name);
+                auto const var_obj(dyn_cast<var>(
+                  info_map->get(__rt_ctx->intern_keyword("", "var").expect_ok().erase())));
+                auto const schema_obj(dyn_cast<obj::persistent_vector>(
+                  info_map->get(__rt_ctx->intern_keyword("", "schema").expect_ok().erase())));
 
-                util::format_to(sb,
-                                R"(
-extern "C" int {}(int arg)
+                if(!var_obj.is_nil() && !schema_obj.is_nil() && schema_obj->count() == 3)
+                {
+                  // Schema: [:=> [:cat arg...] ret]
+                  auto const arrow_kw(dyn_cast<obj::keyword>(schema_obj->data[0]));
+                  auto const args_cat(dyn_cast<obj::persistent_vector>(schema_obj->data[1]));
+                  auto const return_type_obj(schema_obj->data[2]);
+
+                  if(!arrow_kw.is_nil() && arrow_kw->sym->name == "=>" && !args_cat.is_nil()
+                     && !return_type_obj.is_nil())
+                  {
+                    auto const name_str(name_obj->data);
+                    auto const ns_str(var_obj->n->name->name);
+                    auto const var_name_str(var_obj->name->name);
+
+                    std::string args_sig;
+                    std::string args_call;
+                    int arg_idx = 0;
+
+                    // Skip :cat
+                    for(size_t i = 1; i < args_cat->count(); ++i)
+                    {
+                      auto const arg_type(args_cat->data[i]);
+                      if(arg_type.is_nil())
+                      {
+                        continue;
+                      }
+
+                      if(!args_sig.empty())
+                      {
+                        args_sig += ", ";
+                      }
+                      if(!args_call.empty())
+                      {
+                        args_call += ", ";
+                      }
+
+                      auto const arg_name = util::format("arg{}", arg_idx);
+                      args_sig += util::format("{} {}", schema_to_c_type(arg_type), arg_name);
+                      args_call += gen_box(arg_type, arg_name);
+                      arg_idx++;
+                    }
+
+                    auto const ret_type_str = schema_to_c_type(return_type_obj);
+                    auto const deref_call = util::format("jank_call{}", arg_idx);
+                    auto const unbox_expr = gen_unbox(return_type_obj, "result");
+
+                    // Check if return type is void
+                    auto const ret_kw(dyn_cast<obj::keyword>(return_type_obj));
+                    bool is_void = false;
+                    if(!ret_kw.is_nil() && ret_kw->sym->name == "void")
+                    {
+                      is_void = true;
+                    }
+
+                    util::format_to(sb,
+                                    R"(
+extern "C" {} {}({})
 {{
   auto const var = jank_var_intern_c("{}", "{}");
   auto const derefed = jank_deref(var);
-  auto const result = jank_call1(derefed, jank_integer_create(arg));
-  return (int)jank_to_integer(result);
+  auto const result = {}(derefed{});
+  {}
 }}
 )",
-                                name_str,
-                                ns_str,
-                                var_name_str);
+                                    ret_type_str,
+                                    name_str,
+                                    args_sig,
+                                    ns_str,
+                                    var_name_str,
+                                    deref_call,
+                                    (args_call.empty() ? "" : ", " + args_call),
+                                    is_void ? "" : util::format("return {};", unbox_expr));
+                  }
+                }
               }
             }
           }

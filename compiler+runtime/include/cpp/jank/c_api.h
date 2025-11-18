@@ -313,6 +313,8 @@ extern "C"
   jank_bool jank_equal(jank_object_ref l, jank_object_ref r);
   jank_uhash jank_to_hash(jank_object_ref o);
   jank_i64 jank_to_integer(jank_object_ref o);
+  jank_f64 jank_to_real(jank_object_ref o);
+  char const *jank_to_string(jank_object_ref o);
   jank_i64 jank_shift_mask_case_integer(jank_object_ref o, jank_i64 shift, jank_i64 mask);
 
   void jank_set_meta(jank_object_ref o, jank_object_ref meta);
