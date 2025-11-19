@@ -14,6 +14,7 @@
 #include <jank/evaluate.hpp>
 #include <jank/codegen/llvm_processor.hpp>
 #include <jank/codegen/processor.hpp>
+#include <jank/util/cli.hpp>
 #include <jank/util/clang_format.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
@@ -24,7 +25,8 @@ namespace jank::compiler_native
   using namespace jank;
   using namespace jank::runtime;
 
-  static object_ref native_source(object_ref const form)
+  static object_ref
+  emit_native_source(object_ref const form, util::cli::codegen_type const target_codegen)
   {
     /* We use a clean analyze::processor so we don't share lifted items from other REPL
      * evaluations. */
@@ -36,7 +38,7 @@ namespace jank::compiler_native
       expect_object<runtime::ns>(__rt_ctx->intern_var("clojure.core", "*ns*").expect_ok()->deref())
         ->to_string());
 
-    if(util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
+    if(target_codegen == util::cli::codegen_type::llvm_ir)
     {
       codegen::llvm_processor const cg_prc{ wrapped_expr,
                                             module,
@@ -61,6 +63,16 @@ namespace jank::compiler_native
 
     return jank_nil;
   }
+
+  static object_ref native_source(object_ref const form)
+  {
+    return emit_native_source(form, util::cli::opts.codegen);
+  }
+
+  static object_ref native_cpp_source(object_ref const form)
+  {
+    return emit_native_source(form, util::cli::codegen_type::cpp);
+  }
 }
 
 extern "C" jank_object_ref jank_load_jank_compiler_native()
@@ -78,6 +90,7 @@ extern "C" jank_object_ref jank_load_jank_compiler_native()
           make_box(obj::symbol{ __rt_ctx->current_ns()->to_string(), name }.to_string())))));
   });
   intern_fn("native-source", &compiler_native::native_source);
+  intern_fn("native-cpp-source", &compiler_native::native_cpp_source);
 
   return jank_nil.erase();
 }
