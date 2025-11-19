@@ -207,7 +207,7 @@ namespace jank::aot
       return ctx.helpers[existing->second].helper_suffix;
     }
 
-    struct_helper_record record{
+    struct_helper_record const record{
       *info,
       util::format("{}_{}", sanitize_identifier(info->c_type), ctx.helper_counter++)
     };
