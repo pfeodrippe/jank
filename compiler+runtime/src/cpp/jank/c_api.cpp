@@ -111,13 +111,6 @@ extern "C"
     return __rt_ctx->intern_keyword(to_string(ns_obj), to_string(name_obj)).expect_ok().erase();
   }
 
-  jank_object_ref jank_keyword_intern_c(char const * const ns, char const * const name)
-  {
-    jank_debug_assert(name);
-    auto const ns_view(ns ? ns : "");
-    return __rt_ctx->intern_keyword(ns_view, name).expect_ok().erase();
-  }
-
   jank_object_ref jank_deref(jank_object_ref const o)
   {
     auto const o_obj(reinterpret_cast<object *>(o));

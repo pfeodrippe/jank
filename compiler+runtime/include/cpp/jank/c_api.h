@@ -57,7 +57,6 @@ extern "C"
   jank_object_ref jank_var_set_dynamic(jank_object_ref var, jank_object_ref dynamic);
 
   jank_object_ref jank_keyword_intern(jank_object_ref ns, jank_object_ref name);
-  jank_object_ref jank_keyword_intern_c(char const *ns, char const *name);
 
   jank_object_ref jank_deref(jank_object_ref o);
 

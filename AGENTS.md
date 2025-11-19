@@ -8,7 +8,6 @@
 ### Build
 - `./bin/configure -GNinja -DCMAKE_BUILD_TYPE=Debug -Djank_test=on -Djank_local_clang=on`
 - `./bin/compile`
-- `./bin/compile && bin/jank/compiler+runtime/bash_test.clj`
 
 ### Test
 - `./bin/test`
