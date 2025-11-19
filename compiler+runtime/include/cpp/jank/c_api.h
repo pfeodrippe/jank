@@ -44,6 +44,11 @@ extern "C"
   typedef jank_u32 jank_uhash;
   /* NOLINTNEXTLINE(modernize-use-using) */
   typedef jank_u8 jank_arity_flags;
+  /* NOLINTNEXTLINE(modernize-use-using) */
+  typedef jank_object_ref (*jank_native_callback_invoke_fn)(void *callback,
+                                                            void *context,
+                                                            jank_object_ref const *args,
+                                                            jank_usize arg_count);
 
   jank_object_ref jank_eval(jank_object_ref s);
   jank_object_ref jank_read_string(jank_object_ref s);
@@ -153,10 +158,16 @@ extern "C"
   jank_object_ref jank_vector_create(jank_u64 size, ...);
   jank_object_ref jank_map_create(jank_u64 pairs, ...);
   jank_object_ref jank_set_create(jank_u64 size, ...);
+  jank_object_ref jank_pointer_create(void *ptr);
+  void *jank_to_pointer(jank_object_ref o);
 
   jank_object_ref jank_box(char const *type, void const *o);
   void *jank_unbox(char const *type, jank_object_ref o);
   void *jank_unbox_with_source(char const *type, jank_object_ref o, jank_object_ref source);
+  jank_object_ref jank_native_function_wrapper_create(void *callback,
+                                                      void *context,
+                                                      jank_native_callback_invoke_fn invoke,
+                                                      jank_u8 arg_count);
 
   jank_arity_flags jank_function_build_arity_flags(jank_u8 highest_fixed_arity,
                                                    jank_bool is_variadic,

@@ -41,7 +41,8 @@ output="$(${host_runner} "${shared_lib}")"
 if [[ "${output}" != "Main called!
 Void called!
 Success: 6
-Void test passed" ]]; then
+Void test passed
+Callback test passed" ]]; then
   echo "unexpected shared output: '${output}'" >&2
   exit 1
 fi

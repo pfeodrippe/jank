@@ -1,4 +1,6 @@
 #include <cstdarg>
+#include <array>
+#include <stdexcept>
 
 #include <Interpreter/Compatibility.h>
 #include <llvm-c/Target.h>
@@ -17,6 +19,7 @@
 #include <jank/runtime/core/meta.hpp>
 #include <jank/aot/resource.hpp>
 #include <jank/runtime/obj/native_pointer_wrapper.hpp>
+#include <jank/runtime/obj/native_function_wrapper.hpp>
 #include <jank/error/runtime.hpp>
 #include <jank/profile/time.hpp>
 #include <jank/util/scope_exit.hpp>
@@ -449,6 +452,173 @@ extern "C"
     }
     return nullptr;
   }
+
+#define JANK_NATIVE_FUNCTION_SIG_0 object_ref()
+#define JANK_NATIVE_FUNCTION_SIG_1 object_ref(object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_2 object_ref(object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_3 object_ref(object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_4 object_ref(object_ref, object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_5 \
+  object_ref(object_ref, object_ref, object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_6 \
+  object_ref(object_ref, object_ref, object_ref, object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_7 \
+  object_ref(object_ref, object_ref, object_ref, object_ref, object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_8 \
+  object_ref(object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_9 \
+  object_ref(object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_10 \
+  object_ref(object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref)
+
+#define JANK_NATIVE_LAMBDA_PARAMS_0
+#define JANK_NATIVE_LAMBDA_PARAMS_1 object_ref arg0
+#define JANK_NATIVE_LAMBDA_PARAMS_2 object_ref arg0, object_ref arg1
+#define JANK_NATIVE_LAMBDA_PARAMS_3 object_ref arg0, object_ref arg1, object_ref arg2
+#define JANK_NATIVE_LAMBDA_PARAMS_4 \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3
+#define JANK_NATIVE_LAMBDA_PARAMS_5 \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4
+#define JANK_NATIVE_LAMBDA_PARAMS_6                                                    \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5
+#define JANK_NATIVE_LAMBDA_PARAMS_7                                                    \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5, object_ref arg6
+#define JANK_NATIVE_LAMBDA_PARAMS_8                                                    \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5, object_ref arg6, object_ref arg7
+#define JANK_NATIVE_LAMBDA_PARAMS_9                                                    \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5, object_ref arg6, object_ref arg7, object_ref arg8
+#define JANK_NATIVE_LAMBDA_PARAMS_10                                                   \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5, object_ref arg6, object_ref arg7, object_ref arg8, object_ref arg9
+
+#define JANK_NATIVE_ARG_ARRAY_0
+#define JANK_NATIVE_ARG_ARRAY_1 reinterpret_cast<jank_object_ref>(arg0.erase())
+#define JANK_NATIVE_ARG_ARRAY_2 \
+  JANK_NATIVE_ARG_ARRAY_1, reinterpret_cast<jank_object_ref>(arg1.erase())
+#define JANK_NATIVE_ARG_ARRAY_3 \
+  JANK_NATIVE_ARG_ARRAY_2, reinterpret_cast<jank_object_ref>(arg2.erase())
+#define JANK_NATIVE_ARG_ARRAY_4 \
+  JANK_NATIVE_ARG_ARRAY_3, reinterpret_cast<jank_object_ref>(arg3.erase())
+#define JANK_NATIVE_ARG_ARRAY_5 \
+  JANK_NATIVE_ARG_ARRAY_4, reinterpret_cast<jank_object_ref>(arg4.erase())
+#define JANK_NATIVE_ARG_ARRAY_6 \
+  JANK_NATIVE_ARG_ARRAY_5, reinterpret_cast<jank_object_ref>(arg5.erase())
+#define JANK_NATIVE_ARG_ARRAY_7 \
+  JANK_NATIVE_ARG_ARRAY_6, reinterpret_cast<jank_object_ref>(arg6.erase())
+#define JANK_NATIVE_ARG_ARRAY_8 \
+  JANK_NATIVE_ARG_ARRAY_7, reinterpret_cast<jank_object_ref>(arg7.erase())
+#define JANK_NATIVE_ARG_ARRAY_9 \
+  JANK_NATIVE_ARG_ARRAY_8, reinterpret_cast<jank_object_ref>(arg8.erase())
+#define JANK_NATIVE_ARG_ARRAY_10 \
+  JANK_NATIVE_ARG_ARRAY_9, reinterpret_cast<jank_object_ref>(arg9.erase())
+
+#define JANK_NATIVE_WRAPPER_CASE(N)                                                            \
+  case N:                                                                                      \
+    {                                                                                          \
+      auto const lambda                                                                        \
+        = [callback_ptr, context, invoke](JANK_NATIVE_LAMBDA_PARAMS_##N) -> object_ref {       \
+        std::array<jank_object_ref, N> args{ JANK_NATIVE_ARG_ARRAY_##N };                      \
+        auto const result = invoke(callback_ptr, context, args.data(), N);                     \
+        return object_ref{ reinterpret_cast<object *>(result) };                               \
+      };                                                                                       \
+      obj::detail::function_type::value_type<JANK_NATIVE_FUNCTION_SIG_##N> fn{ lambda };       \
+      auto const wrapper                                                                       \
+        = make_box<obj::native_function_wrapper>(obj::detail::function_type{ std::move(fn) }); \
+      return wrapper.erase();                                                                  \
+    }
+
+  jank_object_ref jank_native_function_wrapper_create(void * const callback_ptr,
+                                                      void * const context,
+                                                      jank_native_callback_invoke_fn const invoke,
+                                                      jank_u8 const arg_count)
+  {
+    if(callback_ptr == nullptr || invoke == nullptr)
+    {
+      return jank_const_nil();
+    }
+
+    switch(arg_count)
+    {
+      JANK_NATIVE_WRAPPER_CASE(0);
+      JANK_NATIVE_WRAPPER_CASE(1);
+      JANK_NATIVE_WRAPPER_CASE(2);
+      JANK_NATIVE_WRAPPER_CASE(3);
+      JANK_NATIVE_WRAPPER_CASE(4);
+      JANK_NATIVE_WRAPPER_CASE(5);
+      JANK_NATIVE_WRAPPER_CASE(6);
+      JANK_NATIVE_WRAPPER_CASE(7);
+      JANK_NATIVE_WRAPPER_CASE(8);
+      JANK_NATIVE_WRAPPER_CASE(9);
+      JANK_NATIVE_WRAPPER_CASE(10);
+      default:
+        break;
+    }
+
+    throw std::runtime_error{ "Unsupported native callback arity" };
+  }
+
+#undef JANK_NATIVE_WRAPPER_CASE
+#undef JANK_NATIVE_ARG_ARRAY_10
+#undef JANK_NATIVE_ARG_ARRAY_9
+#undef JANK_NATIVE_ARG_ARRAY_8
+#undef JANK_NATIVE_ARG_ARRAY_7
+#undef JANK_NATIVE_ARG_ARRAY_6
+#undef JANK_NATIVE_ARG_ARRAY_5
+#undef JANK_NATIVE_ARG_ARRAY_4
+#undef JANK_NATIVE_ARG_ARRAY_3
+#undef JANK_NATIVE_ARG_ARRAY_2
+#undef JANK_NATIVE_ARG_ARRAY_1
+#undef JANK_NATIVE_ARG_ARRAY_0
+#undef JANK_NATIVE_LAMBDA_PARAMS_10
+#undef JANK_NATIVE_LAMBDA_PARAMS_9
+#undef JANK_NATIVE_LAMBDA_PARAMS_8
+#undef JANK_NATIVE_LAMBDA_PARAMS_7
+#undef JANK_NATIVE_LAMBDA_PARAMS_6
+#undef JANK_NATIVE_LAMBDA_PARAMS_5
+#undef JANK_NATIVE_LAMBDA_PARAMS_4
+#undef JANK_NATIVE_LAMBDA_PARAMS_3
+#undef JANK_NATIVE_LAMBDA_PARAMS_2
+#undef JANK_NATIVE_LAMBDA_PARAMS_1
+#undef JANK_NATIVE_LAMBDA_PARAMS_0
+#undef JANK_NATIVE_FUNCTION_SIG_10
+#undef JANK_NATIVE_FUNCTION_SIG_9
+#undef JANK_NATIVE_FUNCTION_SIG_8
+#undef JANK_NATIVE_FUNCTION_SIG_7
+#undef JANK_NATIVE_FUNCTION_SIG_6
+#undef JANK_NATIVE_FUNCTION_SIG_5
+#undef JANK_NATIVE_FUNCTION_SIG_4
+#undef JANK_NATIVE_FUNCTION_SIG_3
+#undef JANK_NATIVE_FUNCTION_SIG_2
+#undef JANK_NATIVE_FUNCTION_SIG_1
+#undef JANK_NATIVE_FUNCTION_SIG_0
 
   jank_object_ref jank_list_create(jank_u64 const size, ...)
   {

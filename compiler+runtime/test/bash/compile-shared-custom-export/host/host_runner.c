@@ -8,6 +8,13 @@ typedef int (*my_inc_fn)(int);
 typedef double (*my_add_double_fn)(double, double);
 typedef int (*my_str_len_fn)(const char*);
 typedef void (*my_void_fn)(void);
+typedef long (*my_apply_cb_fn)(long);
+typedef long (*my_apply_fn)(my_apply_cb_fn, long);
+
+static long host_square(long x)
+{
+  return x * x;
+}
 
 int main(int argc, const char **argv)
 {
@@ -95,6 +102,24 @@ int main(int argc, const char **argv)
 
   printf("Success: %d\n", result);
   printf("Void test passed\n");
+
+  my_apply_fn my_apply = (my_apply_fn)dlsym(handle, "my_apply");
+  if(my_apply == NULL)
+  {
+    fprintf(stderr, "dlsym my_apply failed: %s\n", dlerror());
+    dlclose(handle);
+    return 9;
+  }
+
+  long apply_result = my_apply(host_square, 3);
+  if(apply_result != host_square(3))
+  {
+    fprintf(stderr, "Expected %ld, got %ld\n", host_square(3), apply_result);
+    dlclose(handle);
+    return 1;
+  }
+
+  printf("Callback test passed\n");
 
   dlclose(handle);
   return 0;

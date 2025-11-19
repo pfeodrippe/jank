@@ -21,5 +21,13 @@
 
 (jank.export/register #'my-void "my_void" [:=> [:cat] :void])
 
-(defn -main [& args]
+(defn my-apply [f x]
+  (f x))
+
+(jank.export/register
+  #'my-apply
+  "my_apply"
+  [:=> [:cat [:fn [:long] :long] :long] :long])
+
+(defn -main [& _args]
   (println "Main called!"))
