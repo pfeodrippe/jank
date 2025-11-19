@@ -2,3 +2,10 @@
 
 (def native-source jank.compiler-native/native-source)
 (def native-cpp-source jank.compiler-native/native-cpp-source)
+(def native-analyzed-form jank.compiler-native/native-analyzed-form)
+(def native-optimized-form jank.compiler-native/native-optimized-form)
+(def native-wrapped-form jank.compiler-native/native-wrapped-form)
+(def native-llvm-ir jank.compiler-native/native-llvm-ir)
+(def native-llvm-ir-optimized jank.compiler-native/native-llvm-ir-optimized)
+(def native-cpp-source-raw jank.compiler-native/native-cpp-source-raw)
+(def native-cpp-source-formatted jank.compiler-native/native-cpp-source-formatted)

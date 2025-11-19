@@ -1,3 +1,4 @@
+#include <string>
 #include <string_view>
 
 #include <jank/compiler_native.hpp>
@@ -8,6 +9,7 @@
 #include <jank/runtime/obj/nil.hpp>
 #include <jank/runtime/obj/native_function_wrapper.hpp>
 #include <jank/runtime/obj/persistent_hash_map.hpp>
+#include <jank/runtime/obj/persistent_string.hpp>
 #include <jank/runtime/obj/keyword.hpp>
 #include <jank/runtime/rtti.hpp>
 #include <jank/analyze/pass/optimize.hpp>
@@ -25,53 +27,157 @@ namespace jank::compiler_native
   using namespace jank;
   using namespace jank::runtime;
 
-  static object_ref
-  emit_native_source(object_ref const form, util::cli::codegen_type const target_codegen)
+  template <typename Fn>
+  static object_ref with_pipeline(object_ref const form, Fn &&fn)
   {
     /* We use a clean analyze::processor so we don't share lifted items from other REPL
      * evaluations. */
     analyze::processor an_prc;
-    auto const expr(analyze::pass::optimize(
-      an_prc.analyze(form, analyze::expression_position::value).expect_ok()));
-    auto const wrapped_expr(evaluate::wrap_expression(expr, "native_source", {}));
-    auto const &module(
+    auto const analyzed_expr(an_prc.analyze(form, analyze::expression_position::value).expect_ok());
+    auto const optimized_expr(analyze::pass::optimize(analyzed_expr));
+    auto const wrapped_expr(evaluate::wrap_expression(optimized_expr, "native_source", {}));
+    auto module(
       expect_object<runtime::ns>(__rt_ctx->intern_var("clojure.core", "*ns*").expect_ok()->deref())
         ->to_string());
 
-    if(target_codegen == util::cli::codegen_type::llvm_ir)
-    {
-      codegen::llvm_processor const cg_prc{ wrapped_expr,
-                                            module,
-                                            codegen::compilation_target::eval };
-      cg_prc.gen().expect_ok();
-      cg_prc.optimize();
-      auto const raw_module(cg_prc.get_module().getModuleUnlocked());
-      std::string ir_text;
-      llvm::raw_string_ostream ir_stream{ ir_text };
-      raw_module->print(ir_stream, nullptr);
-      ir_stream.flush();
-      runtime::forward_output(ir_text);
-      runtime::forward_output(std::string_view{ "\n", 1 });
-    }
-    else
-    {
-      codegen::processor cg_prc{ wrapped_expr, module, codegen::compilation_target::eval };
-      auto formatted(util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
-      runtime::forward_output(std::string_view{ formatted.data(), formatted.size() });
-      runtime::forward_output(std::string_view{ "\n", 1 });
-    }
+    return fn(analyzed_expr, optimized_expr, wrapped_expr, module);
+  }
 
-    return jank_nil;
+  static void forward_string(std::string_view const text)
+  {
+    runtime::forward_output(text);
+    runtime::forward_output(std::string_view{ "\n", 1 });
+  }
+
+  static object_ref make_string_object(std::string const &text)
+  {
+    return make_box<obj::persistent_string>(text);
+  }
+
+  static object_ref make_string_object(jtl::immutable_string const &text)
+  {
+    return make_box<obj::persistent_string>(text);
+  }
+
+  static std::string render_llvm_ir(analyze::expr::function_ref const &wrapped_expr,
+                                    jtl::immutable_string const &module,
+                                    bool const optimize)
+  {
+    codegen::llvm_processor const cg_prc{ wrapped_expr, module, codegen::compilation_target::eval };
+    cg_prc.gen().expect_ok();
+    if(optimize)
+    {
+      cg_prc.optimize();
+    }
+    auto const raw_module(cg_prc.get_module().getModuleUnlocked());
+    std::string ir_text;
+    llvm::raw_string_ostream ir_stream{ ir_text };
+    raw_module->print(ir_stream, nullptr);
+    ir_stream.flush();
+    return ir_text;
+  }
+
+  static jtl::immutable_string
+  render_cpp_declaration(analyze::expr::function_ref const &wrapped_expr,
+                         jtl::immutable_string const &module)
+  {
+    codegen::processor cg_prc{ wrapped_expr, module, codegen::compilation_target::eval };
+    return cg_prc.declaration_str();
   }
 
   static object_ref native_source(object_ref const form)
   {
-    return emit_native_source(form, util::cli::opts.codegen);
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        if(util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
+        {
+          auto const ir_text(render_llvm_ir(wrapped_expr, module, true));
+          forward_string(std::string_view{ ir_text });
+        }
+        else
+        {
+          auto const declaration(render_cpp_declaration(wrapped_expr, module));
+          auto formatted(util::format_cpp_source(declaration).expect_ok());
+          forward_string(std::string_view{ formatted.data(), formatted.size() });
+        }
+
+        return jank_nil;
+      });
   }
 
   static object_ref native_cpp_source(object_ref const form)
   {
-    return emit_native_source(form, util::cli::codegen_type::cpp);
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        auto const declaration(render_cpp_declaration(wrapped_expr, module));
+        auto formatted(util::format_cpp_source(declaration).expect_ok());
+        forward_string(std::string_view{ formatted.data(), formatted.size() });
+        return jank_nil;
+      });
+  }
+
+  static object_ref native_analyzed_form(object_ref const form)
+  {
+    return with_pipeline(form,
+                         [](auto const &analyzed_expr, auto const &, auto const &, auto const &) {
+                           return analyzed_expr->to_runtime_data();
+                         });
+  }
+
+  static object_ref native_optimized_form(object_ref const form)
+  {
+    return with_pipeline(form,
+                         [](auto const &, auto const &optimized_expr, auto const &, auto const &) {
+                           return optimized_expr->to_runtime_data();
+                         });
+  }
+
+  static object_ref native_wrapped_form(object_ref const form)
+  {
+    return with_pipeline(form,
+                         [](auto const &, auto const &, auto const &wrapped_expr, auto const &) {
+                           return wrapped_expr->to_runtime_data();
+                         });
+  }
+
+  static object_ref native_llvm_ir(object_ref const form)
+  {
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        return make_string_object(render_llvm_ir(wrapped_expr, module, false));
+      });
+  }
+
+  static object_ref native_llvm_ir_optimized(object_ref const form)
+  {
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        return make_string_object(render_llvm_ir(wrapped_expr, module, true));
+      });
+  }
+
+  static object_ref native_cpp_source_raw(object_ref const form)
+  {
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        return make_string_object(render_cpp_declaration(wrapped_expr, module));
+      });
+  }
+
+  static object_ref native_cpp_source_formatted(object_ref const form)
+  {
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        auto const declaration(render_cpp_declaration(wrapped_expr, module));
+        auto formatted(util::format_cpp_source(declaration).expect_ok());
+        return make_string_object(formatted);
+      });
   }
 }
 
@@ -91,6 +197,13 @@ extern "C" jank_object_ref jank_load_jank_compiler_native()
   });
   intern_fn("native-source", &compiler_native::native_source);
   intern_fn("native-cpp-source", &compiler_native::native_cpp_source);
+  intern_fn("native-analyzed-form", &compiler_native::native_analyzed_form);
+  intern_fn("native-optimized-form", &compiler_native::native_optimized_form);
+  intern_fn("native-wrapped-form", &compiler_native::native_wrapped_form);
+  intern_fn("native-llvm-ir", &compiler_native::native_llvm_ir);
+  intern_fn("native-llvm-ir-optimized", &compiler_native::native_llvm_ir_optimized);
+  intern_fn("native-cpp-source-raw", &compiler_native::native_cpp_source_raw);
+  intern_fn("native-cpp-source-formatted", &compiler_native::native_cpp_source_formatted);
 
   return jank_nil.erase();
 }
