@@ -13,8 +13,12 @@ int ttt() {
 }
 ")
 
-(let [globals (cpp/jank.runtime.get_global_cpp_functions)]
+(let [globals (cpp/jank.runtime.get_global_cpp_functions)
+      target (first (filter #(= "ttt" (:name %)) globals))]
   (println "Globals:" globals)
-  (if (some #{"ttt"} globals)
-    (println "Found global function: ttt")
+  (if target
+    (do
+      (println "Found global function: ttt")
+      (println "Return type:" (:return-type target))
+      (println "Args:" (:args target)))
     (println "Global function ttt NOT found")))

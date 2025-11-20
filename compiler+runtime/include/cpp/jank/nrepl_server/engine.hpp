@@ -1286,6 +1286,18 @@ namespace jank::nrepl_server::asio
 
     struct var_documentation
     {
+      struct cpp_argument
+      {
+        std::string name;
+        std::string type;
+      };
+
+      struct cpp_signature
+      {
+        std::string return_type;
+        std::vector<cpp_argument> arguments;
+      };
+
       std::string ns_name;
       std::string name;
       std::optional<std::string> doc;
@@ -1294,8 +1306,11 @@ namespace jank::nrepl_server::asio
       std::optional<std::string> file;
       std::optional<std::int64_t> line;
       std::optional<std::int64_t> column;
+      std::optional<std::string> return_type;
+      std::vector<cpp_signature> cpp_signatures;
       bool is_macro{ false };
       bool is_function{ false };
+      bool is_cpp_function{ false };
     };
 
     bencode::value::dict make_done_response(std::string const &session,
@@ -1399,7 +1414,7 @@ namespace jank::nrepl_server::asio
       if(target_ns->name->name == "cpp")
       {
         auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };
-        for(auto const &name : *locked_globals)
+        for(auto const &[name, _] : *locked_globals)
         {
           auto const candidate_name(to_std_string(name));
           if(!prefix.empty() && !starts_with(candidate_name, prefix))
@@ -1603,6 +1618,116 @@ namespace jank::nrepl_server::asio
       }
 
       return info;
+    }
+
+    std::optional<var_documentation>
+    describe_cpp_function(ns_ref target_ns, std::string const &symbol_name) const
+    {
+      if(symbol_name.empty())
+      {
+        return std::nullopt;
+      }
+
+      auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };
+      auto const key(make_immutable_string(symbol_name));
+      auto const it(locked_globals->find(key));
+      if(it == locked_globals->end())
+      {
+        return std::nullopt;
+      }
+
+      var_documentation info;
+      info.ns_name = current_ns_name(target_ns);
+      info.name = symbol_name;
+      info.is_function = true;
+      info.is_cpp_function = true;
+
+      info.arglists.clear();
+      info.arglists.reserve(it->second.size());
+      info.cpp_signatures.reserve(it->second.size());
+      for(auto const &metadata : it->second)
+      {
+        var_documentation::cpp_signature signature;
+        signature.return_type = to_std_string(metadata.return_type);
+        signature.arguments.reserve(metadata.arguments.size());
+
+        std::string rendered_signature{ "[" };
+        bool first_token{ true };
+        for(auto const &argument : metadata.arguments)
+        {
+          var_documentation::cpp_argument arg_doc;
+          arg_doc.name = to_std_string(argument.name);
+          arg_doc.type = to_std_string(argument.type);
+          signature.arguments.emplace_back(arg_doc);
+
+          if(!first_token)
+          {
+            rendered_signature.push_back(' ');
+          }
+          rendered_signature += arg_doc.type;
+          if(!arg_doc.name.empty())
+          {
+            rendered_signature.push_back(' ');
+            rendered_signature += arg_doc.name;
+          }
+          first_token = false;
+        }
+        rendered_signature.push_back(']');
+        info.arglists.emplace_back(std::move(rendered_signature));
+        info.cpp_signatures.emplace_back(std::move(signature));
+      }
+
+      if(info.cpp_signatures.empty())
+      {
+        info.arglists.emplace_back("[]");
+      }
+      else
+      {
+        info.return_type = info.cpp_signatures.front().return_type;
+      }
+
+      if(info.arglists.size() == 1)
+      {
+        info.arglists_str = info.arglists.front();
+      }
+      else if(!info.arglists.empty())
+      {
+        info.arglists_str = join_with_newline(info.arglists);
+      }
+
+      return info;
+    }
+
+    bencode::value::list serialize_cpp_signatures(var_documentation const &info) const
+    {
+      bencode::value::list payload;
+      payload.reserve(info.cpp_signatures.size());
+      for(auto const &signature : info.cpp_signatures)
+      {
+        bencode::value::dict signature_payload;
+        if(!signature.return_type.empty())
+        {
+          signature_payload.emplace("return-type", signature.return_type);
+        }
+
+        bencode::value::list args_payload;
+        args_payload.reserve(signature.arguments.size());
+        for(size_t idx{}; idx < signature.arguments.size(); ++idx)
+        {
+          bencode::value::dict arg_entry;
+          arg_entry.emplace("index", bencode::value{ static_cast<std::int64_t>(idx) });
+          arg_entry.emplace("type", signature.arguments[idx].type);
+          if(!signature.arguments[idx].name.empty())
+          {
+            arg_entry.emplace("name", signature.arguments[idx].name);
+          }
+          args_payload.emplace_back(std::move(arg_entry));
+        }
+
+        signature_payload.emplace("args", bencode::value{ std::move(args_payload) });
+        payload.emplace_back(std::move(signature_payload));
+      }
+      return payload;
     }
 
     static std::optional<std::vector<std::string>>

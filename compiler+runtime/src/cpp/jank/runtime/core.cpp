@@ -745,12 +745,54 @@ namespace jank::runtime
   object_ref get_global_cpp_functions()
   {
     auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };
-    native_vector<object_ref> vec;
-    vec.reserve(locked_globals->size());
-    for(auto const &name : *locked_globals)
+    usize total_functions{};
+    for(auto const &entry : *locked_globals)
     {
-      vec.emplace_back(make_box<obj::persistent_string>(name));
+      total_functions += entry.second.size();
     }
+
+    auto const name_kw(__rt_ctx->intern_keyword("name").expect_ok());
+    auto const args_kw(__rt_ctx->intern_keyword("args").expect_ok());
+    auto const type_kw(__rt_ctx->intern_keyword("type").expect_ok());
+    auto const return_type_kw(__rt_ctx->intern_keyword("return-type").expect_ok());
+    auto const origin_kw(__rt_ctx->intern_keyword("origin").expect_ok());
+
+    native_vector<object_ref> vec;
+    vec.reserve(total_functions);
+    for(auto const &[fn_name, overloads] : *locked_globals)
+    {
+      for(auto const &metadata : overloads)
+      {
+        native_vector<object_ref> args;
+        args.reserve(metadata.arguments.size());
+        for(auto const &argument : metadata.arguments)
+        {
+          auto const arg_map(obj::persistent_hash_map::create_unique(
+            std::make_pair(name_kw, make_box<obj::persistent_string>(argument.name)),
+            std::make_pair(type_kw, make_box<obj::persistent_string>(argument.type))));
+          args.emplace_back(arg_map);
+        }
+
+        auto const args_vector(make_box<obj::persistent_vector>(
+          runtime::detail::native_persistent_vector{ args.begin(), args.end() }));
+
+        auto function_map(obj::persistent_hash_map::empty());
+        function_map
+          = function_map->assoc(name_kw, make_box<obj::persistent_string>(metadata.name));
+        function_map = function_map->assoc(return_type_kw,
+                                           make_box<obj::persistent_string>(metadata.return_type));
+        function_map = function_map->assoc(args_kw, args_vector);
+        if(metadata.origin.is_some())
+        {
+          function_map
+            = function_map->assoc(origin_kw,
+                                  make_box<obj::persistent_string>(metadata.origin.unwrap()));
+        }
+
+        vec.emplace_back(function_map);
+      }
+    }
+
     return make_box<obj::persistent_vector>(
       runtime::detail::native_persistent_vector{ vec.begin(), vec.end() });
   }

@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <list>
+#include <ranges>
 
 #include <Interpreter/Compatibility.h>
 #include <clang/Interpreter/CppInterOp.h>
@@ -15,6 +17,7 @@
 #include <llvm/Linker/Linker.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/StandardInstrumentations.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/Scalar/GVN.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 
@@ -29,6 +32,7 @@
 #include <jank/runtime/visit.hpp>
 #include <jank/util/clang.hpp>
 #include <jank/util/fmt/print.hpp>
+#include <jank/util/string.hpp>
 #include <jank/util/scope_exit.hpp>
 
 /* TODO: Remove exceptions. */
@@ -2158,18 +2162,99 @@ namespace jank::codegen
       throw std::runtime_error{ "Unable to parse 'cpp/raw' expression." };
     }
 
+    auto stringify_type = [](llvm::Type const *type) {
+      std::string buffer;
+      llvm::raw_string_ostream stream{ buffer };
+      type->print(stream);
+      return stream.str();
+    };
+
+    auto same_signature = [](runtime::context::cpp_function_metadata const &lhs,
+                             runtime::context::cpp_function_metadata const &rhs) {
+      if(lhs.return_type != rhs.return_type)
+      {
+        return false;
+      }
+      if(lhs.arguments.size() != rhs.arguments.size())
+      {
+        return false;
+      }
+      for(usize i{}; i < lhs.arguments.size(); ++i)
+      {
+        auto const &lhs_arg(lhs.arguments[i]);
+        auto const &rhs_arg(rhs.arguments[i]);
+        if(lhs_arg.type != rhs_arg.type)
+        {
+          return false;
+        }
+        if(lhs_arg.name != rhs_arg.name)
+        {
+          return false;
+        }
+      }
+      return true;
+    };
+
     for(auto const &f : parse_res->TheModule->functions())
     {
       if(!f.isDeclaration() && f.hasExternalLinkage())
       {
-        auto name{ llvm::demangle(f.getName().str()) };
-        auto const paren{ name.find('(') };
-        if(paren != std::string::npos)
+        auto demangled{ llvm::demangle(f.getName().str()) };
+        auto const open_paren{ demangled.find('(') };
+        std::string prefix{ demangled.substr(0, open_paren) };
+        util::trim(prefix);
+
+        std::string fn_name{ prefix };
+        auto const space{ prefix.rfind(' ') };
+        if(space != std::string::npos)
         {
-          name = name.substr(0, paren);
+          fn_name = prefix.substr(space + 1);
         }
+        util::trim(fn_name);
+        if(fn_name.empty())
+        {
+          continue;
+        }
+
+        runtime::context::cpp_function_metadata metadata;
+        metadata.name = jtl::immutable_string{ fn_name.data(), fn_name.size() };
+        auto const return_type_string(stringify_type(f.getReturnType()));
+        metadata.return_type
+          = jtl::immutable_string{ return_type_string.data(), return_type_string.size() };
+        usize arg_index{};
+        for(auto const &arg : f.args())
+        {
+          std::string arg_name;
+          if(arg.hasName() && !arg.getName().empty())
+          {
+            arg_name = arg.getName().str();
+          }
+          else
+          {
+            arg_name = util::format("arg{}", arg_index);
+          }
+          auto const arg_type_string(stringify_type(arg.getType()));
+
+          runtime::context::cpp_function_argument_metadata argument;
+          argument.name = jtl::immutable_string{ arg_name.data(), arg_name.size() };
+          argument.type = jtl::immutable_string{ arg_type_string.data(), arg_type_string.size() };
+          metadata.arguments.emplace_back(std::move(argument));
+          ++arg_index;
+        }
+
         auto locked_globals{ __rt_ctx->global_cpp_functions.wlock() };
-        locked_globals->emplace(name);
+        auto &bucket((*locked_globals)[metadata.name]);
+        auto const existing(std::ranges::find_if(bucket, [&](auto const &entry) {
+          return same_signature(entry, metadata);
+        }));
+        if(existing == bucket.end())
+        {
+          bucket.emplace_back(std::move(metadata));
+        }
+        else
+        {
+          *existing = std::move(metadata);
+        }
       }
     }
 

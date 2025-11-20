@@ -33,12 +33,15 @@ namespace jank::nrepl_server::asio
     auto target_ns(resolve_namespace(session, ns_request));
     auto const symbol(make_box<obj::symbol>(make_immutable_string(parts.name)));
     auto const var(target_ns->find_var(symbol));
-    if(var.is_nil())
+    std::optional<var_documentation> info;
+    if(!var.is_nil())
     {
-      return { make_done_response(session.id, msg.id(), { "done", "no-eldoc" }) };
+      info = describe_var(target_ns, var, parts.name);
     }
-
-    auto const info(describe_var(target_ns, var, parts.name));
+    if(!info.has_value() && target_ns->name->name == "cpp")
+    {
+      info = describe_cpp_function(target_ns, parts.name);
+    }
     if(!info.has_value())
     {
       return { make_done_response(session.id, msg.id(), { "done", "no-eldoc" }) };
@@ -108,6 +111,10 @@ namespace jank::nrepl_server::asio
     }
 
     auto const type = [&]() {
+      if(info->is_cpp_function)
+      {
+        return std::string{ "native-function" };
+      }
       if(info->is_macro)
       {
         return std::string{ "macro" };
@@ -120,6 +127,35 @@ namespace jank::nrepl_server::asio
       return std::string{ "variable" };
     }();
 
+    auto const build_docstring
+      = [](var_documentation const &metadata) -> std::optional<std::string> {
+      if(!metadata.return_type.has_value() && !metadata.doc.has_value())
+      {
+        return std::nullopt;
+      }
+
+      std::string rendered;
+      if(metadata.return_type.has_value() && !metadata.return_type->empty())
+      {
+        rendered += metadata.return_type.value();
+      }
+      if(metadata.doc.has_value() && !metadata.doc->empty())
+      {
+        if(!rendered.empty())
+        {
+          rendered.push_back(' ');
+        }
+        rendered += metadata.doc.value();
+      }
+      if(rendered.empty())
+      {
+        return std::nullopt;
+      }
+      return rendered;
+    };
+
+    auto const docstring(build_docstring(*info));
+
     bencode::value::dict payload;
     if(!msg.id().empty())
     {
@@ -131,10 +167,18 @@ namespace jank::nrepl_server::asio
     payload.emplace("type", type);
     // Always include the eldoc field, even if empty, to indicate we successfully processed the request
     payload.emplace("eldoc", bencode::value{ std::move(eldoc_entries) });
-    if(info->doc.has_value())
+    if(docstring.has_value())
     {
-      payload.emplace("doc", info->doc.value());
-      payload.emplace("docstring", info->doc.value());
+      payload.emplace("doc", docstring.value());
+      payload.emplace("docstring", docstring.value());
+    }
+    if(info->return_type.has_value())
+    {
+      payload.emplace("return-type", info->return_type.value());
+    }
+    if(info->is_cpp_function && !info->cpp_signatures.empty())
+    {
+      payload.emplace("cpp-signatures", bencode::value{ serialize_cpp_signatures(info.value()) });
     }
     payload.emplace("status", bencode::list_of_strings({ "done" }));
     return { std::move(payload) };

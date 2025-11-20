@@ -17,7 +17,8 @@
     res))
 
 (deftest detect-global-cpp-test
-  (check-output ["compiler+runtime/build/jank" "run" "compiler+runtime/test/bash/detect-global-cpp/test.jank"] "Found global function: ttt"))
+  (check-output ["../../../build/jank" "run" "test.jank"]
+                "Found global function: ttt"))
 
 (defn -main []
   (System/exit

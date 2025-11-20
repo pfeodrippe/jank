@@ -558,14 +558,14 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
       eng.handle(make_message({
-        {   "op", "eval" },
+        {   "op",                                                 "eval" },
         { "code", "(cpp/raw \"int my_global_test_fn() { return 42; }\")" }
       }));
 
       auto responses(eng.handle(make_message({
-        {     "op", "complete" },
+        {     "op",  "complete" },
         { "prefix", "my_global" },
-        {     "ns",      "cpp" }
+        {     "ns",       "cpp" }
       })));
 
       REQUIRE(responses.size() == 1);
@@ -729,6 +729,56 @@ namespace jank::nrepl_server::asio
       CHECK(done != statuses.end());
     }
 
+    TEST_CASE("info returns cpp signature metadata")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                                   "eval" },
+        { "code", "(cpp/raw \"int cpp_info_sig(int lhs, int rhs) { return lhs + rhs; }\")" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {  "op",             "info" },
+        { "sym", "cpp/cpp_info_sig" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      CHECK(payload.at("name").as_string() == "cpp_info_sig");
+      CHECK(payload.at("ns").as_string() == "cpp");
+      CHECK(payload.at("type").as_string() == "native-function");
+      CHECK(payload.at("return-type").as_string() == "i32");
+
+      auto const &arglists(payload.at("arglists").as_list());
+      REQUIRE(arglists.size() == 1);
+      auto const &signature(arglists.front().as_string());
+      CHECK(signature.find("i32") != std::string::npos);
+      CHECK(signature.find('[') == 0);
+      CHECK(signature.back() == ']');
+
+      auto const &cpp_signatures(payload.at("cpp-signatures").as_list());
+      REQUIRE(cpp_signatures.size() == 1);
+      auto const &cpp_signature(cpp_signatures.front().as_dict());
+      CHECK(cpp_signature.at("return-type").as_string() == "i32");
+      auto const &args(cpp_signature.at("args").as_list());
+      REQUIRE(args.size() == 2);
+      auto const &first_arg(args.front().as_dict());
+      CHECK(first_arg.at("index").as_integer() == 0);
+      CHECK(first_arg.at("type").as_string() == "i32");
+      auto const first_arg_name(first_arg.at("name").as_string());
+      CHECK((first_arg_name == "lhs" || first_arg_name.rfind("arg", 0) == 0));
+      auto const &second_arg(args.back().as_dict());
+      CHECK(second_arg.at("index").as_integer() == 1);
+      CHECK(second_arg.at("type").as_string() == "i32");
+      auto const second_arg_name(second_arg.at("name").as_string());
+      CHECK((second_arg_name == "rhs" || second_arg_name.rfind("arg", 0) == 0));
+
+      auto const statuses(extract_status(payload));
+      CHECK(std::ranges::find(statuses, "done") != statuses.end());
+
+      CHECK(payload.at("docstring").as_string() == "i32");
+      CHECK(payload.at("doc").as_string() == payload.at("docstring").as_string());
+    }
+
     TEST_CASE("eldoc returns function signatures")
     {
       engine eng;
@@ -797,6 +847,60 @@ namespace jank::nrepl_server::asio
       CHECK(eldoc_payload.at("name").as_string() == "sample-fn");
       auto const eldoc_status(extract_status(eldoc_payload));
       CHECK(std::ranges::find(eldoc_status, "done") != eldoc_status.end());
+    }
+
+    TEST_CASE("eldoc surfaces cpp metadata")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op","eval"        },
+        { "code",
+         "(cpp/raw \"double cpp_eldoc_sig(double value, double factor) { return value * factor; "
+         "}\")" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {  "op",             "eldoc" },
+        { "sym", "cpp/cpp_eldoc_sig" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      CHECK(payload.at("name").as_string() == "cpp_eldoc_sig");
+      CHECK(payload.at("ns").as_string() == "cpp");
+      CHECK(payload.at("type").as_string() == "native-function");
+      CHECK(payload.at("return-type").as_string() == "double");
+
+      auto const &eldoc(payload.at("eldoc").as_list());
+      REQUIRE(eldoc.size() == 1);
+      auto const &tokens(eldoc.front().as_list());
+      REQUIRE(tokens.size() == 4);
+      CHECK(tokens.front().as_string() == "double");
+      auto const first_token(tokens.at(1).as_string());
+      CHECK((first_token == "value" || first_token.rfind("arg", 0) == 0));
+      CHECK(tokens.at(2).as_string() == "double");
+      auto const second_token(tokens.at(3).as_string());
+      CHECK((second_token == "factor" || second_token.rfind("arg", 0) == 0));
+
+      auto const &cpp_signatures(payload.at("cpp-signatures").as_list());
+      REQUIRE(cpp_signatures.size() == 1);
+      auto const &cpp_signature(cpp_signatures.front().as_dict());
+      CHECK(cpp_signature.at("return-type").as_string() == "double");
+      auto const &args(cpp_signature.at("args").as_list());
+      REQUIRE(args.size() == 2);
+      auto const &first_arg(args.front().as_dict());
+      auto const first_arg_name(first_arg.at("name").as_string());
+      CHECK((first_arg_name == "value" || first_arg_name.rfind("arg", 0) == 0));
+      CHECK(first_arg.at("type").as_string() == "double");
+      auto const &second_arg(args.back().as_dict());
+      auto const second_arg_name(second_arg.at("name").as_string());
+      CHECK((second_arg_name == "factor" || second_arg_name.rfind("arg", 0) == 0));
+      CHECK(second_arg.at("type").as_string() == "double");
+
+      auto const statuses(extract_status(payload));
+      CHECK(std::ranges::find(statuses, "done") != statuses.end());
+
+      CHECK(payload.at("docstring").as_string() == "double");
+      CHECK(payload.at("doc").as_string() == payload.at("docstring").as_string());
     }
 
     TEST_CASE("lookup reports namespace and miss state")

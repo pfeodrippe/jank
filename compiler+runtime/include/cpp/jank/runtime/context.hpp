@@ -117,9 +117,25 @@ namespace jank::runtime
     obj::symbol unique_symbol() const;
     obj::symbol unique_symbol(jtl::immutable_string_view const &prefix) const;
 
+    struct cpp_function_argument_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string type;
+    };
+
+    struct cpp_function_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string return_type;
+      native_vector<cpp_function_argument_metadata> arguments;
+      jtl::option<jtl::immutable_string> origin;
+    };
+
     folly::Synchronized<native_unordered_map<obj::symbol_ref, ns_ref>> namespaces;
     folly::Synchronized<native_unordered_map<jtl::immutable_string, obj::keyword_ref>> keywords;
-    folly::Synchronized<native_set<jtl::immutable_string>> global_cpp_functions;
+    folly::Synchronized<
+      native_unordered_map<jtl::immutable_string, native_vector<cpp_function_metadata>>>
+      global_cpp_functions;
 
     struct binding_scope
     {
