@@ -631,6 +631,145 @@ namespace jank::aot
     return sb.release();
   }
 
+  static jtl::option<std::string> generate_single_export(object_ref const var_obj_ref,
+                                                         jtl::immutable_string const &name_str,
+                                                         object_ref const schema_obj,
+                                                         fn_wrapper_registry &fn_registry,
+                                                         jank_fn_wrapper_registry &jank_fn_registry)
+  {
+    auto const var_obj(dyn_cast<var>(var_obj_ref));
+    if(var_obj.is_nil())
+    {
+      return {};
+    }
+
+    auto const schema_vec(dyn_cast<obj::persistent_vector>(schema_obj));
+    if(schema_obj.is_nil() || schema_vec.is_nil() || schema_vec->count() != 3)
+    {
+      return {};
+    }
+
+    // Schema: [:=> [:cat arg...] ret]
+    auto const arrow_kw(dyn_cast<obj::keyword>(schema_vec->data[0]));
+    auto const args_cat(dyn_cast<obj::persistent_vector>(schema_vec->data[1]));
+    auto const return_type_obj(schema_vec->data[2]);
+
+    if(arrow_kw.is_nil() || arrow_kw->sym->name != "=>" || args_cat.is_nil()
+       || return_type_obj.is_nil())
+    {
+      return {};
+    }
+
+    auto const ns_str(var_obj->n->name->name);
+    auto const var_name_str(var_obj->name->name);
+
+    std::string args_sig;
+    std::string args_call;
+    int arg_idx = 0;
+
+    // Skip :cat
+    for(size_t i = 1; i < args_cat->count(); ++i)
+    {
+      auto const arg_type(args_cat->data[i]);
+      if(arg_type.is_nil())
+      {
+        continue;
+      }
+
+      if(!args_sig.empty())
+      {
+        args_sig += ", ";
+      }
+      if(!args_call.empty())
+      {
+        args_call += ", ";
+      }
+
+      auto const arg_name = util::format("arg{}", arg_idx);
+      args_sig += schema_to_c_parameter(arg_type, arg_name);
+      args_call += gen_box(arg_type, arg_name, &fn_registry);
+      arg_idx++;
+    }
+
+    auto const ret_type_str = schema_to_c_type(return_type_obj);
+    auto const deref_call = util::format("jank_call{}", arg_idx);
+    auto const unbox_expr = gen_unbox(return_type_obj, "result", &jank_fn_registry);
+
+    // Check if return type is void
+    auto const ret_kw(dyn_cast<obj::keyword>(return_type_obj));
+    bool is_void = false;
+    if(!ret_kw.is_nil() && ret_kw->sym->name == "void")
+    {
+      is_void = true;
+    }
+
+    auto const function_decl(schema_to_c_function_decl(ret_type_str, name_str, args_sig));
+
+    return util::format(
+      R"(
+{}
+{{
+  auto const var = jank_var_intern_c("{}", "{}");
+  auto const derefed = jank_deref(var);
+  auto const result = {}(derefed{});
+  {}
+}}
+)",
+      function_decl,
+      ns_str,
+      var_name_str,
+      deref_call,
+      (args_call.empty() ? "" : ", " + args_call),
+      is_void ? "" : util::format("return {};", unbox_expr));
+  }
+
+  jtl::result<std::string, error_ref> generate_entrypoint_source(object_ref const var,
+                                                                 jtl::immutable_string const &name,
+                                                                 object_ref const schema)
+  {
+    fn_wrapper_registry fn_registry;
+    jank_fn_wrapper_registry jank_fn_registry;
+    jtl::string_builder sb;
+
+    auto const export_code(
+      generate_single_export(var, name, schema, fn_registry, jank_fn_registry));
+    if(!export_code.is_some())
+    {
+      return error::internal_aot_failure("Failed to generate export code");
+    }
+
+    std::string jank_helper_code;
+    std::string helper_code;
+    size_t prev_jank_reqs = 0;
+    size_t prev_fn_reqs = 0;
+
+    while(true)
+    {
+      jank_helper_code = emit_jank_fn_wrapper_helpers(jank_fn_registry, &fn_registry);
+      helper_code = emit_fn_wrapper_helpers(fn_registry, &jank_fn_registry);
+
+      if(jank_fn_registry.requirements.size() == prev_jank_reqs
+         && fn_registry.requirements.size() == prev_fn_reqs)
+      {
+        break;
+      }
+      prev_jank_reqs = jank_fn_registry.requirements.size();
+      prev_fn_reqs = fn_registry.requirements.size();
+    }
+
+    if(!jank_helper_code.empty())
+    {
+      sb(jank_helper_code);
+    }
+    if(!helper_code.empty())
+    {
+      sb(helper_code);
+    }
+    sb(export_code.unwrap());
+
+    return sb.release();
+  }
+
   // TODO: Generate an object file instead of a cpp
   static jtl::immutable_string
   gen_entrypoint(jtl::immutable_string const &module, bool const emit_shared_library)
@@ -744,77 +883,14 @@ namespace
 
                 if(!var_obj.is_nil() && !schema_obj.is_nil() && schema_obj->count() == 3)
                 {
-                  // Schema: [:=> [:cat arg...] ret]
-                  auto const arrow_kw(dyn_cast<obj::keyword>(schema_obj->data[0]));
-                  auto const args_cat(dyn_cast<obj::persistent_vector>(schema_obj->data[1]));
-                  auto const return_type_obj(schema_obj->data[2]);
-
-                  if(!arrow_kw.is_nil() && arrow_kw->sym->name == "=>" && !args_cat.is_nil()
-                     && !return_type_obj.is_nil())
+                  auto const export_code(generate_single_export(var_obj,
+                                                                name_obj->data,
+                                                                schema_obj,
+                                                                fn_registry,
+                                                                jank_fn_registry));
+                  if(export_code.is_some())
                   {
-                    auto const name_str(name_obj->data);
-                    auto const ns_str(var_obj->n->name->name);
-                    auto const var_name_str(var_obj->name->name);
-
-                    std::string args_sig;
-                    std::string args_call;
-                    int arg_idx = 0;
-
-                    // Skip :cat
-                    for(size_t i = 1; i < args_cat->count(); ++i)
-                    {
-                      auto const arg_type(args_cat->data[i]);
-                      if(arg_type.is_nil())
-                      {
-                        continue;
-                      }
-
-                      if(!args_sig.empty())
-                      {
-                        args_sig += ", ";
-                      }
-                      if(!args_call.empty())
-                      {
-                        args_call += ", ";
-                      }
-
-                      auto const arg_name = util::format("arg{}", arg_idx);
-                      args_sig += schema_to_c_parameter(arg_type, arg_name);
-                      args_call += gen_box(arg_type, arg_name, &fn_registry);
-                      arg_idx++;
-                    }
-
-                    auto const ret_type_str = schema_to_c_type(return_type_obj);
-                    auto const deref_call = util::format("jank_call{}", arg_idx);
-                    auto const unbox_expr = gen_unbox(return_type_obj, "result", &jank_fn_registry);
-
-                    // Check if return type is void
-                    auto const ret_kw(dyn_cast<obj::keyword>(return_type_obj));
-                    bool is_void = false;
-                    if(!ret_kw.is_nil() && ret_kw->sym->name == "void")
-                    {
-                      is_void = true;
-                    }
-
-                    auto const function_decl(
-                      schema_to_c_function_decl(ret_type_str, name_str, args_sig));
-
-                    util::format_to(exports_sb,
-                                    R"(
-{}
-{{
-  auto const var = jank_var_intern_c("{}", "{}");
-  auto const derefed = jank_deref(var);
-  auto const result = {}(derefed{});
-  {}
-}}
-)",
-                                    function_decl,
-                                    ns_str,
-                                    var_name_str,
-                                    deref_call,
-                                    (args_call.empty() ? "" : ", " + args_call),
-                                    is_void ? "" : util::format("return {};", unbox_expr));
+                    exports_sb(export_code.unwrap());
                   }
                 }
               }

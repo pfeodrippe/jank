@@ -9,3 +9,4 @@
 (def native-llvm-ir-optimized jank.compiler-native/native-llvm-ir-optimized)
 (def native-cpp-source-raw jank.compiler-native/native-cpp-source-raw)
 (def native-cpp-source-formatted jank.compiler-native/native-cpp-source-formatted)
+(def native-aot-entrypoint-source jank.compiler-native/native-aot-entrypoint-source)

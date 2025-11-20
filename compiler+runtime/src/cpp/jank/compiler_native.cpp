@@ -11,6 +11,9 @@
 #include <jank/runtime/obj/persistent_hash_map.hpp>
 #include <jank/runtime/obj/persistent_string.hpp>
 #include <jank/runtime/obj/keyword.hpp>
+#include <jank/runtime/obj/persistent_list.hpp>
+#include <jank/runtime/obj/persistent_vector.hpp>
+#include <jank/aot/processor.hpp>
 #include <jank/runtime/rtti.hpp>
 #include <jank/analyze/pass/optimize.hpp>
 #include <jank/evaluate.hpp>
@@ -179,6 +182,60 @@ namespace jank::compiler_native
         return make_string_object(formatted);
       });
   }
+
+  static object_ref native_aot_entrypoint_source(object_ref const form)
+  {
+    auto const list(dyn_cast<obj::persistent_list>(form));
+    if(list.is_nil() || list->count() != 4)
+    {
+      return jank_nil;
+    }
+
+    auto const second(list->next()->first());
+    auto const third(list->next()->next()->first());
+    auto const fourth(list->next()->next()->next()->first());
+
+    object_ref var_obj(second);
+    auto const l(dyn_cast<obj::persistent_list>(second));
+    if(l.is_some())
+    {
+      if(l->count() == 2)
+      {
+        auto const op(dyn_cast<obj::symbol>(l->first()));
+        if(op.is_some() && op->name == "var")
+        {
+          auto const sym(dyn_cast<obj::symbol>(l->next()->first()));
+          if(sym.is_some())
+          {
+            auto const ns(sym->ns.empty() ? __rt_ctx->current_ns()->name->name : sym->ns);
+            auto const v(__rt_ctx->find_var(ns, sym->name));
+            if(v.is_some())
+            {
+              var_obj = v;
+            }
+          }
+        }
+      }
+    }
+
+    auto const name_obj(dyn_cast<obj::persistent_string>(third));
+    auto const schema_obj(fourth);
+
+    if(var_obj.is_nil() || !dyn_cast<var>(var_obj).is_some() || name_obj.is_nil()
+       || schema_obj.is_nil())
+    {
+      return jank_nil;
+    }
+
+    auto const result(aot::generate_entrypoint_source(var_obj, name_obj->data, schema_obj));
+    if(result.is_ok())
+    {
+      auto formatted(util::format_cpp_source(result.expect_ok()).expect_ok());
+      forward_string(std::string_view{ formatted.data(), formatted.size() });
+    }
+
+    return jank_nil;
+  }
 }
 
 extern "C" jank_object_ref jank_load_jank_compiler_native()
@@ -204,6 +261,7 @@ extern "C" jank_object_ref jank_load_jank_compiler_native()
   intern_fn("native-llvm-ir-optimized", &compiler_native::native_llvm_ir_optimized);
   intern_fn("native-cpp-source-raw", &compiler_native::native_cpp_source_raw);
   intern_fn("native-cpp-source-formatted", &compiler_native::native_cpp_source_formatted);
+  intern_fn("native-aot-entrypoint-source", &compiler_native::native_aot_entrypoint_source);
 
   return jank_nil.erase();
 }

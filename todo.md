@@ -2,7 +2,9 @@
   - [x] compile
 - [ ] use it to hotreload in SC
   - [x] dylib from SC
-  - [ ] use it
-    - [ ] ability to export symbol from jank
-    - [ ] ability to
+  - [x] ability to export symbol from jank
+  - [x] ability to receive, return pointers
+  - [-] test dynamic symbol
+  - [ ] call my_multiplier
+- [ ] return structs ?
 - [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
