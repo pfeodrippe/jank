@@ -160,6 +160,7 @@ extern "C"
   jank_object_ref jank_set_create(jank_u64 size, ...);
   jank_object_ref jank_pointer_create(void *ptr);
   void *jank_to_pointer(jank_object_ref o);
+  void *jank_native_function_wrapper_get_pointer(jank_object_ref wrapper);
 
   jank_object_ref jank_box(char const *type, void const *o);
   void *jank_unbox(char const *type, jank_object_ref o);

@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdlib>
+#include <atomic>
 
 #include <jtl/result.hpp>
 #include <jtl/string_builder.hpp>
@@ -138,6 +139,35 @@ namespace jank::aot
       }
 
       auto const helper_name(util::format("wrap_fn_{}", requirements.size()));
+      requirements.push_back(
+        fn_wrapper_requirement{ key, helper_name, fn_schema, ret_type, arg_types });
+      key_to_index.emplace(key, requirements.size() - 1);
+      return requirements.back();
+    }
+  };
+
+  struct jank_fn_wrapper_registry
+  {
+    std::unordered_map<std::string, usize> key_to_index;
+    std::vector<fn_wrapper_requirement> requirements;
+
+    fn_wrapper_requirement &ensure(object_ref const fn_schema)
+    {
+      auto const key(schema_key(fn_schema));
+      if(auto const it = key_to_index.find(key); it != key_to_index.end())
+      {
+        return requirements[it->second];
+      }
+
+      std::vector<object_ref> arg_types;
+      object_ref ret_type;
+      if(!parse_fn_schema(fn_schema, arg_types, ret_type))
+      {
+        throw error::internal_aot_failure(
+          util::format("Invalid :fn schema: {}", schema_key(fn_schema)));
+      }
+
+      auto const helper_name(util::format("unwrap_fn_{}", requirements.size()));
       requirements.push_back(
         fn_wrapper_requirement{ key, helper_name, fn_schema, ret_type, arg_types });
       key_to_index.emplace(key, requirements.size() - 1);
@@ -316,7 +346,9 @@ namespace jank::aot
     return util::format("jank_pointer_create({})", val);
   }
 
-  static std::string gen_unbox(object_ref const type_obj, std::string const &val)
+  static std::string gen_unbox(object_ref const type_obj,
+                               std::string const &val,
+                               jank_fn_wrapper_registry *registry = nullptr)
   {
     auto const kw(dyn_cast<obj::keyword>(type_obj));
     if(kw.is_some())
@@ -357,7 +389,15 @@ namespace jank::aot
       auto const tag_kw(dyn_cast<obj::keyword>(vec->data[0]));
       if(tag_kw.is_some() && tag_kw->sym->name == "fn")
       {
-        throw error::internal_aot_failure("Returning [:fn ...] from exports is not supported yet");
+        if(registry != nullptr)
+        {
+          auto &req(registry->ensure(type_obj));
+          return util::format("{}({})", req.helper_name, val);
+        }
+        auto const type_str(schema_to_c_type(type_obj));
+        return util::format("reinterpret_cast<{}>(jank_native_function_wrapper_get_pointer({}))",
+                            type_str,
+                            val);
       }
     }
     std::string const type_str = schema_to_c_type(type_obj);
@@ -376,7 +416,23 @@ namespace jank::aot
     return util::format("{} {}", type_sig, name);
   }
 
-  static std::string emit_fn_wrapper_helpers(fn_wrapper_registry const &registry)
+  static std::string schema_to_c_function_decl(std::string const &ret_type,
+                                               std::string const &name,
+                                               std::string const &args_sig)
+  {
+    auto const fn_pos(ret_type.find("(*)"));
+    if(fn_pos != std::string::npos)
+    {
+      auto ret_with_name(ret_type);
+      ret_with_name.replace(fn_pos, 3, util::format("(*{}({}))", name, args_sig));
+      return util::format(R"(extern "C" {})", ret_with_name);
+    }
+
+    return util::format(R"(extern "C" {} {}({}))", ret_type, name, args_sig);
+  }
+
+  static std::string emit_fn_wrapper_helpers(fn_wrapper_registry const &registry,
+                                             jank_fn_wrapper_registry *jank_fn_registry)
   {
     if(registry.requirements.empty())
     {
@@ -410,7 +466,8 @@ namespace jank::aot
       for(size_t i{}; i < req.arg_types.size(); ++i)
       {
         auto const native_name(util::format("native_arg{}", i));
-        auto const conversion(gen_unbox(req.arg_types[i], util::format("args[{}]", i)));
+        auto const conversion(
+          gen_unbox(req.arg_types[i], util::format("args[{}]", i), jank_fn_registry));
         util::format_to(sb, "  auto const {} = {};\n", native_name, conversion);
         native_arg_names.emplace_back(native_name);
       }
@@ -459,12 +516,129 @@ namespace jank::aot
     return sb.release();
   }
 
+  static std::string
+  emit_jank_fn_wrapper_helpers(jank_fn_wrapper_registry &registry, fn_wrapper_registry *fn_registry)
+  {
+    if(registry.requirements.empty())
+    {
+      return {};
+    }
+
+    jtl::string_builder sb;
+    sb("\nnamespace\n{\n");
+
+    // Use index-based loop to handle potential vector reallocation if new requirements are added
+    for(size_t req_idx = 0; req_idx < registry.requirements.size(); ++req_idx)
+    {
+      auto const &req = registry.requirements[req_idx];
+      size_t const slots_count = 16;
+      util::format_to(sb, "static jank_object_ref {}_slots[{}];\n", req.helper_name, slots_count);
+      util::format_to(sb, "static std::atomic<size_t> {}_next_slot{{}};\n", req.helper_name);
+
+      auto const signature(schema_to_c_type(req.schema));
+
+      std::string args_sig;
+      std::string args_call;
+      int arg_idx = 0;
+      // Skip :cat
+      for(auto const &arg_type : req.arg_types)
+      {
+        if(!args_sig.empty())
+        {
+          args_sig += ", ";
+        }
+        if(!args_call.empty())
+        {
+          args_call += ", ";
+        }
+        auto const arg_name = util::format("arg{}", arg_idx);
+        args_sig += schema_to_c_parameter(arg_type, arg_name);
+        args_call += gen_box(arg_type, arg_name, fn_registry);
+        arg_idx++;
+      }
+
+      auto const ret_type_str = schema_to_c_type(req.return_type);
+      auto const ret_kw(dyn_cast<obj::keyword>(req.return_type));
+      bool const is_void(!ret_kw.is_nil() && ret_kw->sym->name == "void");
+
+      // Generate trampolines
+      for(size_t i = 0; i < slots_count; ++i)
+      {
+        auto const trampoline_name = util::format("{}_trampoline_{}", req.helper_name, i);
+        auto const decl = schema_to_c_function_decl(ret_type_str, trampoline_name, args_sig);
+        std::string static_decl = decl;
+        if(static_decl.starts_with("extern \"C\" "))
+        {
+          static_decl.replace(0, 11, "static ");
+        }
+
+        util::format_to(sb, "{}\n", static_decl);
+        sb("{\n");
+        util::format_to(sb, "  auto const fn = {}_slots[{}];\n", req.helper_name, i);
+
+        auto const deref_call = util::format("jank_call{}", arg_idx);
+        util::format_to(sb,
+                        "  auto const result = {}(fn{});\n",
+                        deref_call,
+                        (args_call.empty() ? "" : ", " + args_call));
+
+        if(!is_void)
+        {
+          // Pass registry to handle recursive :fn types
+          auto const unbox_expr = gen_unbox(req.return_type, "result", &registry);
+          util::format_to(sb, "  return {};\n", unbox_expr);
+        }
+        else
+        {
+          sb("  (void)result;\n");
+        }
+        sb("}\n\n");
+      }
+
+      // Trampoline array
+      util::format_to(sb,
+                      "static {} (*{}_trampolines[])({}) = ",
+                      ret_type_str,
+                      req.helper_name,
+                      args_sig);
+      sb("{\n");
+      for(size_t i = 0; i < slots_count; ++i)
+      {
+        util::format_to(sb, "  &{}_trampoline_{},\n", req.helper_name, i);
+      }
+      sb("};\n\n");
+
+      // unwrap_fn_X implementation
+      auto const unwrap_decl
+        = schema_to_c_function_decl(signature, req.helper_name, "jank_object_ref fn");
+      std::string static_unwrap_decl = unwrap_decl;
+      if(static_unwrap_decl.starts_with("extern \"C\" "))
+      {
+        static_unwrap_decl.replace(0, 11, "static ");
+      }
+      util::format_to(sb, "{}\n", static_unwrap_decl);
+      sb("{\n");
+      util::format_to(sb,
+                      "  size_t const slot = {}_next_slot++ % {};\n",
+                      req.helper_name,
+                      slots_count);
+      util::format_to(sb, "  {}_slots[slot] = fn;\n", req.helper_name);
+      util::format_to(sb, "  return {}_trampolines[slot];\n", req.helper_name);
+      sb("}\n\n");
+    }
+
+    sb("} // namespace\n");
+    return sb.release();
+  }
+
   // TODO: Generate an object file instead of a cpp
   static jtl::immutable_string
   gen_entrypoint(jtl::immutable_string const &module, bool const emit_shared_library)
   {
     jtl::string_builder sb;
     sb(R"(/* DO NOT MODIFY: Autogenerated by jank. */
+
+#include <atomic>
 
 using jank_object_ref = void*;
 using jank_bool = char;
@@ -509,6 +683,7 @@ extern "C" jank_object_ref jank_native_function_wrapper_create(
   void *context,
   jank_object_ref (*invoke)(void *, void *, jank_object_ref const *, jank_usize),
   jank_u8 arg_count);
+extern "C" void *jank_native_function_wrapper_get_pointer(jank_object_ref);
 )");
 
     auto const modules_rlocked{ __rt_ctx->loaded_modules_in_order.rlock() };
@@ -538,6 +713,7 @@ namespace
                                  : "int main(int argc, const char** argv)");
 
     fn_wrapper_registry fn_registry;
+    jank_fn_wrapper_registry jank_fn_registry;
     jtl::string_builder exports_sb;
 
     if(emit_shared_library)
@@ -610,7 +786,7 @@ namespace
 
                     auto const ret_type_str = schema_to_c_type(return_type_obj);
                     auto const deref_call = util::format("jank_call{}", arg_idx);
-                    auto const unbox_expr = gen_unbox(return_type_obj, "result");
+                    auto const unbox_expr = gen_unbox(return_type_obj, "result", &jank_fn_registry);
 
                     // Check if return type is void
                     auto const ret_kw(dyn_cast<obj::keyword>(return_type_obj));
@@ -620,9 +796,12 @@ namespace
                       is_void = true;
                     }
 
+                    auto const function_decl(
+                      schema_to_c_function_decl(ret_type_str, name_str, args_sig));
+
                     util::format_to(exports_sb,
                                     R"(
-extern "C" {} {}({})
+{}
 {{
   auto const var = jank_var_intern_c("{}", "{}");
   auto const derefed = jank_deref(var);
@@ -630,9 +809,7 @@ extern "C" {} {}({})
   {}
 }}
 )",
-                                    ret_type_str,
-                                    name_str,
-                                    args_sig,
+                                    function_decl,
                                     ns_str,
                                     var_name_str,
                                     deref_call,
@@ -647,7 +824,29 @@ extern "C" {} {}({})
       }
     }
 
-    auto const helper_code(emit_fn_wrapper_helpers(fn_registry));
+    std::string jank_helper_code;
+    std::string helper_code;
+    size_t prev_jank_reqs = 0;
+    size_t prev_fn_reqs = 0;
+
+    while(true)
+    {
+      jank_helper_code = emit_jank_fn_wrapper_helpers(jank_fn_registry, &fn_registry);
+      helper_code = emit_fn_wrapper_helpers(fn_registry, &jank_fn_registry);
+
+      if(jank_fn_registry.requirements.size() == prev_jank_reqs
+         && fn_registry.requirements.size() == prev_fn_reqs)
+      {
+        break;
+      }
+      prev_jank_reqs = jank_fn_registry.requirements.size();
+      prev_fn_reqs = fn_registry.requirements.size();
+    }
+
+    if(!jank_helper_code.empty())
+    {
+      sb(jank_helper_code);
+    }
     if(!helper_code.empty())
     {
       sb(helper_code);

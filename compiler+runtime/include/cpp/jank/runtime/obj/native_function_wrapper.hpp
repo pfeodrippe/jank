@@ -131,6 +131,7 @@ namespace jank::runtime
       object base{ obj_type };
       obj::detail::function_type data{};
       jtl::option<object_ref> meta;
+      void *native_callback_ptr{ nullptr };
     };
   }
 

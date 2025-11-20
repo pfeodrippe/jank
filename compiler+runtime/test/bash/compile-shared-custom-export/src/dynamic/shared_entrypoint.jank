@@ -29,5 +29,22 @@
   "my_apply"
   [:=> [:cat [:fn [:long] :long] :long] :long])
 
-(defn -main [& _args]
+(defn my-return-fn [f]
+  f)
+
+(jank.export/register
+ #'my-return-fn
+ "my_return_fn"
+ [:=> [:cat [:fn [:long] :long]] [:fn [:long] :long]])
+
+(defn my-return-jank-fn []
+  (fn [x]
+    (* x 4)))
+
+(jank.export/register
+ #'my-return-jank-fn
+ "my_return_jank_fn"
+ [:=> [:cat] [:fn [:long] :long]])
+
+(defn -main [& args]
   (println "Main called!"))

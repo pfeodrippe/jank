@@ -36,6 +36,12 @@ For AIs: for running tests (from the `compiler+runtime` folder)
 export SDKROOT=$(xcrun --sdk macosx --show-sdk-path) && export CC=$PWD/build/llvm-install/usr/local/bin/clang && export CXX=$PWD/build/llvm-install/usr/local/bin/clang++ && ./bin/test
 ```
 
+For running specific tests (e.g. pass-test)
+
+``` bash
+./bin/compile && PATH="/Users/pfeodrippe/dev/jank/compiler+runtime/build:$PATH" ./test/bash/compile-shared-custom-export/pass-test 2>&1 | grep -v "missing from root"
+```
+
 For humans: for compiling Jank (from the `compiler+runtime` folder)
 
 ``` bash

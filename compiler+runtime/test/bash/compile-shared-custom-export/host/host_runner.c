@@ -10,6 +10,7 @@ typedef int (*my_str_len_fn)(const char*);
 typedef void (*my_void_fn)(void);
 typedef long (*my_apply_cb_fn)(long);
 typedef long (*my_apply_fn)(my_apply_cb_fn, long);
+typedef my_apply_cb_fn (*my_return_fn_fn)(my_apply_cb_fn);
 
 static long host_square(long x)
 {
@@ -120,6 +121,60 @@ int main(int argc, const char **argv)
   }
 
   printf("Callback test passed\n");
+
+  my_return_fn_fn return_fn = (my_return_fn_fn)dlsym(handle, "my_return_fn");
+  if(return_fn == NULL)
+  {
+    fprintf(stderr, "dlsym my_return_fn failed: %s\n", dlerror());
+    dlclose(handle);
+    return 10;
+  }
+
+  my_apply_cb_fn returned = return_fn(host_square);
+  if(returned == NULL)
+  {
+    fprintf(stderr, "Returned callback was NULL\n");
+    dlclose(handle);
+    return 1;
+  }
+
+  if(returned(4) != host_square(4))
+  {
+    fprintf(stderr, "Returned callback produced unexpected result of (%ld)\n", returned(4));
+    dlclose(handle);
+    return 1;
+  }
+
+  printf("Return fn test passed\n");
+
+  typedef long (*my_long_fn)(long);
+  typedef my_long_fn (*my_return_jank_fn_fn)(void);
+
+  my_return_jank_fn_fn return_jank_fn = (my_return_jank_fn_fn)dlsym(handle, "my_return_jank_fn");
+  if(return_jank_fn == NULL)
+  {
+    fprintf(stderr, "dlsym my_return_jank_fn failed: %s\n", dlerror());
+    dlclose(handle);
+    return 11;
+  }
+
+  my_long_fn jank_fn = return_jank_fn();
+  if(jank_fn == NULL)
+  {
+    fprintf(stderr, "Returned jank function was NULL\n");
+    dlclose(handle);
+    return 1;
+  }
+
+  long jank_res = jank_fn(5);
+  if(jank_res != 20) // 5 * 4
+  {
+    fprintf(stderr, "Expected 20, got %ld\n", jank_res);
+    dlclose(handle);
+    return 1;
+  }
+
+  printf("Return jank fn test passed\n");
 
   dlclose(handle);
   return 0;

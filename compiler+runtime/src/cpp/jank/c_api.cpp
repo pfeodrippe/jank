@@ -552,6 +552,7 @@ extern "C"
       obj::detail::function_type::value_type<JANK_NATIVE_FUNCTION_SIG_##N> fn{ lambda };       \
       auto const wrapper                                                                       \
         = make_box<obj::native_function_wrapper>(obj::detail::function_type{ std::move(fn) }); \
+      wrapper->native_callback_ptr = callback_ptr;                                             \
       return wrapper.erase();                                                                  \
     }
 
@@ -583,6 +584,30 @@ extern "C"
     }
 
     throw std::runtime_error{ "Unsupported native callback arity" };
+  }
+
+  void *jank_native_function_wrapper_get_pointer(jank_object_ref const wrapper_ref)
+  {
+    if(wrapper_ref == nullptr)
+    {
+      return nullptr;
+    }
+
+    auto const wrapper_obj(
+      dyn_cast<obj::native_function_wrapper>(reinterpret_cast<object *>(wrapper_ref)));
+    if(wrapper_obj.is_nil())
+    {
+      throw std::runtime_error{ "Object is not a native function wrapper" };
+    }
+
+    if(wrapper_obj->native_callback_ptr == nullptr)
+    {
+      throw std::runtime_error{
+        "Native function wrapper does not carry a native callback pointer"
+      };
+    }
+
+    return wrapper_obj->native_callback_ptr;
   }
 
 #undef JANK_NATIVE_WRAPPER_CASE

@@ -42,7 +42,9 @@ if [[ "${output}" != "Main called!
 Void called!
 Success: 6
 Void test passed
-Callback test passed" ]]; then
+Callback test passed
+Return fn test passed
+Return jank fn test passed" ]]; then
   echo "unexpected shared output: '${output}'" >&2
   exit 1
 fi
