@@ -44,6 +44,17 @@ namespace jank::nrepl_server::asio
       auto const var(query.target_ns->find_var(symbol));
       if(var.is_nil())
       {
+        if(query.target_ns->name->name == "cpp")
+        {
+          bencode::value::dict entry;
+          entry.emplace("candidate", candidate.display_name);
+          entry.emplace("type", "function");
+          if(include_ns_info)
+          {
+            entry.emplace("ns", "cpp");
+          }
+          completion_payloads.emplace_back(std::move(entry));
+        }
         continue;
       }
 

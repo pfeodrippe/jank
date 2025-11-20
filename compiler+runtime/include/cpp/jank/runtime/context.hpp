@@ -119,6 +119,7 @@ namespace jank::runtime
 
     folly::Synchronized<native_unordered_map<obj::symbol_ref, ns_ref>> namespaces;
     folly::Synchronized<native_unordered_map<jtl::immutable_string, obj::keyword_ref>> keywords;
+    folly::Synchronized<native_set<jtl::immutable_string>> global_cpp_functions;
 
     struct binding_scope
     {

@@ -742,6 +742,19 @@ namespace jank::runtime
       .count();
   }
 
+  object_ref get_global_cpp_functions()
+  {
+    auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };
+    native_vector<object_ref> vec;
+    vec.reserve(locked_globals->size());
+    for(auto const &name : *locked_globals)
+    {
+      vec.emplace_back(make_box<obj::persistent_string>(name));
+    }
+    return make_box<obj::persistent_vector>(
+      runtime::detail::native_persistent_vector{ vec.begin(), vec.end() });
+  }
+
   object_ref add_watch(object_ref const reference, object_ref const key, object_ref const fn)
   {
     visit_object(

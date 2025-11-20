@@ -1396,6 +1396,20 @@ namespace jank::nrepl_server::asio
         }
       }
 
+      if(target_ns->name->name == "cpp")
+      {
+        auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };
+        for(auto const &name : *locked_globals)
+        {
+          auto const candidate_name(to_std_string(name));
+          if(!prefix.empty() && !starts_with(candidate_name, prefix))
+          {
+            continue;
+          }
+          matches.push_back(candidate_name);
+        }
+      }
+
       std::ranges::sort(matches);
       auto const unique_end(std::ranges::unique(matches));
       matches.erase(unique_end.begin(), unique_end.end());

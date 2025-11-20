@@ -5,6 +5,7 @@
 
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/IRBuilder.h>
@@ -2156,6 +2157,22 @@ namespace jank::codegen
     {
       throw std::runtime_error{ "Unable to parse 'cpp/raw' expression." };
     }
+
+    for(auto const &f : parse_res->TheModule->functions())
+    {
+      if(!f.isDeclaration() && f.hasExternalLinkage())
+      {
+        auto name{ llvm::demangle(f.getName().str()) };
+        auto const paren{ name.find('(') };
+        if(paren != std::string::npos)
+        {
+          name = name.substr(0, paren);
+        }
+        auto locked_globals{ __rt_ctx->global_cpp_functions.wlock() };
+        locked_globals->emplace(name);
+      }
+    }
+
     link_module(*ctx, parse_res->TheModule.get());
 
     auto const ret{ gen_global(jank_nil) };

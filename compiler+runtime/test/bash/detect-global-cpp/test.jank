@@ -1,0 +1,20 @@
+(cpp/raw "
+#include <iostream>
+#include <array> // For std::array
+
+int ttt() {
+    std::array<int, 5> arr = {10, 20, 30, 40, 50};
+
+    for (auto it = arr.begin(); it != arr.end(); ++it) {
+        std::cout << *it << \" \"; // Dereference the iterator to get the element
+    }
+    std::cout << std::endl;
+    return 0;
+}
+")
+
+(let [globals (cpp/jank.runtime.get_global_cpp_functions)]
+  (println "Globals:" globals)
+  (if (some #{"ttt"} globals)
+    (println "Found global function: ttt")
+    (println "Global function ttt NOT found")))

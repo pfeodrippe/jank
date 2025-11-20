@@ -554,6 +554,41 @@ namespace jank::nrepl_server::asio
       CHECK(found);
     }
 
+    TEST_CASE("complete returns global cpp functions")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op", "eval" },
+        { "code", "(cpp/raw \"int my_global_test_fn() { return 42; }\")" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix", "my_global" },
+        {     "ns",      "cpp" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+
+      bool found{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "my_global_test_fn")
+        {
+          found = true;
+          CHECK(dict.at("type").as_string() == "function");
+          CHECK(dict.at("ns").as_string() == "cpp");
+          break;
+        }
+      }
+      CHECK(found);
+    }
+
     TEST_CASE("complete returns metadata-rich candidates")
     {
       engine eng;

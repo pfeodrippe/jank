@@ -6,5 +6,8 @@
   - [x] ability to receive, return pointers
   - [-] test dynamic symbol
   - [ ] call my_multiplier
-- [ ] return structs ?
 - [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
+  - [ ] get globals defined from cpp raw
+  - [ ] list globals in nREPL
+  - [ ] get existing globals ?
+- [ ] accept/return structs ?

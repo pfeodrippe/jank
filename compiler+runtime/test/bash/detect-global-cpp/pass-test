@@ -1,0 +1,29 @@
+#!/usr/bin/env bb
+
+(ns jank.test.detect-global-cpp
+  (:require [babashka.process :as proc]
+            [clojure.string :as str]
+            [clojure.test :as t :refer [deftest run-test is]]))
+
+(def this-nsym (ns-name *ns*))
+
+(defn check-output [cmd expected-str]
+  (let [{:keys [exit out] :as res} (apply proc/shell {:out :string
+                                                      :err :string
+                                                      :continue true}
+                                          cmd)]
+    (is (= 0 exit) (str "Command failed: " cmd))
+    (is (str/includes? out expected-str) (str "Output did not contain: " expected-str "\nOutput: " out))
+    res))
+
+(deftest detect-global-cpp-test
+  (check-output ["compiler+runtime/build/jank" "run" "compiler+runtime/test/bash/detect-global-cpp/test.jank"] "Found global function: ttt"))
+
+(defn -main []
+  (System/exit
+    (if (t/successful? (t/run-tests this-nsym))
+      0
+      1)))
+
+(when (= *file* (System/getProperty "babashka.file"))
+  (apply -main *command-line-args*))

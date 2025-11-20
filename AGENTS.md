@@ -9,7 +9,7 @@
 - `export SDKROOT=$(xcrun --show-sdk-path); export CC=$PWD/build/llvm-install/usr/local/bin/clang; export CXX=$PWD/build/llvm-install/usr/local/bin/clang++`
 - `./bin/configure -GNinja -DCMAKE_BUILD_TYPE=Debug -Djank_test=on -Djank_local_clang=on # This only need to be called once and then you can just call ./bin/compile`
 - `./bin/compile`
-- `./bin/compile && bin/jank/compiler+runtime/bash_test.clj`
+- `./bin/compile && bin/jank/compiler+runtime/bash_test.clj && ./bin/test`
 
 ### Test
 - `./bin/test`
