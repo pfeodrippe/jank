@@ -7,7 +7,7 @@
   - [-] test dynamic symbol
   - [ ] call my_multiplier
 - [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
-  - [ ] get globals defined from cpp raw
-  - [ ] list globals in nREPL
+  - [x] get globals defined from cpp/raw
+  - [x] list globals in nREPL
   - [ ] get existing globals ?
 - [ ] accept/return structs ?
