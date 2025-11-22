@@ -7,6 +7,7 @@
 #include <jank/runtime/ns.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core.hpp>
+#include <jank/runtime/core/to_string.hpp>
 #include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/behavior/callable.hpp>
 #include <jank/codegen/llvm_processor.hpp>
@@ -732,6 +733,18 @@ namespace jank::evaluate
   {
     /* TODO: How do we get source info here? Or can we detect this earlier? */
     cpp_util::ensure_convertible(expr).expect_ok();
+    auto const expr_type{ cpp_util::expression_type(expr) };
+    if(!cpp_util::is_untyped_object(expr_type) && !cpp_util::is_trait_convertible(expr_type))
+    {
+      auto const form(expr->form);
+      auto const sym_str = runtime::is_nil(form) ? jtl::immutable_string{ "<native symbol>" }
+                                                 : runtime::to_code_string(form);
+      throw std::runtime_error(util::format(
+        "Unable to treat '{}' as a value because '{}' cannot be boxed into a jank object. "
+        "Require the header with :refer to create a callable var or wrap the usage with cpp/raw.",
+        sym_str,
+        Cpp::GetTypeAsString(expr_type)));
+    }
     return dynamic_call(eval(wrap_expression(expr, "cpp_value", {})));
   }
 

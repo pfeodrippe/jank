@@ -178,11 +178,10 @@ namespace jank::runtime
       if(existing.header != alias.header || existing.scope != alias.scope
          || existing.include_directive != alias.include_directive)
       {
-        return err(util::format(
-          "{} already bound to native header '{}' in ns {}",
-          sym->to_string(),
-          existing.header,
-          to_string()));
+        return err(util::format("{} already bound to native header '{}' in ns {}",
+                                sym->to_string(),
+                                existing.header,
+                                to_string()));
       }
       return ok(false);
     }
@@ -217,6 +216,46 @@ namespace jank::runtime
       ret.emplace_back(entry.second);
     }
     return ret;
+  }
+
+  jtl::result<void, jtl::immutable_string> ns::add_native_refer(obj::symbol_ref const sym,
+                                                                obj::symbol_ref const alias_sym,
+                                                                obj::symbol_ref const member)
+  {
+    auto locked_native_refers(native_refers.wlock());
+    auto const found(locked_native_refers->find(sym));
+    if(found != locked_native_refers->end())
+    {
+      auto const &existing(found->second);
+      if(existing.alias != alias_sym || existing.member != member)
+      {
+        return err(util::format("{} already refers to native member '{}.{}' in ns {}",
+                                sym->to_string(),
+                                existing.alias->to_string(),
+                                existing.member->to_string(),
+                                to_string()));
+      }
+      return ok();
+    }
+    locked_native_refers->emplace(sym, native_refer{ alias_sym, member });
+    return ok();
+  }
+
+  void ns::remove_native_refer(obj::symbol_ref const sym)
+  {
+    auto locked_native_refers(native_refers.wlock());
+    locked_native_refers->erase(sym);
+  }
+
+  jtl::option<ns::native_refer> ns::find_native_refer(obj::symbol_ref const sym) const
+  {
+    auto locked_native_refers(native_refers.rlock());
+    auto const found(locked_native_refers->find(sym));
+    if(found != locked_native_refers->end())
+    {
+      return found->second;
+    }
+    return none;
   }
 
   jtl::result<void, jtl::immutable_string> ns::refer(obj::symbol_ref const sym, var_ref const var)

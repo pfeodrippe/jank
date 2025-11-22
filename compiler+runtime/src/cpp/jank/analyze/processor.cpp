@@ -1,6 +1,7 @@
 #include <ranges>
 #include <set>
 #include <cstdlib>
+#include <stdexcept>
 
 #include <Interpreter/Compatibility.h>
 
@@ -1527,25 +1528,50 @@ namespace jank::analyze
                             jtl::option<expr::function_context_ref> const &fc,
                             bool needs_box)
   {
+    auto const rewrite_native_symbol
+      = [&](runtime::obj::symbol_ref const alias_sym,
+            jtl::immutable_string const &member_name,
+            runtime::obj::symbol_ref const origin_sym) -> expression_result {
+      auto const native_alias(runtime::__rt_ctx->current_ns()->find_native_alias(alias_sym));
+      if(native_alias.is_none())
+      {
+        throw std::runtime_error(
+          util::format("Native alias '{}' is not registered in namespace '{}'",
+                       alias_sym->to_string(),
+                       runtime::__rt_ctx->current_ns()->to_string()));
+      }
+      auto const alias_info(native_alias.unwrap());
+      native_transient_string scoped(alias_info.scope.data(), alias_info.scope.size());
+      if(!member_name.empty())
+      {
+        if(member_name[0] != '.')
+        {
+          scoped.push_back('.');
+        }
+        scoped.append(member_name.data(), member_name.size());
+      }
+      auto const cpp_sym(make_box<runtime::obj::symbol>("cpp", scoped));
+      cpp_sym->meta = origin_sym->meta;
+      return analyze_cpp_symbol(cpp_sym, current_frame, position, fc, needs_box);
+    };
+
+    if(sym->ns.empty())
+    {
+      auto const native_refer(runtime::__rt_ctx->current_ns()->find_native_refer(sym));
+      if(native_refer.is_some())
+      {
+        auto const refer_info(native_refer.unwrap());
+        return rewrite_native_symbol(refer_info.alias, refer_info.member->name, sym);
+      }
+    }
+
     if(!sym->ns.empty() && sym->ns != "cpp")
     {
       auto const alias_sym(make_box<runtime::obj::symbol>(sym->ns));
       auto const native_alias(runtime::__rt_ctx->current_ns()->find_native_alias(alias_sym));
       if(native_alias.is_some())
       {
-        auto const alias_info(native_alias.unwrap());
-        native_transient_string scoped(alias_info.scope.data(), alias_info.scope.size());
-        if(!sym->name.empty())
-        {
-          if(sym->name[0] != '.')
-          {
-            scoped.push_back('.');
-          }
-          scoped.append(sym->name.data(), sym->name.size());
-        }
-        auto const cpp_sym(make_box<runtime::obj::symbol>("cpp", scoped));
-        cpp_sym->meta = sym->meta;
-        return analyze_cpp_symbol(cpp_sym, current_frame, position, fc, needs_box);
+        return rewrite_native_symbol(alias_sym, sym->name, sym);
       }
     }
 

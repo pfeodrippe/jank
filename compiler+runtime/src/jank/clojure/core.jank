@@ -4221,6 +4221,51 @@
                           {:msg (str "Expected " field " to be string or symbol, got "
                                      (type value))}))))
 
+(defn- ensure-symbol [value field]
+  (cond
+    (symbol? value) value
+    (string? value) (symbol value)
+    :else (throw (ex-info :invalid-native-libspec
+                          {:msg (str "Expected " field " to be symbol or string, got "
+                                     (type value))}))))
+
+(defn- normalize-native-rename [rename]
+  (when rename
+    (throw-if (not (map? rename))
+              "Native header :rename expects a map of symbol to symbol")
+    (reduce (fn [ret [from to]]
+              (assoc ret
+                     (ensure-symbol from :rename-key)
+                     (ensure-symbol to :rename-val)))
+            {}
+            rename)))
+
+(defn- normalize-native-refers [refer rename]
+  (when refer
+    (throw-if (= :all refer)
+              "Native header libspec does not support :refer :all")
+    (let [items (cond
+                  (or (sequential? refer)
+                      (set? refer)) refer
+                  :else (throw (ex-info :invalid-native-libspec
+                                        {:msg (str "Native header :refer expects a collection of symbols, got "
+                                                   (type refer))})))
+          rename-map (or rename {})
+          refer-specs (mapv (fn [sym]
+                              (let [remote (ensure-symbol sym :refer)
+                                    local (or (rename-map remote) remote)]
+                                {:local local
+                                 :member remote}))
+                            items)
+          duplicates (->> refer-specs
+                          (map :local)
+                          (frequencies)
+                          (filter (fn [[_ cnt]] (> cnt 1)))
+                          (map first))]
+      (throw-if (seq duplicates)
+                (str "Duplicate native refer targets: " duplicates))
+      refer-specs)))
+
 (defn- format-include-arg [header include]
   (let [explicit (ensure-string include :include)
         candidate (str (or explicit header))
@@ -4242,29 +4287,38 @@
         _ (throw-if (odd? (count option-data))
                     "Native header libspec options must be key/value pairs")
         opts (apply hash-map option-data)
-        supported #{:as :scope :include}
+        supported #{:as :scope :include :refer :rename}
         unsupported (seq (remove supported (keys opts)))
         _ (throw-if unsupported
                     (str "Unsupported native header option(s): " unsupported))
         alias (:as opts)
         _ (throw-if (not (symbol? alias))
                     "Native header libspec requires :as with a symbol alias")
+        rename (normalize-native-rename (:rename opts))
+        refers (normalize-native-refers (:refer opts) rename)
         scope (or (ensure-string (:scope opts) :scope)
                   (path->cpp-scope header))
         include (format-include-arg header (:include opts))]
     {:alias alias
      :header header
      :scope scope
-     :include include}))
+     :include include
+     :refers refers}))
 
 (defn- register-native-header! [spec]
-  (let [{:keys [alias header scope include]} (normalize-native-libspec spec)]
+  (let [{:keys [alias header scope include refers]} (normalize-native-libspec spec)]
     (cpp/clojure.core_native.register_native_header
       *ns*
       alias
       header
       scope
-      include)))
+      include)
+    (doseq [{:keys [local member]} refers]
+      (cpp/clojure.core_native.register_native_refer
+        *ns*
+        alias
+        local
+        member))))
 
 (defn- prependss [x coll]
   (if (symbol? x)

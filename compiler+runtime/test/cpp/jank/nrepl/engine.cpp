@@ -828,12 +828,14 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
       eng.handle(make_message({
-        {   "op",                                                                             "eval" },
-        { "code", "(cpp/raw \"struct cpp_info_struct { int field_a; double field_b; }; cpp_info_struct make_struct() { return {}; }\")" }
+        {   "op",  "eval"                 },
+        { "code",
+         "(cpp/raw \"struct cpp_info_struct { int field_a; double field_b; }; cpp_info_struct "
+         "make_struct() { return {}; }\")" }
       }));
 
       auto responses(eng.handle(make_message({
-        {  "op",                  "info" },
+        {  "op",                "info" },
         { "sym", "cpp/cpp_info_struct" }
       })));
       REQUIRE(responses.size() == 1);

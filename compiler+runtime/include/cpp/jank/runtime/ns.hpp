@@ -44,11 +44,22 @@ namespace jank::runtime
       jtl::immutable_string scope;
     };
 
+    struct native_refer
+    {
+      obj::symbol_ref alias;
+      obj::symbol_ref member;
+    };
+
     jtl::result<bool, jtl::immutable_string>
     add_native_alias(obj::symbol_ref sym, native_alias alias);
     void remove_native_alias(obj::symbol_ref sym);
     jtl::option<native_alias> find_native_alias(obj::symbol_ref sym) const;
     native_vector<native_alias> native_aliases_snapshot() const;
+
+    jtl::result<void, jtl::immutable_string>
+    add_native_refer(obj::symbol_ref sym, obj::symbol_ref alias, obj::symbol_ref member);
+    void remove_native_refer(obj::symbol_ref sym);
+    jtl::option<native_refer> find_native_refer(obj::symbol_ref sym) const;
 
     jtl::result<void, jtl::immutable_string> refer(obj::symbol_ref sym, var_ref var);
 
@@ -69,6 +80,7 @@ namespace jank::runtime
     folly::Synchronized<obj::persistent_hash_map_ref> vars;
     folly::Synchronized<obj::persistent_hash_map_ref> aliases;
     folly::Synchronized<native_unordered_map<obj::symbol_ref, native_alias>> native_aliases;
+    folly::Synchronized<native_unordered_map<obj::symbol_ref, native_refer>> native_refers;
 
     std::atomic_uint64_t symbol_counter{};
   };

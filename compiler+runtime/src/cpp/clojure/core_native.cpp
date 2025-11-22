@@ -284,14 +284,12 @@ namespace clojure::core_native
                                     object_ref const include_directive)
   {
     auto const ns_obj(try_object<ns>(current_ns));
-    runtime::ns::native_alias alias_data{
-      runtime::to_string(header),
-      runtime::to_string(include_directive),
-      runtime::to_string(scope)
-    };
+    runtime::ns::native_alias alias_data{ runtime::to_string(header),
+                                          runtime::to_string(include_directive),
+                                          runtime::to_string(scope) };
     auto const include_arg(alias_data.include_directive);
-    auto const added(ns_obj->add_native_alias(try_object<obj::symbol>(alias), std::move(alias_data))
-                       .expect_ok());
+    auto const added(
+      ns_obj->add_native_alias(try_object<obj::symbol>(alias), std::move(alias_data)).expect_ok());
     if(added)
     {
       auto const include_code{ util::format("#include {}\n", include_arg) };
@@ -301,6 +299,18 @@ namespace clojure::core_native
         throw res.expect_err();
       }
     }
+    return jank_nil;
+  }
+
+  object_ref register_native_refer(object_ref const current_ns,
+                                   object_ref const alias,
+                                   object_ref const local_sym,
+                                   object_ref const member_sym)
+  {
+    auto const ns_obj(try_object<ns>(current_ns));
+    auto const alias_sym(try_object<obj::symbol>(alias));
+    auto const member(try_object<obj::symbol>(member_sym));
+    ns_obj->add_native_refer(try_object<obj::symbol>(local_sym), alias_sym, member).expect_ok();
     return jank_nil;
   }
 
