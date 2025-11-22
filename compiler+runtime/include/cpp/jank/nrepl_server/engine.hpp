@@ -1298,6 +1298,12 @@ namespace jank::nrepl_server::asio
         std::vector<cpp_argument> arguments;
       };
 
+      struct cpp_field
+      {
+        std::string name;
+        std::string type;
+      };
+
       std::string ns_name;
       std::string name;
       std::optional<std::string> doc;
@@ -1308,10 +1314,48 @@ namespace jank::nrepl_server::asio
       std::optional<std::int64_t> column;
       std::optional<std::string> return_type;
       std::vector<cpp_signature> cpp_signatures;
+      std::vector<cpp_field> cpp_fields;
       bool is_macro{ false };
       bool is_function{ false };
       bool is_cpp_function{ false };
+      bool is_cpp_type{ false };
+      bool is_cpp_constructor{ false };
     };
+
+    std::string completion_type_for(var_documentation const &info) const
+    {
+      if(info.is_cpp_constructor)
+      {
+        return std::string{ "constructor" };
+      }
+      if(info.is_cpp_type)
+      {
+        return std::string{ "type" };
+      }
+      if(info.is_cpp_function)
+      {
+        return std::string{ "function" };
+      }
+      if(info.is_macro)
+      {
+        return std::string{ "macro" };
+      }
+      return std::string{ "var" };
+    }
+
+    std::string cpp_record_kind_to_string(runtime::context::cpp_record_kind kind) const
+    {
+      switch(kind)
+      {
+        case runtime::context::cpp_record_kind::Class:
+          return std::string{ "class" };
+        case runtime::context::cpp_record_kind::Union:
+          return std::string{ "union" };
+        case runtime::context::cpp_record_kind::Struct:
+        default:
+          return std::string{ "struct" };
+      }
+    }
 
     bencode::value::dict make_done_response(std::string const &session,
                                             std::string const &id,
@@ -1422,6 +1466,22 @@ namespace jank::nrepl_server::asio
             continue;
           }
           matches.push_back(candidate_name);
+        }
+
+        auto const locked_types{ __rt_ctx->global_cpp_types.rlock() };
+        for(auto const &[name, _] : *locked_types)
+        {
+          auto const base_name(to_std_string(name));
+          if(prefix.empty() || starts_with(base_name, prefix))
+          {
+            matches.push_back(base_name);
+          }
+
+          auto const ctor_name(base_name + ".");
+          if(prefix.empty() || starts_with(ctor_name, prefix))
+          {
+            matches.push_back(ctor_name);
+          }
         }
       }
 
@@ -1696,6 +1756,141 @@ namespace jank::nrepl_server::asio
       }
 
       return info;
+    }
+
+    std::optional<var_documentation>
+    describe_cpp_type(ns_ref target_ns, std::string symbol_name) const
+    {
+      if(symbol_name.empty())
+      {
+        return std::nullopt;
+      }
+
+      bool const is_constructor{ symbol_name.back() == '.' };
+      if(is_constructor)
+      {
+        symbol_name.pop_back();
+        if(symbol_name.empty())
+        {
+          return std::nullopt;
+        }
+      }
+
+      auto const locked_types{ __rt_ctx->global_cpp_types.rlock() };
+      auto const key(make_immutable_string(symbol_name));
+      auto const it(locked_types->find(key));
+      if(it == locked_types->end())
+      {
+        return std::nullopt;
+      }
+
+      var_documentation info;
+      info.ns_name = current_ns_name(target_ns);
+      info.name = is_constructor ? symbol_name + "." : symbol_name;
+      info.is_cpp_type = !is_constructor;
+      info.is_cpp_constructor = is_constructor;
+      info.return_type = to_std_string(it->second.qualified_cpp_name);
+
+      auto kind_doc(cpp_record_kind_to_string(it->second.kind));
+      if(!kind_doc.empty())
+      {
+        if(is_constructor)
+        {
+          kind_doc += " constructor";
+        }
+        else
+        {
+          kind_doc = "C++ " + kind_doc;
+        }
+        info.doc = std::move(kind_doc);
+      }
+
+      // For both type and constructor lookups, show constructor signatures if available
+      // This is what users want to know - how to construct the type
+      bool const show_constructors = !it->second.constructors.empty();
+
+      if(show_constructors)
+      {
+        // Show explicit constructors
+        for(auto const &ctor : it->second.constructors)
+        {
+          std::string signature{ "[" };
+          for(size_t idx{}; idx < ctor.arguments.size(); ++idx)
+          {
+            if(idx != 0)
+            {
+              signature.push_back(' ');
+            }
+            signature += to_std_string(ctor.arguments[idx].type);
+            auto const arg_name(to_std_string(ctor.arguments[idx].name));
+            if(!arg_name.empty())
+            {
+              signature.push_back(' ');
+              signature += arg_name;
+            }
+          }
+          signature.push_back(']');
+          info.arglists.emplace_back(signature);
+        }
+
+        if(!info.arglists.empty())
+        {
+          std::string combined;
+          for(size_t idx{}; idx < info.arglists.size(); ++idx)
+          {
+            if(idx != 0)
+            {
+              combined += " ";
+            }
+            combined += info.arglists[idx];
+          }
+          info.arglists_str = combined;
+        }
+      }
+      else if(!it->second.fields.empty())
+      {
+        // No explicit constructors, show aggregate initialization with fields
+        std::string signature{ "[" };
+        for(size_t idx{}; idx < it->second.fields.size(); ++idx)
+        {
+          if(idx != 0)
+          {
+            signature.push_back(' ');
+          }
+          signature += to_std_string(it->second.fields[idx].type);
+          auto const field_name(to_std_string(it->second.fields[idx].name));
+          if(!field_name.empty())
+          {
+            signature.push_back(' ');
+            signature += field_name;
+          }
+        }
+        signature.push_back(']');
+        info.arglists.emplace_back(signature);
+        info.arglists_str = signature;
+      }
+
+      // Always populate cpp_fields for reference
+      info.cpp_fields.reserve(it->second.fields.size());
+      for(auto const &field : it->second.fields)
+      {
+        var_documentation::cpp_field field_doc;
+        field_doc.name = to_std_string(field.name);
+        field_doc.type = to_std_string(field.type);
+        info.cpp_fields.emplace_back(std::move(field_doc));
+      }
+
+      return info;
+    }
+
+    std::optional<var_documentation>
+    describe_cpp_entity(ns_ref target_ns, std::string const &symbol_name) const
+    {
+      if(auto info = describe_cpp_function(target_ns, symbol_name))
+      {
+        return info;
+      }
+      return describe_cpp_type(target_ns, symbol_name);
     }
 
     bencode::value::list serialize_cpp_signatures(var_documentation const &info) const

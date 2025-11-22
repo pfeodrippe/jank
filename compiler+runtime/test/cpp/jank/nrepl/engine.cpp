@@ -617,6 +617,48 @@ namespace jank::nrepl_server::asio
       REQUIRE(arglists.size() == 2);
     }
 
+    TEST_CASE("complete surfaces deeply namespaced C++ constructors")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                       "eval"                 },
+        { "code",
+         "(cpp/raw \"namespace eita::cpp::constructor::complex::pass_argument { struct foo { "
+         "foo(int v) : a{ v }, b{ v } {} int a{}, b{}; }; }\")" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {     "op",                                         "complete" },
+        { "prefix", "cpp/eita.cpp.constructor.complex.pass_argument.f" },
+        {     "ns",                                             "user" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+
+      bool found_type{ false };
+      bool found_ctor{ false };
+      for(auto const &candidate_value : completions)
+      {
+        auto const &entry(candidate_value.as_dict());
+        auto const candidate(entry.at("candidate").as_string());
+        if(candidate == "cpp/eita.cpp.constructor.complex.pass_argument.foo")
+        {
+          found_type = true;
+          CHECK(entry.at("type").as_string() == "type");
+        }
+        if(candidate == "cpp/eita.cpp.constructor.complex.pass_argument.foo.")
+        {
+          found_ctor = true;
+          CHECK(entry.at("type").as_string() == "constructor");
+        }
+      }
+
+      CHECK(found_type);
+      CHECK(found_ctor);
+    }
+
     TEST_CASE("complete resolves namespace aliases with trailing slash prefixes")
     {
       engine eng;

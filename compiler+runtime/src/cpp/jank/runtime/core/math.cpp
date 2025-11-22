@@ -1761,6 +1761,26 @@ namespace jank::runtime
     return o->type == object_type::real;
   }
 
+  bool is_double(object_ref const o)
+  {
+    if(o->type != object_type::real)
+    {
+      return false;
+    }
+    auto const real_obj(expect_object<obj::real>(o));
+    return !real_obj->is_single_precision();
+  }
+
+  bool is_single_precision(object_ref const o)
+  {
+    if(o->type != object_type::real)
+    {
+      return false;
+    }
+    auto const real_obj(expect_object<obj::real>(o));
+    return real_obj->is_single_precision();
+  }
+
   bool is_ratio(object_ref const o)
   {
     return o->type == object_type::ratio;

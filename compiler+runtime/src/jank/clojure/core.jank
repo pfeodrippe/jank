@@ -144,7 +144,7 @@
        :doc "Coerce to float"}
   float
   (fn* real [o]
-    (cpp/jank.runtime.to_real o)))
+    (cpp/jank.runtime.to_float o)))
 
 ;; Sequences.
 (def ^{:arglists '([o])
@@ -4785,7 +4785,7 @@
 (defn double?
   "Return true if x is a Double"
   [x]
-  (float? x))
+  (cpp/jank.runtime.is_double x))
 
 ;;map stuff
 

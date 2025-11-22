@@ -1,11 +1,13 @@
 - [x] compile it to a standalone and check the nREPL server
   - [x] compile
+- [ ] convert native objects to some representation
 - [ ] use it to hotreload in SC
   - [x] dylib from SC
   - [x] ability to export symbol from jank
   - [x] ability to receive, return pointers
   - [-] test dynamic symbol
   - [ ] call my_multiplier
+    - [ ] create a way to read/parse plugin_interface, making it available into jank
 - [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
   - [x] get globals defined from cpp/raw
   - [x] list globals in nREPL

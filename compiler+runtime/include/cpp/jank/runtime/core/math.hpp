@@ -267,10 +267,13 @@ namespace jank::runtime
   i64 to_int(f64 l);
 
   f64 to_real(object_ref o);
+  object_ref to_float(object_ref o);
 
   bool is_number(object_ref o);
   bool is_integer(object_ref o);
   bool is_real(object_ref o);
+  bool is_double(object_ref o);
+  bool is_single_precision(object_ref o);
   bool is_ratio(object_ref o);
   bool is_boolean(object_ref o);
   bool is_nan(object_ref o);

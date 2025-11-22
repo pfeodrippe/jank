@@ -40,7 +40,7 @@ namespace jank::nrepl_server::asio
     }
     if(!info.has_value() && target_ns->name->name == "cpp")
     {
-      info = describe_cpp_function(target_ns, parts.name);
+      info = describe_cpp_entity(target_ns, parts.name);
     }
     if(!info.has_value())
     {
@@ -111,6 +111,14 @@ namespace jank::nrepl_server::asio
     }
 
     auto const type = [&]() {
+      if(info->is_cpp_constructor)
+      {
+        return std::string{ "native-constructor" };
+      }
+      if(info->is_cpp_type)
+      {
+        return std::string{ "native-type" };
+      }
       if(info->is_cpp_function)
       {
         return std::string{ "native-function" };

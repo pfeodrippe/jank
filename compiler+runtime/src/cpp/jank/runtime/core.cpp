@@ -297,6 +297,12 @@ namespace jank::runtime
       o);
   }
 
+  object_ref to_float(object_ref const o)
+  {
+    auto const value(static_cast<f32>(to_real(o)));
+    return make_box<obj::real>(static_cast<f64>(value), true);
+  }
+
   obj::persistent_string_ref subs(object_ref const s, object_ref const start)
   {
     return visit_type<obj::persistent_string>(
@@ -791,6 +797,88 @@ namespace jank::runtime
 
         vec.emplace_back(function_map);
       }
+    }
+
+    return make_box<obj::persistent_vector>(
+      runtime::detail::native_persistent_vector{ vec.begin(), vec.end() });
+  }
+
+  object_ref get_global_cpp_types()
+  {
+    auto const locked_types{ __rt_ctx->global_cpp_types.rlock() };
+    auto const name_kw(__rt_ctx->intern_keyword("name").expect_ok());
+    auto const type_kw(__rt_ctx->intern_keyword("type").expect_ok());
+    auto const fields_kw(__rt_ctx->intern_keyword("fields").expect_ok());
+    auto const kind_kw(__rt_ctx->intern_keyword("kind").expect_ok());
+    auto const qualified_kw(__rt_ctx->intern_keyword("qualified-name").expect_ok());
+    auto const constructors_kw(__rt_ctx->intern_keyword("constructors").expect_ok());
+    auto const args_kw(__rt_ctx->intern_keyword("args").expect_ok());
+
+    native_vector<object_ref> vec;
+    vec.reserve(locked_types->size());
+    for(auto const &[_, metadata] : *locked_types)
+    {
+      native_vector<object_ref> field_entries;
+      field_entries.reserve(metadata.fields.size());
+      for(auto const &field : metadata.fields)
+      {
+        auto field_map(obj::persistent_hash_map::empty());
+        field_map = field_map->assoc(name_kw, make_box<obj::persistent_string>(field.name));
+        field_map = field_map->assoc(type_kw, make_box<obj::persistent_string>(field.type));
+        field_entries.emplace_back(field_map);
+      }
+
+      auto const field_vector(make_box<obj::persistent_vector>(
+        runtime::detail::native_persistent_vector{ field_entries.begin(), field_entries.end() }));
+
+      auto type_map(obj::persistent_hash_map::empty());
+      type_map = type_map->assoc(name_kw, make_box<obj::persistent_string>(metadata.name));
+      type_map = type_map->assoc(qualified_kw,
+                                 make_box<obj::persistent_string>(metadata.qualified_cpp_name));
+
+      std::string kind_token;
+      switch(metadata.kind)
+      {
+        case context::cpp_record_kind::Class:
+          kind_token = "class";
+          break;
+        case context::cpp_record_kind::Union:
+          kind_token = "union";
+          break;
+        case context::cpp_record_kind::Struct:
+        default:
+          kind_token = "struct";
+          break;
+      }
+      auto const kind_string(
+        jtl::immutable_string{ kind_token.data(), static_cast<size_t>(kind_token.size()) });
+      type_map = type_map->assoc(kind_kw, make_box<obj::persistent_string>(kind_string));
+      type_map = type_map->assoc(fields_kw, field_vector);
+
+      native_vector<object_ref> ctor_entries;
+      ctor_entries.reserve(metadata.constructors.size());
+      for(auto const &ctor : metadata.constructors)
+      {
+        native_vector<object_ref> arg_entries;
+        arg_entries.reserve(ctor.arguments.size());
+        for(auto const &arg : ctor.arguments)
+        {
+          auto arg_map(obj::persistent_hash_map::empty());
+          arg_map = arg_map->assoc(name_kw, make_box<obj::persistent_string>(arg.name));
+          arg_map = arg_map->assoc(type_kw, make_box<obj::persistent_string>(arg.type));
+          arg_entries.emplace_back(arg_map);
+        }
+        auto const arg_vector(make_box<obj::persistent_vector>(
+          runtime::detail::native_persistent_vector{ arg_entries.begin(), arg_entries.end() }));
+        auto ctor_map(obj::persistent_hash_map::empty());
+        ctor_map = ctor_map->assoc(args_kw, arg_vector);
+        ctor_entries.emplace_back(ctor_map);
+      }
+      auto const ctor_vector(make_box<obj::persistent_vector>(
+        runtime::detail::native_persistent_vector{ ctor_entries.begin(), ctor_entries.end() }));
+      type_map = type_map->assoc(constructors_kw, ctor_vector);
+
+      vec.emplace_back(type_map);
     }
 
     return make_box<obj::persistent_vector>(

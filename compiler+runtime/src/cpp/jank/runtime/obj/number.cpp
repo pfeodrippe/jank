@@ -130,8 +130,9 @@ namespace jank::runtime::obj
   }
 
   /***** real *****/
-  real::real(f64 const d)
+  real::real(f64 const d, bool const single_precision)
     : data{ d }
+    , single_precision{ single_precision }
   {
   }
 
@@ -210,6 +211,11 @@ namespace jank::runtime::obj
   f64 real::to_real() const
   {
     return data;
+  }
+
+  bool real::is_single_precision() const
+  {
+    return single_precision;
   }
 }
 

@@ -3,6 +3,7 @@
 #include <ranges>
 
 #include <Interpreter/Compatibility.h>
+#include <clang/AST/DeclCXX.h>
 #include <clang/Interpreter/CppInterOp.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
@@ -39,6 +40,26 @@
 namespace jank::codegen
 {
   using namespace jank::analyze;
+
+  namespace
+  {
+    std::string normalize_cpp_entity_name(std::string qualified)
+    {
+      std::string normalized;
+      normalized.reserve(qualified.size());
+      for(size_t idx{}; idx < qualified.size(); ++idx)
+      {
+        if(qualified[idx] == ':' && idx + 1 < qualified.size() && qualified[idx + 1] == ':')
+        {
+          normalized.push_back('.');
+          ++idx;
+          continue;
+        }
+        normalized.push_back(qualified[idx]);
+      }
+      return normalized;
+    }
+  }
 
   struct deferred_init
   {
@@ -2216,8 +2237,10 @@ namespace jank::codegen
           continue;
         }
 
+        auto normalized_fn_name(normalize_cpp_entity_name(fn_name));
         runtime::context::cpp_function_metadata metadata;
-        metadata.name = jtl::immutable_string{ fn_name.data(), fn_name.size() };
+        metadata.name
+          = jtl::immutable_string{ normalized_fn_name.data(), normalized_fn_name.size() };
         auto const return_type_string(stringify_type(f.getReturnType()));
         metadata.return_type
           = jtl::immutable_string{ return_type_string.data(), return_type_string.size() };
@@ -2255,6 +2278,153 @@ namespace jank::codegen
         {
           *existing = std::move(metadata);
         }
+      }
+    }
+
+    std::vector<runtime::context::cpp_type_metadata> discovered_types;
+    auto const translation_unit{ parse_res->TUPart };
+    if(translation_unit != nullptr)
+    {
+      auto &compiler_instance{ *(__rt_ctx->jit_prc.interpreter->getCompilerInstance()) };
+      auto &source_manager{ compiler_instance.getSourceManager() };
+      auto &ast_context{ compiler_instance.getASTContext() };
+      clang::PrintingPolicy printing_policy{ ast_context.getPrintingPolicy() };
+      printing_policy.adjustForCPlusPlus();
+
+      auto const process_record = [&](clang::CXXRecordDecl const *record) -> void {
+        if(record == nullptr)
+        {
+          return;
+        }
+        if(!record->isCompleteDefinition() || record->isImplicit() || record->isLambda()
+           || record->isAnonymousStructOrUnion())
+        {
+          return;
+        }
+
+        auto loc(record->getBeginLoc());
+        if(!loc.isValid())
+        {
+          return;
+        }
+        loc = source_manager.getSpellingLoc(loc);
+        auto const file_name(source_manager.getFilename(loc));
+        auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+        llvm::errs() << "record " << record->getQualifiedNameAsString() << " in main? "
+                     << (in_main_file ? "yes" : "no") << " file " << file_name.str() << '\n';
+        // For cpp/raw expressions, code is parsed inline and may not be considered "main file"
+        // by Clang's source manager. We include records with empty filenames (inline code)
+        // and those in the main file, but exclude standard library and external headers.
+        if(!in_main_file && !file_name.empty())
+        {
+          return;
+        }
+
+        auto qualified_name(record->getQualifiedNameAsString());
+        if(qualified_name.empty())
+        {
+          return;
+        }
+        auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+        runtime::context::cpp_type_metadata metadata;
+        metadata.name = jtl::immutable_string{ normalized_name.data(), normalized_name.size() };
+        metadata.qualified_cpp_name
+          = jtl::immutable_string{ qualified_name.data(), qualified_name.size() };
+        if(record->isUnion())
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Union;
+        }
+        else if(record->isClass())
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Class;
+        }
+        else
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Struct;
+        }
+
+        for(auto const *field : record->fields())
+        {
+          if(field == nullptr)
+          {
+            continue;
+          }
+          auto field_name(field->getNameAsString());
+          if(field_name.empty())
+          {
+            continue;
+          }
+          auto const field_type_string(field->getType().getAsString(printing_policy));
+          runtime::context::cpp_type_field_metadata field_metadata;
+          field_metadata.name = jtl::immutable_string{ field_name.data(), field_name.size() };
+          field_metadata.type
+            = jtl::immutable_string{ field_type_string.data(), field_type_string.size() };
+          metadata.fields.emplace_back(std::move(field_metadata));
+        }
+
+        for(auto const *ctor : record->ctors())
+        {
+          if(ctor == nullptr || ctor->isDeleted() || ctor->isImplicit())
+          {
+            continue;
+          }
+          runtime::context::cpp_function_metadata ctor_metadata;
+          ctor_metadata.name = jtl::immutable_string{ "constructor" };
+          ctor_metadata.return_type = metadata.qualified_cpp_name;
+
+          for(auto const *param : ctor->parameters())
+          {
+            if(param == nullptr)
+            {
+              continue;
+            }
+            auto param_name(param->getNameAsString());
+            if(param_name.empty())
+            {
+              param_name = "arg" + std::to_string(metadata.constructors.size());
+            }
+            auto const param_type_string(param->getType().getAsString(printing_policy));
+            runtime::context::cpp_function_argument_metadata arg_metadata;
+            arg_metadata.name = jtl::immutable_string{ param_name.data(), param_name.size() };
+            arg_metadata.type
+              = jtl::immutable_string{ param_type_string.data(), param_type_string.size() };
+            ctor_metadata.arguments.emplace_back(std::move(arg_metadata));
+          }
+          metadata.constructors.emplace_back(std::move(ctor_metadata));
+        }
+
+        discovered_types.emplace_back(std::move(metadata));
+      };
+
+      std::vector<clang::DeclContext const *> contexts;
+      contexts.reserve(8);
+      contexts.emplace_back(translation_unit);
+      while(!contexts.empty())
+      {
+        auto const *ctx(contexts.back());
+        contexts.pop_back();
+        for(auto const *decl : ctx->decls())
+        {
+          if(auto const *record = llvm::dyn_cast<clang::CXXRecordDecl>(decl))
+          {
+            process_record(record);
+          }
+
+          if(auto const *inner_ctx = llvm::dyn_cast<clang::DeclContext>(decl))
+          {
+            contexts.emplace_back(inner_ctx);
+          }
+        }
+      }
+    }
+
+    if(!discovered_types.empty())
+    {
+      auto locked_types{ __rt_ctx->global_cpp_types.wlock() };
+      for(auto &metadata : discovered_types)
+      {
+        (*locked_types)[metadata.name] = std::move(metadata);
       }
     }
 

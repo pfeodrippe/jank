@@ -14,9 +14,22 @@ namespace jank::nrepl_server::asio
     completions.reserve(candidates.size());
     for(auto const &candidate : candidates)
     {
+      std::string type_label{ "var" };
+      if(query.target_ns->name->name == "cpp")
+      {
+        if(auto info = describe_cpp_entity(query.target_ns, candidate.symbol_name))
+        {
+          type_label = completion_type_for(info.value());
+        }
+        else
+        {
+          type_label = "function";
+        }
+      }
+
       bencode::value::dict entry;
       entry.emplace("candidate", candidate.display_name);
-      entry.emplace("type", std::string{ "var" });
+      entry.emplace("type", type_label);
       completions.emplace_back(std::move(entry));
     }
 

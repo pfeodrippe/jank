@@ -42,23 +42,15 @@ namespace jank::nrepl_server::asio
     {
       auto const symbol(make_box<obj::symbol>(make_immutable_string(candidate.symbol_name)));
       auto const var(query.target_ns->find_var(symbol));
-      if(var.is_nil())
+      std::optional<var_documentation> var_info;
+      if(!var.is_nil())
       {
-        if(query.target_ns->name->name == "cpp")
-        {
-          bencode::value::dict entry;
-          entry.emplace("candidate", candidate.display_name);
-          entry.emplace("type", "function");
-          if(include_ns_info)
-          {
-            entry.emplace("ns", "cpp");
-          }
-          completion_payloads.emplace_back(std::move(entry));
-        }
-        continue;
+        var_info = describe_var(query.target_ns, var, candidate.symbol_name);
       }
-
-      auto const var_info(describe_var(query.target_ns, var, candidate.symbol_name));
+      else if(query.target_ns->name->name == "cpp")
+      {
+        var_info = describe_cpp_entity(query.target_ns, candidate.symbol_name);
+      }
       if(!var_info.has_value())
       {
         continue;
@@ -66,7 +58,7 @@ namespace jank::nrepl_server::asio
 
       bencode::value::dict entry;
       entry.emplace("candidate", candidate.display_name);
-      entry.emplace("type", var_info->is_macro ? std::string{ "macro" } : std::string{ "var" });
+      entry.emplace("type", completion_type_for(var_info.value()));
       if(include_ns_info)
       {
         entry.emplace("ns", var_info->ns_name);

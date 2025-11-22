@@ -131,11 +131,35 @@ namespace jank::runtime
       jtl::option<jtl::immutable_string> origin;
     };
 
+    enum class cpp_record_kind
+    {
+      Struct,
+      Class,
+      Union
+    };
+
+    struct cpp_type_field_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string type;
+    };
+
+    struct cpp_type_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string qualified_cpp_name;
+      cpp_record_kind kind{ cpp_record_kind::Struct };
+      native_vector<cpp_type_field_metadata> fields;
+      native_vector<cpp_function_metadata> constructors;
+    };
+
     folly::Synchronized<native_unordered_map<obj::symbol_ref, ns_ref>> namespaces;
     folly::Synchronized<native_unordered_map<jtl::immutable_string, obj::keyword_ref>> keywords;
     folly::Synchronized<
       native_unordered_map<jtl::immutable_string, native_vector<cpp_function_metadata>>>
       global_cpp_functions;
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_type_metadata>>
+      global_cpp_types;
 
     struct binding_scope
     {

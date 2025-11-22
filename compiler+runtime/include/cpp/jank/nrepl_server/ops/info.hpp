@@ -38,7 +38,7 @@ namespace jank::nrepl_server::asio
     }
     if(!info.has_value() && target_ns->name->name == "cpp")
     {
-      info = describe_cpp_function(target_ns, parts.name);
+      info = describe_cpp_entity(target_ns, parts.name);
     }
     if(!info.has_value())
     {
@@ -46,6 +46,14 @@ namespace jank::nrepl_server::asio
     }
 
     auto const type = [&]() {
+      if(info->is_cpp_constructor)
+      {
+        return std::string{ "native-constructor" };
+      }
+      if(info->is_cpp_type)
+      {
+        return std::string{ "native-type" };
+      }
       if(info->is_cpp_function)
       {
         return std::string{ "native-function" };
@@ -136,6 +144,19 @@ namespace jank::nrepl_server::asio
     if(info->is_cpp_function && !info->cpp_signatures.empty())
     {
       payload.emplace("cpp-signatures", bencode::value{ serialize_cpp_signatures(info.value()) });
+    }
+    if(!info->cpp_fields.empty())
+    {
+      bencode::value::list fields;
+      fields.reserve(info->cpp_fields.size());
+      for(auto const &field : info->cpp_fields)
+      {
+        bencode::value::dict field_entry;
+        field_entry.emplace("name", field.name);
+        field_entry.emplace("type", field.type);
+        fields.emplace_back(std::move(field_entry));
+      }
+      payload.emplace("cpp-fields", bencode::value{ std::move(fields) });
     }
     payload.emplace("status", bencode::list_of_strings({ "done" }));
     return { std::move(payload) };
