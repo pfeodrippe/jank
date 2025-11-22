@@ -1712,7 +1712,7 @@ namespace jank::nrepl_server::asio
         signature.arguments.reserve(metadata.arguments.size());
 
         std::string rendered_signature{ "[" };
-        bool first_token{ true };
+        bool first_arg{ true };
         for(auto const &argument : metadata.arguments)
         {
           var_documentation::cpp_argument arg_doc;
@@ -1720,17 +1720,20 @@ namespace jank::nrepl_server::asio
           arg_doc.type = to_std_string(argument.type);
           signature.arguments.emplace_back(arg_doc);
 
-          if(!first_token)
+          if(!first_arg)
           {
             rendered_signature.push_back(' ');
           }
+          // Wrap each argument in its own vector
+          rendered_signature.push_back('[');
           rendered_signature += arg_doc.type;
           if(!arg_doc.name.empty())
           {
             rendered_signature.push_back(' ');
             rendered_signature += arg_doc.name;
           }
-          first_token = false;
+          rendered_signature.push_back(']');
+          first_arg = false;
         }
         rendered_signature.push_back(']');
         info.arglists.emplace_back(std::move(rendered_signature));
@@ -1821,6 +1824,8 @@ namespace jank::nrepl_server::asio
             {
               signature.push_back(' ');
             }
+            // Wrap each argument in its own vector
+            signature.push_back('[');
             signature += to_std_string(ctor.arguments[idx].type);
             auto const arg_name(to_std_string(ctor.arguments[idx].name));
             if(!arg_name.empty())
@@ -1828,6 +1833,7 @@ namespace jank::nrepl_server::asio
               signature.push_back(' ');
               signature += arg_name;
             }
+            signature.push_back(']');
           }
           signature.push_back(']');
           info.arglists.emplace_back(signature);
@@ -1857,6 +1863,8 @@ namespace jank::nrepl_server::asio
           {
             signature.push_back(' ');
           }
+          // Wrap each field in its own vector
+          signature.push_back('[');
           signature += to_std_string(it->second.fields[idx].type);
           auto const field_name(to_std_string(it->second.fields[idx].name));
           if(!field_name.empty())
@@ -1864,6 +1872,7 @@ namespace jank::nrepl_server::asio
             signature.push_back(' ');
             signature += field_name;
           }
+          signature.push_back(']');
         }
         signature.push_back(']');
         info.arglists.emplace_back(signature);

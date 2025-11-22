@@ -793,6 +793,9 @@ namespace jank::nrepl_server::asio
       auto const &arglists(payload.at("arglists").as_list());
       REQUIRE(arglists.size() == 1);
       auto const &signature(arglists.front().as_string());
+      // Should be [[i32 lhs] [i32 rhs]] format
+      CHECK(signature.find("[[") != std::string::npos);
+      CHECK(signature.find("]]") != std::string::npos);
       CHECK(signature.find("i32") != std::string::npos);
       CHECK(signature.find('[') == 0);
       CHECK(signature.back() == ']');
@@ -819,6 +822,44 @@ namespace jank::nrepl_server::asio
 
       CHECK(payload.at("docstring").as_string() == "i32");
       CHECK(payload.at("doc").as_string() == payload.at("docstring").as_string());
+    }
+
+    TEST_CASE("info returns cpp type with fields in docstring")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                                             "eval" },
+        { "code", "(cpp/raw \"struct cpp_info_struct { int field_a; double field_b; }; cpp_info_struct make_struct() { return {}; }\")" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {  "op",                  "info" },
+        { "sym", "cpp/cpp_info_struct" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      CHECK(payload.at("name").as_string() == "cpp_info_struct");
+      CHECK(payload.at("ns").as_string() == "cpp");
+      CHECK(payload.at("type").as_string() == "native-type");
+
+      // Check that cpp-fields are present
+      auto const fields_it(payload.find("cpp-fields"));
+      REQUIRE(fields_it != payload.end());
+      auto const &fields(fields_it->second.as_list());
+      REQUIRE(fields.size() == 2);
+
+      // Check docstring includes fields
+      auto const doc_it(payload.find("docstring"));
+      REQUIRE(doc_it != payload.end());
+      auto const &docstring(doc_it->second.as_string());
+      CHECK(docstring.find("Fields:") != std::string::npos);
+      CHECK(docstring.find("field_a") != std::string::npos);
+      CHECK(docstring.find("int") != std::string::npos);
+      CHECK(docstring.find("field_b") != std::string::npos);
+      CHECK(docstring.find("double") != std::string::npos);
+
+      auto const statuses(extract_status(payload));
+      CHECK(std::ranges::find(statuses, "done") != statuses.end());
     }
 
     TEST_CASE("eldoc returns function signatures")
@@ -916,10 +957,10 @@ namespace jank::nrepl_server::asio
       REQUIRE(eldoc.size() == 1);
       auto const &tokens(eldoc.front().as_list());
       REQUIRE(tokens.size() == 4);
-      CHECK(tokens.front().as_string() == "double");
+      CHECK(tokens.front().as_string() == "[double");
       auto const first_token(tokens.at(1).as_string());
       CHECK((first_token == "value" || first_token.rfind("arg", 0) == 0));
-      CHECK(tokens.at(2).as_string() == "double");
+      CHECK(tokens.at(2).as_string() == "[double");
       auto const second_token(tokens.at(3).as_string());
       CHECK((second_token == "factor" || second_token.rfind("arg", 0) == 0));
 

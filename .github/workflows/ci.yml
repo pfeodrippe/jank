@@ -194,6 +194,14 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install cmake ninja double-conversion pkg-config llvm ccache boost openssl zlib doctest boost clojure/tools/clojure
+      - name: Debug - check build-clang file
+        run: |
+          echo "PWD: $(pwd)"
+          echo "github.workspace: ${{ github.workspace }}"
+          echo "File path: ${{ github.workspace }}/compiler+runtime/bin/build-clang"
+          ls -la "${{ github.workspace }}/compiler+runtime/bin/build-clang" || echo "File not found"
+          echo "Contents of compiler+runtime/bin:"
+          ls -la compiler+runtime/bin/ || true
       - name: Cache Clang/LLVM
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:

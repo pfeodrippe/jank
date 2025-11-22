@@ -72,7 +72,7 @@ namespace jank::nrepl_server::asio
 
     auto const build_docstring
       = [](var_documentation const &metadata) -> std::optional<std::string> {
-      if(!metadata.return_type.has_value() && !metadata.doc.has_value())
+      if(!metadata.return_type.has_value() && !metadata.doc.has_value() && metadata.cpp_fields.empty())
       {
         return std::nullopt;
       }
@@ -90,6 +90,29 @@ namespace jank::nrepl_server::asio
         }
         rendered += metadata.doc.value();
       }
+      
+      // Append available fields with their types
+      if(!metadata.cpp_fields.empty())
+      {
+        if(!rendered.empty())
+        {
+          rendered.append("\n\nFields:");
+        }
+        else
+        {
+          rendered.append("Fields:");
+        }
+        
+        for(auto const &field : metadata.cpp_fields)
+        {
+          rendered.append("\n  ");
+          rendered.append(field.name);
+          rendered.append(" (");
+          rendered.append(field.type);
+          rendered.push_back(')');
+        }
+      }
+      
       if(rendered.empty())
       {
         return std::nullopt;
