@@ -3690,27 +3690,8 @@ namespace jank::analyze
 
     auto const string_obj(l->data.rest().first().unwrap());
 
-    /* Only apply guards if the argument is a string literal */
-    runtime::object_ref guarded_string_obj{ string_obj };
-    if(string_obj->type == runtime::object_type::persistent_string)
-    {
-      auto const raw_string{ expect_object<runtime::obj::persistent_string>(string_obj)->data };
-      auto const content_hash{ std::hash<jtl::immutable_string>{}(raw_string) };
-      auto const guard_name{ util::format("CPP_RAW_INLINE_{}_DECLARED", content_hash) };
-      auto const guarded_code{ util::format("#ifndef {}\n"
-                                            "#define {}\n"
-                                            "\n"
-                                            "{}"
-                                            "\n"
-                                            "#endif\n",
-                                            guard_name,
-                                            guard_name,
-                                            raw_string) };
-      guarded_string_obj = make_box<runtime::obj::persistent_string>(guarded_code);
-    }
-
     auto const string_expr_res(
-      analyze(guarded_string_obj, current_frame, expression_position::value, fn_ctx, false));
+      analyze(string_obj, current_frame, expression_position::value, fn_ctx, false));
     if(string_expr_res.is_err())
     {
       return string_expr_res.expect_err();
