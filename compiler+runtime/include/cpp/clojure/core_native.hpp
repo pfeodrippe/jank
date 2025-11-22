@@ -34,6 +34,11 @@ namespace clojure::core_native
   object_ref refer(object_ref current_ns, object_ref sym, object_ref var);
   object_ref load_module(object_ref path);
   object_ref compile(object_ref path);
+  object_ref register_native_header(object_ref current_ns,
+                                    object_ref alias,
+                                    object_ref header,
+                                    object_ref scope,
+                                    object_ref include_directive);
 
   object_ref not_(object_ref o);
 

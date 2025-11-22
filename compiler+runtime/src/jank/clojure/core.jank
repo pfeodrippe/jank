@@ -4184,6 +4184,88 @@
            (or (nil? (second x))
                (keyword? (second x))))))
 
+(defn- throw-if [pred msg]
+  (when pred
+    (throw (ex-info :assertion-failure {:msg msg}))))
+
+(defn- native-header-libspec?
+  "True when the libspec refers to a native C++ header."
+  [x]
+  (and (vector? x)
+       (string? (first x))))
+
+(defn- drop-extension [s]
+  (loop* [idx (dec (count s))]
+    (cond
+      (neg? idx) s
+      (= (nth s idx) \.) (subs s 0 idx)
+      :else (recur (dec idx)))))
+
+(defn- path->cpp-scope [path]
+  (let [base (drop-extension path)
+        ; Replace path separators with dotted scope segments.
+        scope (apply str (map (fn [ch]
+                                (if (= ch \/) \.
+                                    ch))
+                              base))]
+    (throw-if (empty? scope)
+              (str "Cannot derive native scope from header path: " path))
+    scope))
+
+(defn- ensure-string [value field]
+  (cond
+    (string? value) value
+    (symbol? value) (name value)
+    (nil? value) nil
+    :else (throw (ex-info :invalid-native-libspec
+                          {:msg (str "Expected " field " to be string or symbol, got "
+                                     (type value))}))))
+
+(defn- format-include-arg [header include]
+  (let [explicit (ensure-string include :include)
+        candidate (str (or explicit header))
+        trimmed candidate]
+    (if (and (> (count trimmed) 1)
+             (let [first-ch (first trimmed)
+                   last-ch (last trimmed)]
+               (or (and (= first-ch \<) (= last-ch \>))
+                   (and (= first-ch \") (= last-ch \")))))
+      trimmed
+      (str "<" candidate ">"))))
+
+(defn- normalize-native-libspec [spec]
+  (let [header (first spec)
+        _ (throw-if (not (string? header))
+                    (str "Native header libspec must begin with a string path, got "
+                         (type header)))
+        option-data (rest spec)
+        _ (throw-if (odd? (count option-data))
+                    "Native header libspec options must be key/value pairs")
+        opts (apply hash-map option-data)
+        supported #{:as :scope :include}
+        unsupported (seq (remove supported (keys opts)))
+        _ (throw-if unsupported
+                    (str "Unsupported native header option(s): " unsupported))
+        alias (:as opts)
+        _ (throw-if (not (symbol? alias))
+                    "Native header libspec requires :as with a symbol alias")
+        scope (or (ensure-string (:scope opts) :scope)
+                  (path->cpp-scope header))
+        include (format-include-arg header (:include opts))]
+    {:alias alias
+     :header header
+     :scope scope
+     :include include}))
+
+(defn- register-native-header! [spec]
+  (let [{:keys [alias header scope include]} (normalize-native-libspec spec)]
+    (cpp/clojure.core_native.register_native_header
+      *ns*
+      alias
+      header
+      scope
+      include)))
+
 (defn- prependss [x coll]
   (if (symbol? x)
     (cons x coll)
@@ -4191,10 +4273,6 @@
 
 (defn- root-resource [lib]
   (str "/" (name lib)))
-
-(defn- throw-if [pred msg]
-  (when pred
-    (throw (ex-info :assertion-failure {:msg msg}))))
 
 (defn alias
   "Add an alias in the current namespace to another
@@ -4353,8 +4431,11 @@
                 (str "Unsupported option(s) supplied: " unsupported)))
     (throw-if (not (seq args)) "Nothing specified to load")
     (doseq [arg args]
-      (throw-if (not (libspec? arg)) (str "not a libspec: " arg))
-      (apply load-lib (prependss arg opts)))))
+      (if (native-header-libspec? arg)
+        (register-native-header! arg)
+        (do
+          (throw-if (not (libspec? arg)) (str "not a libspec: " arg))
+          (apply load-lib (prependss arg opts)))))))
 
 (defn compile
   "Compiles the namespace named by the symbol lib into a set of

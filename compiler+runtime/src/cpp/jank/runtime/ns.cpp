@@ -167,6 +167,58 @@ namespace jank::runtime
     return {};
   }
 
+  jtl::result<bool, jtl::immutable_string>
+  ns::add_native_alias(obj::symbol_ref const sym, native_alias alias)
+  {
+    auto locked_native_aliases(native_aliases.wlock());
+    auto const found(locked_native_aliases->find(sym));
+    if(found != locked_native_aliases->end())
+    {
+      auto const &existing(found->second);
+      if(existing.header != alias.header || existing.scope != alias.scope
+         || existing.include_directive != alias.include_directive)
+      {
+        return err(util::format(
+          "{} already bound to native header '{}' in ns {}",
+          sym->to_string(),
+          existing.header,
+          to_string()));
+      }
+      return ok(false);
+    }
+    locked_native_aliases->emplace(sym, std::move(alias));
+    return ok(true);
+  }
+
+  void ns::remove_native_alias(obj::symbol_ref const sym)
+  {
+    auto locked_native_aliases(native_aliases.wlock());
+    locked_native_aliases->erase(sym);
+  }
+
+  jtl::option<ns::native_alias> ns::find_native_alias(obj::symbol_ref const sym) const
+  {
+    auto locked_native_aliases(native_aliases.rlock());
+    auto const found(locked_native_aliases->find(sym));
+    if(found != locked_native_aliases->end())
+    {
+      return found->second;
+    }
+    return none;
+  }
+
+  native_vector<ns::native_alias> ns::native_aliases_snapshot() const
+  {
+    native_vector<native_alias> ret;
+    auto locked_native_aliases(native_aliases.rlock());
+    ret.reserve(locked_native_aliases->size());
+    for(auto const &entry : *locked_native_aliases)
+    {
+      ret.emplace_back(entry.second);
+    }
+    return ret;
+  }
+
   jtl::result<void, jtl::immutable_string> ns::refer(obj::symbol_ref const sym, var_ref const var)
   {
     auto const clojure_core(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core")));

@@ -424,6 +424,28 @@ namespace jank::codegen
     , struct_name{ root_fn->unique_name }
   {
     assert(root_fn->frame.data);
+    emit_native_header_includes();
+  }
+
+  void processor::emit_native_header_includes()
+  {
+    auto const ns_sym(make_box<runtime::obj::symbol>(module));
+    auto const ns(runtime::__rt_ctx->find_ns(ns_sym));
+    if(ns.is_nil())
+    {
+      return;
+    }
+
+    native_set<jtl::immutable_string> emitted;
+    for(auto const &alias : ns->native_aliases_snapshot())
+    {
+      if(emitted.contains(alias.include_directive))
+      {
+        continue;
+      }
+      emitted.emplace(alias.include_directive);
+      util::format_to(deps_buffer, "#include {}\n", alias.include_directive);
+    }
   }
 
   jtl::option<handle> processor::gen(analyze::expression_ref const ex,

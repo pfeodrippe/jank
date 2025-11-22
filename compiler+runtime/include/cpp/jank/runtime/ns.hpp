@@ -2,7 +2,10 @@
 
 #include <folly/Synchronized.h>
 
+#include <jtl/option.hpp>
+
 #include <jank/runtime/var.hpp>
+#include <jank/type.hpp>
 
 namespace jank::runtime
 {
@@ -34,6 +37,19 @@ namespace jank::runtime
     void remove_alias(obj::symbol_ref sym);
     ns_ref find_alias(obj::symbol_ref sym) const;
 
+    struct native_alias
+    {
+      jtl::immutable_string header;
+      jtl::immutable_string include_directive;
+      jtl::immutable_string scope;
+    };
+
+    jtl::result<bool, jtl::immutable_string>
+    add_native_alias(obj::symbol_ref sym, native_alias alias);
+    void remove_native_alias(obj::symbol_ref sym);
+    jtl::option<native_alias> find_native_alias(obj::symbol_ref sym) const;
+    native_vector<native_alias> native_aliases_snapshot() const;
+
     jtl::result<void, jtl::immutable_string> refer(obj::symbol_ref sym, var_ref var);
 
     obj::persistent_hash_map_ref get_mappings() const;
@@ -52,6 +68,7 @@ namespace jank::runtime
     /* TODO: Benchmark the use of atomics here. That's what Clojure uses. */
     folly::Synchronized<obj::persistent_hash_map_ref> vars;
     folly::Synchronized<obj::persistent_hash_map_ref> aliases;
+    folly::Synchronized<native_unordered_map<obj::symbol_ref, native_alias>> native_aliases;
 
     std::atomic_uint64_t symbol_counter{};
   };

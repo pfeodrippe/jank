@@ -1527,6 +1527,28 @@ namespace jank::analyze
                             jtl::option<expr::function_context_ref> const &fc,
                             bool needs_box)
   {
+    if(!sym->ns.empty() && sym->ns != "cpp")
+    {
+      auto const alias_sym(make_box<runtime::obj::symbol>(sym->ns));
+      auto const native_alias(runtime::__rt_ctx->current_ns()->find_native_alias(alias_sym));
+      if(native_alias.is_some())
+      {
+        auto const alias_info(native_alias.unwrap());
+        native_transient_string scoped(alias_info.scope.data(), alias_info.scope.size());
+        if(!sym->name.empty())
+        {
+          if(sym->name[0] != '.')
+          {
+            scoped.push_back('.');
+          }
+          scoped.append(sym->name.data(), sym->name.size());
+        }
+        auto const cpp_sym(make_box<runtime::obj::symbol>("cpp", scoped));
+        cpp_sym->meta = sym->meta;
+        return analyze_cpp_symbol(cpp_sym, current_frame, position, fc, needs_box);
+      }
+    }
+
     if(sym->ns == "cpp" && sym->name != "raw")
     {
       return analyze_cpp_symbol(sym, current_frame, position, fc, needs_box);

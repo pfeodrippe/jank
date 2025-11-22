@@ -277,6 +277,33 @@ namespace clojure::core_native
     return jank_nil;
   }
 
+  object_ref register_native_header(object_ref const current_ns,
+                                    object_ref const alias,
+                                    object_ref const header,
+                                    object_ref const scope,
+                                    object_ref const include_directive)
+  {
+    auto const ns_obj(try_object<ns>(current_ns));
+    runtime::ns::native_alias alias_data{
+      runtime::to_string(header),
+      runtime::to_string(include_directive),
+      runtime::to_string(scope)
+    };
+    auto const include_arg(alias_data.include_directive);
+    auto const added(ns_obj->add_native_alias(try_object<obj::symbol>(alias), std::move(alias_data))
+                       .expect_ok());
+    if(added)
+    {
+      auto const include_code{ util::format("#include {}\n", include_arg) };
+      auto const res{ __rt_ctx->eval_cpp_string(include_code) };
+      if(res.is_err())
+      {
+        throw res.expect_err();
+      }
+    }
+    return jank_nil;
+  }
+
   object_ref eval(object_ref const expr)
   {
     return __rt_ctx->eval(expr);
@@ -532,6 +559,7 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
   intern_fn("refer", &core_native::refer);
   intern_fn("load-module", &core_native::load_module);
   intern_fn("compile", &core_native::compile);
+  intern_fn("register-native-header", &core_native::register_native_header);
   intern_fn("eval", &core_native::eval);
   intern_fn("hash-unordered-coll", &core_native::hash_unordered);
   intern_fn("read-string", &core_native::read_string);

@@ -172,6 +172,7 @@ namespace jank::codegen
     jtl::immutable_string expression_str(bool box_needed);
 
     jtl::immutable_string module_init_str(jtl::immutable_string const &module);
+    void emit_native_header_includes();
 
     void format_elided_var(jtl::immutable_string const &start,
                            jtl::immutable_string const &end,

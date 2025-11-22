@@ -1,0 +1,5 @@
+(require '["clojure/string_native.hpp" :as str-native])
+
+(if (= "cba" (str-native/reverse "abc"))
+  :success
+  :failure)
