@@ -4291,11 +4291,19 @@
         unsupported (seq (remove supported (keys opts)))
         _ (throw-if unsupported
                     (str "Unsupported native header option(s): " unsupported))
-        alias (:as opts)
-        _ (throw-if (not (symbol? alias))
-                    "Native header libspec requires :as with a symbol alias")
+        alias-opt (:as opts)
+        refer-opt (:refer opts)
+        _ (throw-if (and alias-opt (not (symbol? alias-opt)))
+                    "Native header libspec :as requires a symbol alias")
+        _ (throw-if (and (not alias-opt) (not refer-opt))
+                    "Native header libspec requires at least one of :as or :refer")
+        ;; If no :as is provided but :refer is, generate a deterministic internal alias
+        ;; based on the header name so that multiple requires of the same header work
+        alias (or alias-opt
+                  (when refer-opt
+                    (symbol (str "native-header-" header))))
         rename (normalize-native-rename (:rename opts))
-        refers (normalize-native-refers (:refer opts) rename)
+        refers (normalize-native-refers refer-opt rename)
         scope (or (ensure-string (:scope opts) :scope)
                   (path->cpp-scope header))
         include (format-include-arg header (:include opts))]

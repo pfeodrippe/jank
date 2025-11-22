@@ -227,13 +227,20 @@ namespace jank::runtime
     if(found != locked_native_refers->end())
     {
       auto const &existing(found->second);
-      if(existing.alias != alias_sym || existing.member != member)
+      // Use value comparison for symbols instead of pointer comparison
+      // If the member is different, throw an error
+      if(!existing.member->equal(*member))
       {
         return err(util::format("{} already refers to native member '{}.{}' in ns {}",
                                 sym->to_string(),
                                 existing.alias->to_string(),
                                 existing.member->to_string(),
                                 to_string()));
+      }
+      // If member is the same but alias is different, update to use the new alias
+      if(!existing.alias->equal(*alias_sym))
+      {
+        locked_native_refers->at(sym) = native_refer{ alias_sym, member };
       }
       return ok();
     }
