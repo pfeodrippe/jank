@@ -621,7 +621,7 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
       eng.handle(make_message({
-        {   "op",                       "eval"                 },
+        {   "op",                        "eval"                },
         { "code",
          "(cpp/raw \"namespace eita::cpp::constructor::complex::pass_argument { struct foo { "
          "foo(int v) : a{ v }, b{ v } {} int a{}, b{}; }; }\")" }

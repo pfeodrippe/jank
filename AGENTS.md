@@ -14,6 +14,7 @@
 ### Test
 - `./bin/test`
 - `lein jank run 5555`
+- `cd test/bash/clojure-test-suite && PATH="/Users/pfeodrippe/dev/jank/compiler+runtime/build:$PATH" ./pass-test; cd -`
 
 ### Diagnostics & Investigation
 - `otool -L /Users/pfeodrippe/dev/jank/compiler+runtime/build/jank | head`

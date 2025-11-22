@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <list>
 
 #include <folly/Synchronized.h>
@@ -131,7 +132,7 @@ namespace jank::runtime
       jtl::option<jtl::immutable_string> origin;
     };
 
-    enum class cpp_record_kind
+    enum class cpp_record_kind : std::uint8_t
     {
       Struct,
       Class,
