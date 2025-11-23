@@ -44,11 +44,35 @@ namespace jank::nrepl_server::asio
     // If we have a native alias, skip the regular var lookup and go straight to native header lookup
     if(!requested_native_alias.has_value())
     {
-      auto const var(target_ns->find_var(symbol));
-      if(!var.is_nil())
+      // Check if this unqualified symbol is a native refer BEFORE checking for regular vars
+      // This ensures native header documentation is prioritized
+      if(parts.ns.empty())
       {
-        info = describe_var(target_ns, var, parts.name);
+        auto const native_refer = target_ns->find_native_refer(symbol);
+        if(native_refer.is_some())
+        {
+          auto const &refer_info = native_refer.unwrap();
+          // Get the alias to look up the native header info
+          auto const alias_name = to_std_string(refer_info.alias->name);
+          auto const native_alias_opt = target_ns->find_native_alias(refer_info.alias);
+          if(native_alias_opt.is_some())
+          {
+            info = describe_native_header_function(alias_name,
+                                                   native_alias_opt.unwrap(),
+                                                   to_std_string(refer_info.member->name));
+          }
+        }
       }
+
+      if(!info.has_value())
+      {
+        auto const var(target_ns->find_var(symbol));
+        if(!var.is_nil())
+        {
+          info = describe_var(target_ns, var, parts.name);
+        }
+      }
+
       if(!info.has_value() && target_ns->name->name == "cpp")
       {
         info = describe_cpp_entity(target_ns, parts.name);

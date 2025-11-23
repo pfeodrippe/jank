@@ -47,21 +47,39 @@ namespace jank::nrepl_server::asio
       auto const symbol(make_box<obj::symbol>(make_immutable_string(candidate.symbol_name)));
       auto const var(query.target_ns->find_var(symbol));
       std::optional<var_documentation> var_info;
-      if(prefer_native_header)
+
+      // Check if this symbol is a native refer (unqualified symbol referring to a native header function)
+      if(!var_info.has_value() && !query.qualifier.has_value())
+      {
+        auto const native_refer = query.target_ns->find_native_refer(symbol);
+        if(native_refer.is_some())
+        {
+          auto const &refer_info = native_refer.unwrap();
+          // Get the alias name to look up in the native header index
+          auto const alias_name = to_std_string(refer_info.alias->name);
+          var_info = describe_native_header_function(
+            alias_name,
+            query.target_ns->find_native_alias(refer_info.alias).unwrap(),
+            to_std_string(refer_info.member->name));
+        }
+      }
+
+      if(!var_info.has_value() && prefer_native_header)
       {
         var_info = describe_native_header_function(query.qualifier.value(),
                                                    query.native_alias.value(),
                                                    candidate.symbol_name);
       }
-      else if(!var.is_nil())
+      else if(!var_info.has_value() && !var.is_nil())
       {
         var_info = describe_var(query.target_ns, var, candidate.symbol_name);
       }
-      else if(query.target_ns->name->name == "cpp")
+      else if(!var_info.has_value() && query.target_ns->name->name == "cpp")
       {
         var_info = describe_cpp_entity(query.target_ns, candidate.symbol_name);
       }
-      else if(query.native_alias.has_value() && query.qualifier.has_value())
+      else if(!var_info.has_value() && query.native_alias.has_value()
+              && query.qualifier.has_value())
       {
         var_info = describe_native_header_function(query.qualifier.value(),
                                                    query.native_alias.value(),

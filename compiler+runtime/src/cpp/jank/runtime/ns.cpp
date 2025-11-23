@@ -265,6 +265,12 @@ namespace jank::runtime
     return none;
   }
 
+  native_unordered_map<obj::symbol_ref, ns::native_refer> ns::native_refers_snapshot() const
+  {
+    auto locked_native_refers(native_refers.rlock());
+    return *locked_native_refers;
+  }
+
   jtl::result<void, jtl::immutable_string> ns::refer(obj::symbol_ref const sym, var_ref const var)
   {
     auto const clojure_core(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core")));

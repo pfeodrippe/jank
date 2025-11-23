@@ -60,6 +60,7 @@ namespace jank::runtime
     add_native_refer(obj::symbol_ref sym, obj::symbol_ref alias, obj::symbol_ref member);
     void remove_native_refer(obj::symbol_ref sym);
     jtl::option<native_refer> find_native_refer(obj::symbol_ref sym) const;
+    native_unordered_map<obj::symbol_ref, native_refer> native_refers_snapshot() const;
 
     jtl::result<void, jtl::immutable_string> refer(obj::symbol_ref sym, var_ref var);
 

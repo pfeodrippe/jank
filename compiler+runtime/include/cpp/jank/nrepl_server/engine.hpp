@@ -1495,6 +1495,21 @@ namespace jank::nrepl_server::asio
         }
       }
 
+      // When there's no qualifier, also check native refers in the target namespace
+      if(!query.qualifier.has_value())
+      {
+        auto const native_refers = target_ns->native_refers_snapshot();
+        for(auto const &[sym, refer_info] : native_refers)
+        {
+          auto const candidate_name(to_std_string(sym->name));
+          if(!prefix.empty() && !starts_with(candidate_name, prefix))
+          {
+            continue;
+          }
+          matches.push_back(candidate_name);
+        }
+      }
+
       if(target_ns->name->name == "cpp")
       {
         auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };

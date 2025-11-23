@@ -822,6 +822,134 @@ namespace jank::nrepl_server::asio
       CHECK(first_param.find("s") != std::string::npos);
     }
 
+    TEST_CASE("complete and eldoc work with native header :refer")
+    {
+      engine eng;
+      // Require native header with both :as and :refer
+      eng.handle(make_message({
+        {   "op","eval"                 },
+        { "code",
+         "(require '[\"clojure/string_native.hpp\" :as str-native :refer [reverse "
+         "starts_with]])" }
+      }));
+
+      // Test 1: completion for unqualified :refer symbol
+      auto complete_responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",    "rever" },
+        {     "ns",     "user" }
+      })));
+
+      REQUIRE(complete_responses.size() == 1);
+      auto const &complete_payload(complete_responses.front());
+      auto const &completions(complete_payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+
+      bool found_reverse{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "reverse")
+        {
+          found_reverse = true;
+          CHECK(dict.at("type").as_string() == "function");
+          CHECK(dict.at("ns").as_string() == "str-native");
+
+          // Check that arglists are present
+          auto const arglists_it(dict.find("arglists"));
+          REQUIRE(arglists_it != dict.end());
+          auto const &arglists(arglists_it->second.as_list());
+          REQUIRE_FALSE(arglists.empty());
+          break;
+        }
+      }
+      CHECK(found_reverse);
+
+      // Test 2: eldoc for unqualified :refer symbol
+      auto eldoc_responses(eng.handle(make_message({
+        {  "op",   "eldoc" },
+        { "sym", "reverse" },
+        {  "ns",    "user" }
+      })));
+
+      REQUIRE(eldoc_responses.size() == 1);
+      auto const &eldoc_payload(eldoc_responses.front());
+      CHECK(eldoc_payload.at("name").as_string() == "reverse");
+      CHECK(eldoc_payload.at("ns").as_string() == "str-native");
+      // Native functions show as "native-function" type
+      auto const &type_str = eldoc_payload.at("type").as_string();
+      CHECK((type_str == "function" || type_str == "native-function"));
+
+      auto const eldoc_it(eldoc_payload.find("eldoc"));
+      REQUIRE(eldoc_it != eldoc_payload.end());
+      auto const &eldoc_list(eldoc_it->second.as_list());
+      REQUIRE_FALSE(eldoc_list.empty());
+      auto const &param_list(eldoc_list.front().as_list());
+      REQUIRE(param_list.size() >= 1);
+
+      // Test 3: completion for another :refer symbol with prefix
+      auto starts_complete_responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix", "starts_w" },
+        {     "ns",     "user" }
+      })));
+
+      REQUIRE(starts_complete_responses.size() == 1);
+      auto const &starts_complete_payload(starts_complete_responses.front());
+      auto const &starts_completions(starts_complete_payload.at("completions").as_list());
+      REQUIRE_FALSE(starts_completions.empty());
+
+      bool found_starts_with{ false };
+      for(auto const &entry : starts_completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "starts_with")
+        {
+          found_starts_with = true;
+          CHECK(dict.at("type").as_string() == "function");
+          CHECK(dict.at("ns").as_string() == "str-native");
+          break;
+        }
+      }
+      CHECK(found_starts_with);
+
+      // Test 4: eldoc for starts_with
+      auto starts_eldoc_responses(eng.handle(make_message({
+        {  "op",       "eldoc" },
+        { "sym", "starts_with" },
+        {  "ns",        "user" }
+      })));
+
+      REQUIRE(starts_eldoc_responses.size() == 1);
+      auto const &starts_eldoc_payload(starts_eldoc_responses.front());
+      CHECK(starts_eldoc_payload.at("name").as_string() == "starts_with");
+      CHECK(starts_eldoc_payload.at("ns").as_string() == "str-native");
+      // Native functions show as "native-function" type
+      auto const &starts_type_str = starts_eldoc_payload.at("type").as_string();
+      CHECK((starts_type_str == "function" || starts_type_str == "native-function"));
+
+      auto const starts_eldoc_it(starts_eldoc_payload.find("eldoc"));
+      REQUIRE(starts_eldoc_it != starts_eldoc_payload.end());
+      auto const &starts_eldoc_list(starts_eldoc_it->second.as_list());
+      REQUIRE_FALSE(starts_eldoc_list.empty());
+
+      // Test 5: info for :refer symbol
+      auto info_responses(eng.handle(make_message({
+        {  "op",    "info" },
+        { "sym", "reverse" },
+        {  "ns",    "user" }
+      })));
+
+      REQUIRE(info_responses.size() == 1);
+      auto const &info_payload(info_responses.front());
+      CHECK(info_payload.at("name").as_string() == "reverse");
+      CHECK(info_payload.at("ns").as_string() == "str-native");
+      auto const statuses(extract_status(info_payload));
+      CHECK(std::ranges::find(statuses, "done") != statuses.end());
+    }
+
     TEST_CASE("complete with native header qualifier excludes user vars")
     {
       engine eng;
