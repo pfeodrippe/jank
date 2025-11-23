@@ -2045,7 +2045,11 @@ namespace jank::nrepl_server::asio
           var_documentation::cpp_argument arg_doc;
           auto const arg_type(Cpp::GetFunctionArgType(fn, idx));
           arg_doc.type = Cpp::GetTypeAsString(arg_type);
-          arg_doc.name = "arg" + std::to_string(idx);
+          arg_doc.name = Cpp::GetFunctionArgName(fn, idx);
+          if(arg_doc.name.empty())
+          {
+            arg_doc.name = "arg" + std::to_string(idx);
+          }
           signature.arguments.emplace_back(arg_doc);
 
           if(!first_arg)

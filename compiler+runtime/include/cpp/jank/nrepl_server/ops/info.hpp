@@ -39,16 +39,22 @@ namespace jank::nrepl_server::asio
 
     auto target_ns(resolve_namespace(session, ns_request));
     auto const symbol(make_box<obj::symbol>(make_immutable_string(parts.name)));
-    auto const var(target_ns->find_var(symbol));
     std::optional<var_documentation> info;
-    if(!var.is_nil())
+
+    // If we have a native alias, skip the regular var lookup and go straight to native header lookup
+    if(!requested_native_alias.has_value())
     {
-      info = describe_var(target_ns, var, parts.name);
+      auto const var(target_ns->find_var(symbol));
+      if(!var.is_nil())
+      {
+        info = describe_var(target_ns, var, parts.name);
+      }
+      if(!info.has_value() && target_ns->name->name == "cpp")
+      {
+        info = describe_cpp_entity(target_ns, parts.name);
+      }
     }
-    if(!info.has_value() && target_ns->name->name == "cpp")
-    {
-      info = describe_cpp_entity(target_ns, parts.name);
-    }
+
     if(!info.has_value() && requested_native_alias.has_value())
     {
       info = describe_native_header_function(alias_display,

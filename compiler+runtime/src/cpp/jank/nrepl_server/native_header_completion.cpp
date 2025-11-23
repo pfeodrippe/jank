@@ -37,9 +37,8 @@ namespace jank::nrepl_server::asio
     }
   }
 
-  std::vector<std::string> enumerate_native_header_functions(
-    ns::native_alias const &alias,
-    std::string const &prefix)
+  std::vector<std::string>
+  enumerate_native_header_functions(ns::native_alias const &alias, std::string const &prefix)
   {
     std::vector<std::string> matches;
 
@@ -47,8 +46,8 @@ namespace jank::nrepl_server::asio
     {
       auto const scope_name = to_cpp_scope(alias.scope);
       auto const prefix_name = prefix.empty() ? std::string{} : prefix;
-      auto scope_handle = scope_name.empty() ? Cpp::GetGlobalScope()
-                                             : Cpp::GetScopeFromCompleteName(scope_name);
+      auto scope_handle
+        = scope_name.empty() ? Cpp::GetGlobalScope() : Cpp::GetScopeFromCompleteName(scope_name);
       if(!scope_handle)
       {
         return matches;

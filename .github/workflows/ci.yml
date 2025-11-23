@@ -40,7 +40,7 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/compiler+runtime/build/llvm-install
-          key: clang-${{ runner.os }}-v1
+          key: clang-${{ runner.os }}-${{ hashFiles('compiler+runtime/bin/build-clang') }}
       - name: Build Clang/LLVM
         run: |
           if [[ ! -e ${{ github.workspace }}/compiler+runtime/build/llvm-install/usr/local/bin/clang++ ]];
@@ -64,13 +64,12 @@ jobs:
       - name: Install Homebrew deps
         run: |
           brew install git git-lfs pkg-config ninja python cmake gnupg zlib
-      - name: Debug - list files
-        run: |
-          echo "PWD: $(pwd)"
-          echo "Listing compiler+runtime/bin:"
-          ls -la "compiler+runtime/bin" || true
-          echo "Find anything:"
-          find compiler+runtime -maxdepth 3 -type f -print || true
+      - name: Cache Clang/LLVM
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ${{ github.workspace }}/compiler+runtime/build/llvm-install
+          key: clang-${{ runner.os }}-${{ hashFiles('compiler+runtime/bin/build-clang') }}
       - name: Build Clang/LLVM
         run: |
           if [[ ! -e ${{ github.workspace }}/compiler+runtime/build/llvm-install/usr/local/bin/clang++ ]];
@@ -194,20 +193,12 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install cmake ninja double-conversion pkg-config llvm ccache boost openssl zlib doctest boost clojure/tools/clojure
-      - name: Debug - check build-clang file
-        run: |
-          echo "PWD: $(pwd)"
-          echo "github.workspace: ${{ github.workspace }}"
-          echo "File path: ${{ github.workspace }}/compiler+runtime/bin/build-clang"
-          ls -la "${{ github.workspace }}/compiler+runtime/bin/build-clang" || echo "File not found"
-          echo "Contents of compiler+runtime/bin:"
-          ls -la compiler+runtime/bin/ || true
       - name: Cache Clang/LLVM
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: |
             ${{ github.workspace }}/compiler+runtime/build/llvm-install
-          key: clang-${{ runner.os }}-v1
+          key: clang-${{ runner.os }}-${{ hashFiles('${{ github.workspace }}/compiler+runtime/bin/build-clang') }}
       - name: Cache ccache object files
         if: matrix.analyze == 'off'
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684

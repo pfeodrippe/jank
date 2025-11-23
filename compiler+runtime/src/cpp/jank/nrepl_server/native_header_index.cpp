@@ -18,8 +18,7 @@ namespace jank::nrepl_server::asio
     return key;
   }
 
-  std::vector<std::string> const &
-  native_header_index::ensure_cache(native_alias const &alias) const
+  std::vector<std::string> const &native_header_index::ensure_cache(native_alias const &alias) const
   {
     auto const key(make_cache_key(alias));
     std::scoped_lock lock{ mutex_ };
@@ -39,8 +38,7 @@ namespace jank::nrepl_server::asio
   }
 
   std::vector<std::string>
-  native_header_index::list_functions(native_alias const &alias,
-                                      std::string const &prefix) const
+  native_header_index::list_functions(native_alias const &alias, std::string const &prefix) const
   {
     auto const &entries(ensure_cache(alias));
     if(prefix.empty())

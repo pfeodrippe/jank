@@ -41,16 +41,22 @@ namespace jank::nrepl_server::asio
 
     auto target_ns(resolve_namespace(session, ns_request));
     auto const symbol(make_box<obj::symbol>(make_immutable_string(parts.name)));
-    auto const var(target_ns->find_var(symbol));
     std::optional<var_documentation> info;
-    if(!var.is_nil())
+
+    // If we have a native alias, skip the regular var lookup and go straight to native header lookup
+    if(!requested_native_alias.has_value())
     {
-      info = describe_var(target_ns, var, parts.name);
+      auto const var(target_ns->find_var(symbol));
+      if(!var.is_nil())
+      {
+        info = describe_var(target_ns, var, parts.name);
+      }
+      if(!info.has_value() && target_ns->name->name == "cpp")
+      {
+        info = describe_cpp_entity(target_ns, parts.name);
+      }
     }
-    if(!info.has_value() && target_ns->name->name == "cpp")
-    {
-      info = describe_cpp_entity(target_ns, parts.name);
-    }
+
     if(!info.has_value() && requested_native_alias.has_value())
     {
       info = describe_native_header_function(alias_display,
@@ -62,66 +68,94 @@ namespace jank::nrepl_server::asio
       return { make_done_response(session.id, msg.id(), { "done", "no-eldoc" }) };
     }
 
-    auto trim = [](std::string &text) {
-      auto const start(text.find_first_not_of(" \t\n\r"));
-      if(start == std::string::npos)
-      {
-        text.clear();
-        return;
-      }
-      auto const end(text.find_last_not_of(" \t\n\r"));
-      text = text.substr(start, end - start + 1);
-    };
-
-    auto tokenize_signature = [&](std::string signature) {
-      trim(signature);
-      if(signature.size() >= 2 && signature.front() == '[' && signature.back() == ']')
-      {
-        signature = signature.substr(1, signature.size() - 2);
-      }
-
-      std::vector<std::string> tokens;
-      std::string current;
-      for(char const ch : signature)
-      {
-        if(std::isspace(static_cast<unsigned char>(ch)))
-        {
-          if(!current.empty())
-          {
-            tokens.emplace_back(std::move(current));
-            current.clear();
-          }
-        }
-        else
-        {
-          current.push_back(ch);
-        }
-      }
-      if(!current.empty())
-      {
-        tokens.emplace_back(std::move(current));
-      }
-      return tokens;
-    };
-
     bencode::value::list eldoc_entries;
     if(!info->arglists.empty())
     {
       eldoc_entries.reserve(info->arglists.size());
       for(auto const &sig : info->arglists)
       {
-        auto tokens(tokenize_signature(sig));
-        while(!tokens.empty() && tokens.front() == "quote")
+        // Parse the signature to extract parameter names
+        // Signatures come in formats like:
+        // - Clojure: [x] [x y] [x y & z]
+        // - Native: [[i32 x] [i32 y]] or [[object_ref s]]
+
+        std::string trimmed = sig;
+        // Remove leading/trailing whitespace
+        auto const start = trimmed.find_first_not_of(" \t\n\r");
+        if(start == std::string::npos)
         {
-          tokens.erase(tokens.begin());
+          continue;
         }
-        bencode::value::list token_values;
-        token_values.reserve(tokens.size());
-        for(auto const &token : tokens)
+        auto const end = trimmed.find_last_not_of(" \t\n\r");
+        trimmed = trimmed.substr(start, end - start + 1);
+
+        // Remove outer brackets
+        if(trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']')
         {
-          token_values.emplace_back(token);
+          trimmed = trimmed.substr(1, trimmed.size() - 2);
         }
-        eldoc_entries.emplace_back(std::move(token_values));
+
+        bencode::value::list params;
+        std::string current;
+        int bracket_depth = 0;
+
+        for(size_t i = 0; i < trimmed.size(); ++i)
+        {
+          char ch = trimmed[i];
+
+          if(ch == '[')
+          {
+            bracket_depth++;
+            current.push_back(ch);
+          }
+          else if(ch == ']')
+          {
+            bracket_depth--;
+            current.push_back(ch);
+            // If we're back to depth 0, this completes a typed parameter like [i32 x]
+            if(bracket_depth == 0 && !current.empty())
+            {
+              // For typed parameters, keep the full [type name] format
+              auto const param_start = current.find_first_not_of(" \t");
+              if(param_start != std::string::npos)
+              {
+                auto const param_end = current.find_last_not_of(" \t");
+                params.emplace_back(current.substr(param_start, param_end - param_start + 1));
+              }
+              current.clear();
+            }
+          }
+          else if(std::isspace(static_cast<unsigned char>(ch)))
+          {
+            if(bracket_depth == 0 && !current.empty())
+            {
+              // Simple untyped parameter
+              params.emplace_back(current);
+              current.clear();
+            }
+            else if(bracket_depth > 0)
+            {
+              current.push_back(ch);
+            }
+          }
+          else
+          {
+            current.push_back(ch);
+          }
+        }
+
+        // Don't forget the last parameter
+        if(!current.empty())
+        {
+          auto const param_start = current.find_first_not_of(" \t");
+          if(param_start != std::string::npos)
+          {
+            auto const param_end = current.find_last_not_of(" \t");
+            params.emplace_back(current.substr(param_start, param_end - param_start + 1));
+          }
+        }
+
+        eldoc_entries.emplace_back(bencode::value{ std::move(params) });
       }
     }
 

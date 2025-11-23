@@ -776,10 +776,50 @@ namespace jank::nrepl_server::asio
           found = true;
           CHECK(dict.at("type").as_string() == "function");
           CHECK(dict.at("ns").as_string() == "str-native");
+
+          // Check that arglists contain parameter name from header
+          auto const arglists_it(dict.find("arglists"));
+          REQUIRE(arglists_it != dict.end());
+          auto const &arglists(arglists_it->second.as_list());
+          REQUIRE_FALSE(arglists.empty());
+          auto const &signature(arglists.front().as_string());
+          INFO("complete arglists signature: " << signature);
+          std::cerr << "Complete arglists signature: '" << signature << "'\n";
+          // Should NOT be just "coll" - should have type and parameter info
+          CHECK(signature != "coll");
+          CHECK(signature.find("s") != std::string::npos);
           break;
         }
       }
       CHECK(found);
+
+      // Also test eldoc to ensure it returns proper parameter names
+      auto eldoc_responses(eng.handle(make_message({
+        {  "op",              "eldoc" },
+        { "sym", "str-native/reverse" },
+        {  "ns",               "user" }
+      })));
+
+      REQUIRE(eldoc_responses.size() == 1);
+      auto const &eldoc_payload(eldoc_responses.front());
+      auto const eldoc_it(eldoc_payload.find("eldoc"));
+      REQUIRE(eldoc_it != eldoc_payload.end());
+      auto const &eldoc_list(eldoc_it->second.as_list());
+      REQUIRE_FALSE(eldoc_list.empty());
+      // eldoc should return a list of parameter lists: [["param1", "param2"], ...]
+      // For native functions with types: [["[type param]"]] keeping type and param together
+      auto const &param_list(eldoc_list.front().as_list());
+      std::cerr << "Eldoc param_list size: " << param_list.size() << "\n";
+      for(size_t i = 0; i < param_list.size(); ++i)
+      {
+        std::cerr << "Param[" << i << "]: '" << param_list.at(i).as_string() << "'\n";
+      }
+      // Should have at least one parameter in format "[type param]"
+      REQUIRE(param_list.size() >= 1);
+      // Check that parameter info contains 's' and the type bracket
+      auto const &first_param(param_list.front().as_string());
+      CHECK(first_param.find("[") != std::string::npos);
+      CHECK(first_param.find("s") != std::string::npos);
     }
 
     TEST_CASE("complete with native header qualifier excludes user vars")
@@ -827,6 +867,41 @@ namespace jank::nrepl_server::asio
       CHECK_FALSE(found_user);
     }
 
+    TEST_CASE("info returns native header function signature")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                      "eval" },
+        { "code", "(require '[\"clojure/string_native.hpp\" :as str-native])" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {  "op",               "info" },
+        { "sym", "str-native/reverse" },
+        {  "ns",               "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      // Print the actual response for debugging
+      std::cerr << "Info name: " << payload.at("name").as_string() << "\n";
+      std::cerr << "Info ns: " << payload.at("ns").as_string() << "\n";
+
+      CHECK(payload.at("name").as_string() == "reverse");
+      CHECK(payload.at("ns").as_string() == "str-native");
+
+      auto const arglists_it(payload.find("arglists"));
+      REQUIRE(arglists_it != payload.end());
+      auto const &arglists(arglists_it->second.as_list());
+      REQUIRE_FALSE(arglists.empty());
+      auto const &signature(arglists.front().as_string());
+      std::cerr << "Info arglists signature: '" << signature << "'\n";
+      // Should NOT be just "coll" - should have type and parameter info
+      CHECK(signature != "coll");
+      CHECK(signature.find("s") != std::string::npos);
+    }
+
     TEST_CASE("info returns doc and arglists")
     {
       engine eng;
@@ -849,6 +924,39 @@ namespace jank::nrepl_server::asio
       auto const statuses(extract_status(payload));
       auto const done(std::ranges::find(statuses, "done"));
       CHECK(done != statuses.end());
+
+      // Test eldoc format for Clojure functions
+      auto eldoc_responses(eng.handle(make_message({
+        {  "op",     "eldoc" },
+        { "sym", "sample-fn" }
+      })));
+      REQUIRE(eldoc_responses.size() == 1);
+      auto const &eldoc_payload(eldoc_responses.front());
+      auto const eldoc_it(eldoc_payload.find("eldoc"));
+      REQUIRE(eldoc_it != eldoc_payload.end());
+      auto const &eldoc_list(eldoc_it->second.as_list());
+      REQUIRE(eldoc_list.size() == 2); // Two arities
+
+      // First arity [x]
+      auto const &first_arity(eldoc_list.at(0).as_list());
+      std::cerr << "First arity size: " << first_arity.size() << "\n";
+      for(size_t i = 0; i < first_arity.size(); ++i)
+      {
+        std::cerr << "  Param[" << i << "]: '" << first_arity.at(i).as_string() << "'\n";
+      }
+      REQUIRE(first_arity.size() == 1);
+      CHECK(first_arity.at(0).as_string() == "x");
+
+      // Second arity [x y]
+      auto const &second_arity(eldoc_list.at(1).as_list());
+      std::cerr << "Second arity size: " << second_arity.size() << "\n";
+      for(size_t i = 0; i < second_arity.size(); ++i)
+      {
+        std::cerr << "  Param[" << i << "]: '" << second_arity.at(i).as_string() << "'\n";
+      }
+      REQUIRE(second_arity.size() == 2);
+      CHECK(second_arity.at(0).as_string() == "x");
+      CHECK(second_arity.at(1).as_string() == "y");
     }
 
     TEST_CASE("info returns cpp signature metadata")
@@ -883,12 +991,11 @@ namespace jank::nrepl_server::asio
       auto const &arglists(arglists_it->second.as_list());
       REQUIRE(arglists.size() == 1);
       auto const &signature(arglists.front().as_string());
+      INFO("signature: " << signature);
       // Should be [[i32 lhs] [i32 rhs]] format
-      CHECK(signature.find("[[") != std::string::npos);
-      CHECK(signature.find("]]") != std::string::npos);
-      CHECK(signature.find("i32") != std::string::npos);
-      CHECK(signature.find('[') == 0);
-      CHECK(signature.back() == ']');
+      CHECK(signature.find("[[i32 lhs] [i32 rhs]]") != std::string::npos);
+      CHECK(signature.find("lhs") != std::string::npos);
+      CHECK(signature.find("rhs") != std::string::npos);
 
       auto const cpp_signatures_it(payload.find("cpp-signatures"));
       if(cpp_signatures_it == payload.end())
@@ -910,12 +1017,14 @@ namespace jank::nrepl_server::asio
       CHECK(first_arg.at("index").as_integer() == 0);
       CHECK(first_arg.at("type").as_string() == "i32");
       auto const first_arg_name(first_arg.at("name").as_string());
-      CHECK((first_arg_name == "lhs" || first_arg_name.rfind("arg", 0) == 0));
+      INFO("first_arg_name: " << first_arg_name);
+      CHECK(first_arg_name == "lhs");
       auto const &second_arg(args.back().as_dict());
       CHECK(second_arg.at("index").as_integer() == 1);
       CHECK(second_arg.at("type").as_string() == "i32");
       auto const second_arg_name(second_arg.at("name").as_string());
-      CHECK((second_arg_name == "rhs" || second_arg_name.rfind("arg", 0) == 0));
+      INFO("second_arg_name: " << second_arg_name);
+      CHECK(second_arg_name == "rhs");
 
       auto const statuses(extract_status(payload));
       CHECK(std::ranges::find(statuses, "done") != statuses.end());
@@ -1068,13 +1177,19 @@ namespace jank::nrepl_server::asio
       auto const &eldoc(eldoc_it->second.as_list());
       REQUIRE(eldoc.size() == 1);
       auto const &tokens(eldoc.front().as_list());
-      REQUIRE(tokens.size() == 4);
-      CHECK(tokens.front().as_string() == "[double");
-      auto const first_token(tokens.at(1).as_string());
-      CHECK((first_token == "value" || first_token.rfind("arg", 0) == 0));
-      CHECK(tokens.at(2).as_string() == "[double");
-      auto const second_token(tokens.at(3).as_string());
-      CHECK((second_token == "factor" || second_token.rfind("arg", 0) == 0));
+      // Should have 2 parameters in format ["[double value]", "[double factor]"]
+      REQUIRE(tokens.size() == 2);
+      auto const &first_param(tokens.front().as_string());
+      INFO("first_param in eldoc: " << first_param);
+      // Check format is [type name] with proper parameter name
+      CHECK(first_param.find("[double") != std::string::npos);
+      CHECK((first_param.find("value") != std::string::npos
+             || first_param.find("arg") != std::string::npos));
+      auto const &second_param(tokens.at(1).as_string());
+      INFO("second_param in eldoc: " << second_param);
+      CHECK(second_param.find("[double") != std::string::npos);
+      CHECK((second_param.find("factor") != std::string::npos
+             || second_param.find("arg") != std::string::npos));
 
       auto const cpp_signatures_it(payload.find("cpp-signatures"));
       if(cpp_signatures_it == payload.end())

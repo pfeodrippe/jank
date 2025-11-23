@@ -10,11 +10,9 @@ namespace jank::nrepl_server::asio
   {
     runtime::ns::native_alias make_string_native_alias()
     {
-      return runtime::ns::native_alias{
-        jtl::immutable_string{ "clojure/string_native.hpp" },
-        jtl::immutable_string{ "<clojure/string_native.hpp>" },
-        jtl::immutable_string{ "clojure.string_native" }
-      };
+      return runtime::ns::native_alias{ jtl::immutable_string{ "clojure/string_native.hpp" },
+                                        jtl::immutable_string{ "<clojure/string_native.hpp>" },
+                                        jtl::immutable_string{ "clojure.string_native" } };
     }
   }
 

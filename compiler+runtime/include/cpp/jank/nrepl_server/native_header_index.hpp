@@ -16,16 +16,15 @@ namespace jank::nrepl_server::asio
   {
   public:
     std::vector<std::string>
-    list_functions(jank::runtime::ns::native_alias const &alias,
-                   std::string const &prefix) const;
+    list_functions(jank::runtime::ns::native_alias const &alias, std::string const &prefix) const;
 
-    bool contains(jank::runtime::ns::native_alias const &alias,
-                  std::string const &name) const;
+    bool contains(jank::runtime::ns::native_alias const &alias, std::string const &name) const;
 
   private:
     using cache_map = std::unordered_map<std::string, std::vector<std::string>>;
 
-    std::vector<std::string> const &ensure_cache(jank::runtime::ns::native_alias const &alias) const;
+    std::vector<std::string> const &
+    ensure_cache(jank::runtime::ns::native_alias const &alias) const;
     static std::string make_cache_key(jank::runtime::ns::native_alias const &alias);
 
     mutable std::mutex mutex_;

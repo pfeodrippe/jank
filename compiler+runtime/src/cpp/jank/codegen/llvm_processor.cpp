@@ -2216,6 +2216,49 @@ namespace jank::codegen
       return true;
     };
 
+    /* Extract function parameter names from Clang AST before LLVM optimization strips them */
+    std::unordered_map<std::string, std::vector<std::string>> ast_param_names;
+    auto const translation_unit_early{ parse_res->TUPart };
+    if(translation_unit_early != nullptr)
+    {
+      auto &compiler_instance{ *(__rt_ctx->jit_prc.interpreter->getCompilerInstance()) };
+      auto &source_manager{ compiler_instance.getSourceManager() };
+
+      for(auto const *decl : translation_unit_early->decls())
+      {
+        if(auto const *func_decl = llvm::dyn_cast<clang::FunctionDecl>(decl))
+        {
+          if(!func_decl->hasBody() || !func_decl->hasExternalFormalLinkage())
+          {
+            continue;
+          }
+
+          auto loc(func_decl->getBeginLoc());
+          if(!loc.isValid())
+          {
+            continue;
+          }
+          loc = source_manager.getSpellingLoc(loc);
+          auto const file_name(source_manager.getFilename(loc));
+          auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+          if(!in_main_file && !file_name.empty())
+          {
+            continue;
+          }
+
+          auto qualified_name(func_decl->getQualifiedNameAsString());
+          auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+          std::vector<std::string> param_names;
+          for(auto const *param : func_decl->parameters())
+          {
+            param_names.push_back(param->getNameAsString());
+          }
+          ast_param_names[normalized_name] = std::move(param_names);
+        }
+      }
+    }
+
     for(auto const &f : parse_res->TheModule->functions())
     {
       if(!f.isDeclaration() && f.hasExternalLinkage())
@@ -2244,14 +2287,31 @@ namespace jank::codegen
         auto const return_type_string(stringify_type(f.getReturnType()));
         metadata.return_type
           = jtl::immutable_string{ return_type_string.data(), return_type_string.size() };
+
+        /* Try to get parameter names from AST first, fall back to LLVM IR names */
+        auto const ast_names_it = ast_param_names.find(normalized_fn_name);
+        std::vector<std::string> const *param_names_ptr = nullptr;
+        if(ast_names_it != ast_param_names.end())
+        {
+          param_names_ptr = &ast_names_it->second;
+        }
+
         usize arg_index{};
         for(auto const &arg : f.args())
         {
           std::string arg_name;
-          if(arg.hasName() && !arg.getName().empty())
+          /* First, try AST parameter names */
+          if(param_names_ptr != nullptr && arg_index < param_names_ptr->size()
+             && !(*param_names_ptr)[arg_index].empty())
+          {
+            arg_name = (*param_names_ptr)[arg_index];
+          }
+          /* Fall back to LLVM IR names */
+          else if(arg.hasName() && !arg.getName().empty())
           {
             arg_name = arg.getName().str();
           }
+          /* Last resort: generate synthetic names */
           else
           {
             arg_name = util::format("arg{}", arg_index);
