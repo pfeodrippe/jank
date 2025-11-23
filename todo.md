@@ -3,7 +3,7 @@
 - [ ] require native headers
   - [x] :as
   - [x] :refer
-  - [ ] autocompletion
+  - [x] autocompletion
   - [ ] if a function has a docstring, can we show it?
   - [ ] test with some non jank file (or create some that's not so well organized)
 - [ ] use it to hotreload in SC
