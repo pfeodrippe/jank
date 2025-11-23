@@ -18,7 +18,7 @@ namespace jank::nrepl_server::asio
 
   TEST_CASE("native header index caches enum results")
   {
-    native_header_index index;
+    native_header_index const index;
     auto alias(make_string_native_alias());
 
     auto const reverse_matches(index.list_functions(alias, "rev"));

@@ -787,7 +787,7 @@ namespace jank::nrepl_server::asio
           std::cerr << "Complete arglists signature: '" << signature << "'\n";
           // Should NOT be just "coll" - should have type and parameter info
           CHECK(signature != "coll");
-          CHECK(signature.find("s") != std::string::npos);
+          CHECK(signature.find('s') != std::string::npos);
           break;
         }
       }
@@ -818,8 +818,8 @@ namespace jank::nrepl_server::asio
       REQUIRE(param_list.size() >= 1);
       // Check that parameter info contains 's' and the type bracket
       auto const &first_param(param_list.front().as_string());
-      CHECK(first_param.find("[") != std::string::npos);
-      CHECK(first_param.find("s") != std::string::npos);
+      CHECK(first_param.find('[') != std::string::npos);
+      CHECK(first_param.find('s') != std::string::npos);
     }
 
     TEST_CASE("complete and eldoc work with native header :refer")
@@ -827,7 +827,7 @@ namespace jank::nrepl_server::asio
       engine eng;
       // Require native header with both :as and :refer
       eng.handle(make_message({
-        {   "op","eval"                 },
+        {   "op","eval"                },
         { "code",
          "(require '[\"clojure/string_native.hpp\" :as str-native :refer [reverse "
          "starts_with]])" }
@@ -1027,7 +1027,7 @@ namespace jank::nrepl_server::asio
       std::cerr << "Info arglists signature: '" << signature << "'\n";
       // Should NOT be just "coll" - should have type and parameter info
       CHECK(signature != "coll");
-      CHECK(signature.find("s") != std::string::npos);
+      CHECK(signature.find('s') != std::string::npos);
     }
 
     TEST_CASE("info returns doc and arglists")

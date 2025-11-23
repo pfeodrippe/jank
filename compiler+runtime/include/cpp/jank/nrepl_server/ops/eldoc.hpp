@@ -123,10 +123,8 @@ namespace jank::nrepl_server::asio
         std::string current;
         int bracket_depth = 0;
 
-        for(size_t i = 0; i < trimmed.size(); ++i)
+        for(char const ch : trimmed)
         {
-          char ch = trimmed[i];
-
           if(ch == '[')
           {
             bracket_depth++;
@@ -179,7 +177,7 @@ namespace jank::nrepl_server::asio
           }
         }
 
-        eldoc_entries.emplace_back(bencode::value{ std::move(params) });
+        eldoc_entries.emplace_back(std::move(params));
       }
     }
 

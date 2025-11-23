@@ -1540,7 +1540,7 @@ namespace jank::analyze
                        alias_sym->to_string(),
                        runtime::__rt_ctx->current_ns()->to_string()));
       }
-      auto const alias_info(native_alias.unwrap());
+      auto const &alias_info(native_alias.unwrap());
       native_transient_string scoped(alias_info.scope.data(), alias_info.scope.size());
       if(!member_name.empty())
       {

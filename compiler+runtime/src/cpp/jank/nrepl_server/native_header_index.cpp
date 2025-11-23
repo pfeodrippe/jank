@@ -21,7 +21,7 @@ namespace jank::nrepl_server::asio
   std::vector<std::string> const &native_header_index::ensure_cache(native_alias const &alias) const
   {
     auto const key(make_cache_key(alias));
-    std::scoped_lock lock{ mutex_ };
+    std::scoped_lock<std::mutex> const lock{ mutex_ };
     auto const it(cache_.find(key));
     if(it != cache_.end())
     {
@@ -50,7 +50,7 @@ namespace jank::nrepl_server::asio
     matches.reserve(entries.size());
     for(auto const &entry : entries)
     {
-      if(entry.rfind(prefix, 0) == 0)
+      if(entry.starts_with(prefix))
       {
         matches.push_back(entry);
       }
@@ -61,6 +61,6 @@ namespace jank::nrepl_server::asio
   bool native_header_index::contains(native_alias const &alias, std::string const &name) const
   {
     auto const &entries(ensure_cache(alias));
-    return std::binary_search(entries.begin(), entries.end(), name);
+    return std::ranges::binary_search(entries, name);
   }
 }

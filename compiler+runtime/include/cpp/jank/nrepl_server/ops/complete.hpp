@@ -47,6 +47,11 @@ namespace jank::nrepl_server::asio
       auto const symbol(make_box<obj::symbol>(make_immutable_string(candidate.symbol_name)));
       auto const var(query.target_ns->find_var(symbol));
       std::optional<var_documentation> var_info;
+      auto const describe_native_candidate = [&]() {
+        return describe_native_header_function(query.qualifier.value(),
+                                               query.native_alias.value(),
+                                               candidate.symbol_name);
+      };
 
       // Check if this symbol is a native refer (unqualified symbol referring to a native header function)
       if(!var_info.has_value() && !query.qualifier.has_value())
@@ -66,11 +71,10 @@ namespace jank::nrepl_server::asio
 
       if(!var_info.has_value() && prefer_native_header)
       {
-        var_info = describe_native_header_function(query.qualifier.value(),
-                                                   query.native_alias.value(),
-                                                   candidate.symbol_name);
+        var_info = describe_native_candidate();
       }
-      else if(!var_info.has_value() && !var.is_nil())
+
+      if(!var_info.has_value() && !var.is_nil())
       {
         var_info = describe_var(query.target_ns, var, candidate.symbol_name);
       }
@@ -81,9 +85,7 @@ namespace jank::nrepl_server::asio
       else if(!var_info.has_value() && query.native_alias.has_value()
               && query.qualifier.has_value())
       {
-        var_info = describe_native_header_function(query.qualifier.value(),
-                                                   query.native_alias.value(),
-                                                   candidate.symbol_name);
+        var_info = describe_native_candidate();
       }
       if(!var_info.has_value())
       {

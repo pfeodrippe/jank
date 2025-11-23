@@ -78,9 +78,13 @@ namespace jank::nrepl_server::asio
         }
       }
     }
+    catch(std::exception const &ex)
+    {
+      util::println(stderr, "native header completion failed: {}", ex.what());
+    }
     catch(...)
     {
-      // Parsing failures simply result in an empty match list.
+      util::println(stderr, "native header completion failed: <unknown error>");
     }
 
     return matches;
