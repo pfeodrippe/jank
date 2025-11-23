@@ -40,16 +40,32 @@ namespace jank::nrepl_server::asio
     completion_payloads.reserve(candidates.size());
     for(auto const &candidate : candidates)
     {
+      bool const prefer_native_header = query.native_alias.has_value()
+        && query.qualifier.has_value()
+        && native_header_index_.contains(query.native_alias.value(), candidate.symbol_name);
+
       auto const symbol(make_box<obj::symbol>(make_immutable_string(candidate.symbol_name)));
       auto const var(query.target_ns->find_var(symbol));
       std::optional<var_documentation> var_info;
-      if(!var.is_nil())
+      if(prefer_native_header)
+      {
+        var_info = describe_native_header_function(query.qualifier.value(),
+                                                   query.native_alias.value(),
+                                                   candidate.symbol_name);
+      }
+      else if(!var.is_nil())
       {
         var_info = describe_var(query.target_ns, var, candidate.symbol_name);
       }
       else if(query.target_ns->name->name == "cpp")
       {
         var_info = describe_cpp_entity(query.target_ns, candidate.symbol_name);
+      }
+      else if(query.native_alias.has_value() && query.qualifier.has_value())
+      {
+        var_info = describe_native_header_function(query.qualifier.value(),
+                                                   query.native_alias.value(),
+                                                   candidate.symbol_name);
       }
       if(!var_info.has_value())
       {

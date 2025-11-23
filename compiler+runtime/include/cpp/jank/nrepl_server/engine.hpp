@@ -44,6 +44,14 @@
 #include <jank/runtime/rtti.hpp>
 #include <jank/runtime/var.hpp>
 #include <jank/util/scope_exit.hpp>
+#include <jank/util/string.hpp>
+#include <jank/analyze/cpp_util.hpp>
+#include <jank/nrepl_server/native_header_index.hpp>
+
+#include <clang/AST/DeclBase.h>
+#include <clang/AST/Decl.h>
+#include <llvm/Support/Casting.h>
+#include <llvm/Demangle/Demangle.h>
 
 namespace jank::nrepl_server::asio
 {
@@ -658,6 +666,7 @@ namespace jank::nrepl_server::asio
       "nrepl.middleware.session/add-stdin"
     };
     std::string version_;
+    mutable native_header_index native_header_index_;
 
     session_state &ensure_session(std::string session_id)
     {
@@ -765,6 +774,24 @@ namespace jank::nrepl_server::asio
       }
 
       return target_ns;
+    }
+
+    std::optional<ns::native_alias>
+    find_native_alias(ns_ref context_ns, std::string const &alias_name) const
+    {
+      if(alias_name.empty())
+      {
+        return std::nullopt;
+      }
+
+      auto const alias_sym(make_box<obj::symbol>(make_immutable_string(alias_name)));
+      auto const native_alias_opt(context_ns->find_native_alias(alias_sym));
+      if(native_alias_opt.is_none())
+      {
+        return std::nullopt;
+      }
+
+      return native_alias_opt.unwrap();
     }
 
     std::string current_ns_name(object_ref const ns_obj) const
@@ -1282,6 +1309,7 @@ namespace jank::nrepl_server::asio
       ns_ref target_ns;
       std::string prefix;
       std::optional<std::string> qualifier;
+      std::optional<ns::native_alias> native_alias;
     };
 
     struct var_documentation
@@ -1411,13 +1439,25 @@ namespace jank::nrepl_server::asio
       }
       query.target_ns = resolve_namespace(session, requested_ns);
       query.prefix = prefix;
+      if(query.qualifier.has_value())
+      {
+        auto const context_ns(expect_object<ns>(session.current_ns));
+        query.native_alias = find_native_alias(context_ns, query.qualifier.value());
+      }
       return query;
     }
 
-    std::vector<std::string>
-    collect_symbol_names(ns_ref target_ns, std::string const &prefix, bool owned_only) const
+    std::vector<std::string> collect_symbol_names(completion_query const &query) const
     {
       std::vector<std::string> matches;
+      auto const &prefix(query.prefix);
+      if(query.native_alias.has_value())
+      {
+        return native_header_index_.list_functions(query.native_alias.value(), prefix);
+      }
+
+      auto const target_ns(query.target_ns);
+      auto const owned_only(query.qualifier.has_value());
       auto const mappings(target_ns->get_mappings());
       if(mappings.is_some())
       {
@@ -1484,6 +1524,12 @@ namespace jank::nrepl_server::asio
           }
         }
       }
+      else if(query.native_alias.has_value())
+      {
+        auto const native_matches
+          = native_header_index_.list_functions(query.native_alias.value(), prefix);
+        matches.insert(matches.end(), native_matches.begin(), native_matches.end());
+      }
 
       std::ranges::sort(matches);
       auto const unique_end(std::ranges::unique(matches));
@@ -1494,7 +1540,7 @@ namespace jank::nrepl_server::asio
     std::vector<completion_candidate>
     make_completion_candidates(completion_query const &query) const
     {
-      auto names(collect_symbol_names(query.target_ns, query.prefix, query.qualifier.has_value()));
+      auto names(collect_symbol_names(query));
       std::vector<completion_candidate> candidates;
       candidates.reserve(names.size());
       for(auto const &name : names)
@@ -1688,74 +1734,128 @@ namespace jank::nrepl_server::asio
         return std::nullopt;
       }
 
-      auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };
-      auto const key(make_immutable_string(symbol_name));
-      auto const it(locked_globals->find(key));
-      if(it == locked_globals->end())
-      {
-        return std::nullopt;
-      }
-
       var_documentation info;
       info.ns_name = current_ns_name(target_ns);
       info.name = symbol_name;
       info.is_function = true;
       info.is_cpp_function = true;
 
-      info.arglists.clear();
-      info.arglists.reserve(it->second.size());
-      info.cpp_signatures.reserve(it->second.size());
-      for(auto const &metadata : it->second)
-      {
-        var_documentation::cpp_signature signature;
-        signature.return_type = to_std_string(metadata.return_type);
-        signature.arguments.reserve(metadata.arguments.size());
+      auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };
+      auto const key(make_immutable_string(symbol_name));
+      auto const it(locked_globals->find(key));
 
-        std::string rendered_signature{ "[" };
-        bool first_arg{ true };
-        for(auto const &argument : metadata.arguments)
+      auto const populate_from_cpp_functions = [&](auto const &functions) {
+        info.arglists.clear();
+        info.arglists.reserve(functions.size());
+        info.cpp_signatures.reserve(functions.size());
+
+        for(auto const fn : functions)
         {
-          var_documentation::cpp_argument arg_doc;
-          arg_doc.name = to_std_string(argument.name);
-          arg_doc.type = to_std_string(argument.type);
-          signature.arguments.emplace_back(arg_doc);
+          var_documentation::cpp_signature signature;
+          auto const return_type(Cpp::GetFunctionReturnType(fn));
+          signature.return_type = Cpp::GetTypeAsString(return_type);
 
-          if(!first_arg)
+          auto const num_args(Cpp::GetFunctionNumArgs(fn));
+          std::string rendered_signature{ "[" };
+          bool first_arg{ true };
+          for(size_t idx{}; idx < num_args; ++idx)
           {
-            rendered_signature.push_back(' ');
-          }
-          // Wrap each argument in its own vector
-          rendered_signature.push_back('[');
-          rendered_signature += arg_doc.type;
-          if(!arg_doc.name.empty())
-          {
-            rendered_signature.push_back(' ');
-            rendered_signature += arg_doc.name;
+            var_documentation::cpp_argument arg_doc;
+            auto const arg_type(Cpp::GetFunctionArgType(fn, idx));
+            arg_doc.type = Cpp::GetTypeAsString(arg_type);
+            auto const arg_name(Cpp::GetFunctionArgName(fn, idx));
+            if(arg_name.empty())
+            {
+              arg_doc.name = "arg" + std::to_string(idx);
+            }
+            else
+            {
+              arg_doc.name = arg_name;
+            }
+            signature.arguments.emplace_back(arg_doc);
+
+            if(!first_arg)
+            {
+              rendered_signature.push_back(' ');
+            }
+            rendered_signature.push_back('[');
+            rendered_signature += arg_doc.type;
+            if(!arg_doc.name.empty())
+            {
+              rendered_signature.push_back(' ');
+              rendered_signature += arg_doc.name;
+            }
+            rendered_signature.push_back(']');
+            first_arg = false;
           }
           rendered_signature.push_back(']');
-          first_arg = false;
+          info.arglists.emplace_back(std::move(rendered_signature));
+          info.cpp_signatures.emplace_back(std::move(signature));
         }
-        rendered_signature.push_back(']');
-        info.arglists.emplace_back(std::move(rendered_signature));
-        info.cpp_signatures.emplace_back(std::move(signature));
+      };
+
+      if(it != locked_globals->end() && !it->second.empty())
+      {
+        info.arglists.clear();
+        info.arglists.reserve(it->second.size());
+        info.cpp_signatures.reserve(it->second.size());
+        for(auto const &metadata : it->second)
+        {
+          var_documentation::cpp_signature signature;
+          signature.return_type = to_std_string(metadata.return_type);
+          signature.arguments.reserve(metadata.arguments.size());
+
+          std::string rendered_signature{ "[" };
+          bool first_arg{ true };
+          for(auto const &argument : metadata.arguments)
+          {
+            var_documentation::cpp_argument arg_doc;
+            arg_doc.name = to_std_string(argument.name);
+            arg_doc.type = to_std_string(argument.type);
+            signature.arguments.emplace_back(arg_doc);
+
+            if(!first_arg)
+            {
+              rendered_signature.push_back(' ');
+            }
+            rendered_signature.push_back('[');
+            rendered_signature += arg_doc.type;
+            if(!arg_doc.name.empty())
+            {
+              rendered_signature.push_back(' ');
+              rendered_signature += arg_doc.name;
+            }
+            rendered_signature.push_back(']');
+            first_arg = false;
+          }
+          rendered_signature.push_back(']');
+          info.arglists.emplace_back(std::move(rendered_signature));
+          info.cpp_signatures.emplace_back(std::move(signature));
+        }
+      }
+      else
+      {
+        auto const scope(Cpp::GetGlobalScope());
+        auto const functions(Cpp::GetFunctionsUsingName(scope, symbol_name));
+        if(functions.empty())
+        {
+          return std::nullopt;
+        }
+        populate_from_cpp_functions(functions);
       }
 
       if(info.cpp_signatures.empty())
       {
         info.arglists.emplace_back("[]");
-      }
-      else
-      {
-        info.return_type = info.cpp_signatures.front().return_type;
-      }
-
-      if(info.arglists.size() == 1)
-      {
         info.arglists_str = info.arglists.front();
       }
       else if(!info.arglists.empty())
       {
         info.arglists_str = join_with_newline(info.arglists);
+        if(!info.return_type.has_value())
+        {
+          info.return_type = info.cpp_signatures.front().return_type;
+        }
       }
 
       return info;
@@ -1899,7 +1999,89 @@ namespace jank::nrepl_server::asio
       {
         return info;
       }
-      return describe_cpp_type(target_ns, symbol_name);
+      if(auto info = describe_cpp_type(target_ns, symbol_name))
+      {
+        return info;
+      }
+
+      return std::nullopt;
+    }
+
+    std::optional<var_documentation>
+    describe_native_header_function(std::string const &alias_name,
+                                    ns::native_alias const &alias,
+                                    std::string const &symbol_name) const
+    {
+      auto const scope_res(analyze::cpp_util::resolve_scope(alias.scope));
+      if(scope_res.is_err())
+      {
+        return std::nullopt;
+      }
+
+      auto const scope(scope_res.expect_ok());
+      auto const fns(Cpp::GetFunctionsUsingName(scope.data, symbol_name));
+      if(fns.empty())
+      {
+        return std::nullopt;
+      }
+
+      var_documentation info;
+      info.ns_name = alias_name;
+      info.name = symbol_name;
+      info.is_function = true;
+      info.is_cpp_function = true;
+
+      for(auto const fn : fns)
+      {
+        var_documentation::cpp_signature signature;
+        auto const return_type(Cpp::GetFunctionReturnType(fn));
+        signature.return_type = Cpp::GetTypeAsString(return_type);
+
+        auto const num_args(Cpp::GetFunctionNumArgs(fn));
+        std::string rendered_signature{ "[" };
+        bool first_arg{ true };
+        for(size_t idx{}; idx < num_args; ++idx)
+        {
+          var_documentation::cpp_argument arg_doc;
+          auto const arg_type(Cpp::GetFunctionArgType(fn, idx));
+          arg_doc.type = Cpp::GetTypeAsString(arg_type);
+          arg_doc.name = "arg" + std::to_string(idx);
+          signature.arguments.emplace_back(arg_doc);
+
+          if(!first_arg)
+          {
+            rendered_signature.push_back(' ');
+          }
+          rendered_signature.push_back('[');
+          rendered_signature += arg_doc.type;
+          if(!arg_doc.name.empty())
+          {
+            rendered_signature.push_back(' ');
+            rendered_signature += arg_doc.name;
+          }
+          rendered_signature.push_back(']');
+          first_arg = false;
+        }
+        rendered_signature.push_back(']');
+        info.arglists.emplace_back(std::move(rendered_signature));
+        info.cpp_signatures.emplace_back(std::move(signature));
+      }
+
+      if(!info.cpp_signatures.empty())
+      {
+        info.return_type = info.cpp_signatures.front().return_type;
+      }
+
+      if(info.arglists.size() == 1)
+      {
+        info.arglists_str = info.arglists.front();
+      }
+      else if(!info.arglists.empty())
+      {
+        info.arglists_str = join_with_newline(info.arglists);
+      }
+
+      return info;
     }
 
     bencode::value::list serialize_cpp_signatures(var_documentation const &info) const

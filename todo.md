@@ -18,3 +18,7 @@
   - [x] list globals in nREPL
   - [ ] get existing globals ?
 - [ ] accept/return structs ?
+- [ ] combine the entities in the root level namespaces (and the functions without a ns)
+  - functions, namespaces
+  - [ ] gather
+  - [ ] complain if trying to use something ambiguous (e.g. aliasing or refering to a fn that has the same name in 2 namespaces)

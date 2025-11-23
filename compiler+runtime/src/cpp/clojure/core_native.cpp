@@ -1,12 +1,14 @@
 #include <clojure/core_native.hpp>
+#include <jank/nrepl_server/native_header_completion.hpp>
+#include <jank/runtime/behavior/callable.hpp>
+#include <jank/runtime/context.hpp>
 #include <jank/runtime/convert/function.hpp>
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/equal.hpp>
 #include <jank/runtime/core/meta.hpp>
-#include <jank/runtime/context.hpp>
-#include <jank/runtime/behavior/callable.hpp>
-#include <jank/runtime/visit.hpp>
+#include <jank/runtime/detail/type.hpp>
 #include <jank/runtime/sequence_range.hpp>
+#include <jank/runtime/visit.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <iostream>
 
@@ -314,6 +316,41 @@ namespace clojure::core_native
     return jank_nil;
   }
 
+  object_ref native_header_functions(object_ref const current_ns,
+                                     object_ref const alias,
+                                     object_ref const prefix)
+  {
+    auto const ns_obj(try_object<ns>(current_ns));
+    auto const alias_sym(try_object<obj::symbol>(alias));
+    auto const alias_data(ns_obj->find_native_alias(alias_sym));
+    if(!alias_data)
+    {
+      throw std::runtime_error{ util::format(
+        "Native alias '{}' is not registered in namespace '{}'",
+        alias_sym->to_string(),
+        ns_obj->name->to_string()) };
+    }
+
+    auto const &alias_value(alias_data.unwrap());
+    std::string prefix_str;
+    if(!runtime::is_nil(prefix))
+    {
+      prefix_str = runtime::to_string(prefix);
+    }
+
+    auto matches(
+      jank::nrepl_server::asio::enumerate_native_header_functions(alias_value, prefix_str));
+    native_vector<object_ref> boxed;
+    boxed.reserve(matches.size());
+    for(auto const &match : matches)
+    {
+      boxed.emplace_back(make_box<obj::persistent_string>(match));
+    }
+
+    return make_box<obj::persistent_vector>(
+      runtime::detail::native_persistent_vector{ boxed.begin(), boxed.end() });
+  }
+
   object_ref eval(object_ref const expr)
   {
     return __rt_ctx->eval(expr);
@@ -570,6 +607,7 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
   intern_fn("load-module", &core_native::load_module);
   intern_fn("compile", &core_native::compile);
   intern_fn("register-native-header", &core_native::register_native_header);
+  intern_fn("native-header-functions", &core_native::native_header_functions);
   intern_fn("eval", &core_native::eval);
   intern_fn("hash-unordered-coll", &core_native::hash_unordered);
   intern_fn("read-string", &core_native::read_string);

@@ -4328,6 +4328,16 @@
         local
         member))))
 
+(defn native-header-functions
+  "Returns the native function names that back a :native-header alias in the
+   current namespace. Optionally filter by the provided prefix."
+  ([alias]
+   (native-header-functions alias ""))
+  ([alias prefix]
+   (throw-if (not (symbol? alias)) (str "Native alias must be a symbol: " alias))
+   (throw-if (not (string? prefix)) (str "Prefix must be a string: " prefix))
+  (cpp/clojure.core_native.native_header_functions *ns* alias prefix)))
+
 (defn- prependss [x coll]
   (if (symbol? x)
     (cons x coll)

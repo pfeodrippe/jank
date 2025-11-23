@@ -747,6 +747,86 @@ namespace jank::nrepl_server::asio
       CHECK(found_stop);
     }
 
+    TEST_CASE("complete returns native header functions")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                      "eval" },
+        { "code", "(require '[\"clojure/string_native.hpp\" :as str-native])" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {     "op",       "complete" },
+        { "prefix", "str-native/rev" },
+        {     "ns",           "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+
+      bool found{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "str-native/reverse")
+        {
+          found = true;
+          CHECK(dict.at("type").as_string() == "function");
+          CHECK(dict.at("ns").as_string() == "str-native");
+          break;
+        }
+      }
+      CHECK(found);
+    }
+
+    TEST_CASE("complete with native header qualifier excludes user vars")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                      "eval" },
+        { "code", "(require '[\"clojure/string_native.hpp\" :as str-native])" }
+      }));
+      eng.handle(make_message({
+        {   "op",                           "eval" },
+        { "code", "(defn reverse [] :user-shadow)" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {     "op",    "complete" },
+        { "prefix", "str-native/" },
+        {     "ns",        "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+
+      bool found_native{ false };
+      bool found_user{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        CHECK(candidate.rfind("str-native/", 0) == 0);
+        auto const ns(dict.at("ns").as_string());
+        if(ns == "str-native")
+        {
+          found_native = true;
+        }
+        if(ns == "user")
+        {
+          found_user = true;
+        }
+      }
+
+      CHECK(found_native);
+      CHECK_FALSE(found_user);
+    }
+
     TEST_CASE("info returns doc and arglists")
     {
       engine eng;
@@ -790,7 +870,17 @@ namespace jank::nrepl_server::asio
       CHECK(payload.at("type").as_string() == "native-function");
       CHECK(payload.at("return-type").as_string() == "i32");
 
-      auto const &arglists(payload.at("arglists").as_list());
+      auto const arglists_it(payload.find("arglists"));
+      if(arglists_it == payload.end())
+      {
+        INFO("info payload keys:");
+        for(auto const &entry : payload)
+        {
+          INFO(entry.first);
+        }
+      }
+      REQUIRE(arglists_it != payload.end());
+      auto const &arglists(arglists_it->second.as_list());
       REQUIRE(arglists.size() == 1);
       auto const &signature(arglists.front().as_string());
       // Should be [[i32 lhs] [i32 rhs]] format
@@ -800,7 +890,17 @@ namespace jank::nrepl_server::asio
       CHECK(signature.find('[') == 0);
       CHECK(signature.back() == ']');
 
-      auto const &cpp_signatures(payload.at("cpp-signatures").as_list());
+      auto const cpp_signatures_it(payload.find("cpp-signatures"));
+      if(cpp_signatures_it == payload.end())
+      {
+        INFO("info payload keys:");
+        for(auto const &entry : payload)
+        {
+          INFO(entry.first);
+        }
+      }
+      REQUIRE(cpp_signatures_it != payload.end());
+      auto const &cpp_signatures(cpp_signatures_it->second.as_list());
       REQUIRE(cpp_signatures.size() == 1);
       auto const &cpp_signature(cpp_signatures.front().as_dict());
       CHECK(cpp_signature.at("return-type").as_string() == "i32");
@@ -828,7 +928,7 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
       eng.handle(make_message({
-        {   "op",  "eval"                 },
+        {   "op",   "eval"                },
         { "code",
          "(cpp/raw \"struct cpp_info_struct { int field_a; double field_b; }; cpp_info_struct "
          "make_struct() { return {}; }\")" }
@@ -955,7 +1055,17 @@ namespace jank::nrepl_server::asio
       CHECK(payload.at("type").as_string() == "native-function");
       CHECK(payload.at("return-type").as_string() == "double");
 
-      auto const &eldoc(payload.at("eldoc").as_list());
+      auto const eldoc_it(payload.find("eldoc"));
+      if(eldoc_it == payload.end())
+      {
+        INFO("eldoc payload keys:");
+        for(auto const &entry : payload)
+        {
+          INFO(entry.first);
+        }
+      }
+      REQUIRE(eldoc_it != payload.end());
+      auto const &eldoc(eldoc_it->second.as_list());
       REQUIRE(eldoc.size() == 1);
       auto const &tokens(eldoc.front().as_list());
       REQUIRE(tokens.size() == 4);
@@ -966,7 +1076,17 @@ namespace jank::nrepl_server::asio
       auto const second_token(tokens.at(3).as_string());
       CHECK((second_token == "factor" || second_token.rfind("arg", 0) == 0));
 
-      auto const &cpp_signatures(payload.at("cpp-signatures").as_list());
+      auto const cpp_signatures_it(payload.find("cpp-signatures"));
+      if(cpp_signatures_it == payload.end())
+      {
+        INFO("eldoc payload keys:");
+        for(auto const &entry : payload)
+        {
+          INFO(entry.first);
+        }
+      }
+      REQUIRE(cpp_signatures_it != payload.end());
+      auto const &cpp_signatures(cpp_signatures_it->second.as_list());
       REQUIRE(cpp_signatures.size() == 1);
       auto const &cpp_signature(cpp_signatures.front().as_dict());
       CHECK(cpp_signature.at("return-type").as_string() == "double");

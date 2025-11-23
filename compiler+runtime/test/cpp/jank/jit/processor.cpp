@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <filesystem>
 
 #include <clang/Frontend/CompilerInstance.h>
@@ -56,11 +57,24 @@ namespace jank::jit
       diag.setClient(new clang::IgnoringDiagConsumer{}, true);
       util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
 
+      auto const * const env_filter{ std::getenv("JANK_JIT_TEST_FILTER") };
+      std::string const test_filter{ env_filter ? env_filter : "" };
+      bool const filter_enabled{ !test_filter.empty() };
+
       for(auto const &dir_entry : std::filesystem::recursive_directory_iterator("test/jank"))
       {
         if(!std::filesystem::is_regular_file(dir_entry.path()))
         {
           continue;
+        }
+
+        if(filter_enabled)
+        {
+          auto const path_string(dir_entry.path().string());
+          if(path_string.find(test_filter) == std::string::npos)
+          {
+            continue;
+          }
         }
 
         auto const filename(dir_entry.path().filename().string());

@@ -559,6 +559,8 @@ add_library(
   src/cpp/jank/codegen/llvm_processor.cpp
   src/cpp/jank/jit/processor.cpp
   src/cpp/jank/nrepl_server/asio.cpp
+  src/cpp/jank/nrepl_server/native_header_completion.cpp
+  src/cpp/jank/nrepl_server/native_header_index.cpp
   src/cpp/jank/aot/processor.cpp
   src/cpp/jank/aot/resource.cpp
 
@@ -837,6 +839,7 @@ if(jank_test)
     test/cpp/jank/runtime/obj/integer_range.cpp
     test/cpp/jank/runtime/obj/repeat.cpp
     test/cpp/jank/nrepl/engine.cpp
+    test/cpp/jank/nrepl/native_header_index.cpp
     test/cpp/jank/jit/processor.cpp
   )
   add_executable(jank::test_exe ALIAS jank_test_exe)

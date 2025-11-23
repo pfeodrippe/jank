@@ -26,6 +26,10 @@ namespace jank::nrepl_server::asio
           type_label = "function";
         }
       }
+      else if(query.native_alias.has_value())
+      {
+        type_label = "function";
+      }
 
       bencode::value::dict entry;
       entry.emplace("candidate", candidate.display_name);
