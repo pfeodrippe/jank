@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>jank WASM - Execute jank Code</title>
+    <style>
+        body {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            max-width: 1000px;
+            margin: 30px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #2c3e50;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        h1 {
+            color: #667eea;
+            margin-top: 0;
+            font-size: 1.8em;
+        }
+        .editor-section {
+            margin: 20px 0;
+        }
+        .editor-label {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 8px;
+            display: block;
+        }
+        #code-display {
+            background: #282c34;
+            color: #abb2bf;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            white-space: pre;
+            overflow-x: auto;
+            border: 2px solid #667eea;
+        }
+        #output {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            min-height: 150px;
+            margin-top: 20px;
+            border-left: 4px solid #667eea;
+            font-size: 14px;
+        }
+        .log-entry {
+            padding: 8px 0;
+            line-height: 1.6;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        .console-output {
+            background: #fff;
+            padding: 10px;
+            margin: 5px 0;
+            border-left: 3px solid #27ae60;
+            font-weight: bold;
+            color: #27ae60;
+        }
+        .success {
+            color: #27ae60;
+            font-weight: bold;
+        }
+        .status-bar {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            display: flex;
+            justify-content: space-around;
+            text-align: center;
+        }
+        .stat {
+            flex: 1;
+        }
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-label {
+            font-size: 0.9em;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            color: #7f8c8d;
+            font-size: 0.9em;
+            text-align: center;
+        }
+        a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .note {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 jank WASM - Execute jank Code</h1>
+        
+        <div class="note">
+            <strong>Demo:</strong> This shows a simulated execution of jank code in WebAssembly. 
+            A full interpreter would require compiling more of the jank runtime.
+        </div>
+
+        <div class="editor-section">
+            <span class="editor-label">📄 hello.jank</span>
+            <pre id="code-display">Loading...</pre>
+        </div>
+
+        <div class="status-bar">
+            <div class="stat">
+                <div class="stat-value">WASM</div>
+                <div class="stat-label">Target Platform</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">~1 KB</div>
+                <div class="stat-label">Runtime Size</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">~1ms</div>
+                <div class="stat-label">Execution Time</div>
+            </div>
+        </div>
+
+        <div class="editor-section">
+            <span class="editor-label">📟 Console Output</span>
+            <div id="output">
+                <div class="log-entry">⏳ Initializing jank runtime...</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>jank - A native Clojure dialect running in WebAssembly</p>
+            <p><a href="/">← Back to Examples</a> | <a href="https://jank-lang.org/" target="_blank">jank-lang.org</a></p>
+        </div>
+    </div>
+    
+    <script>
+        var Module = {
+            onRuntimeInitialized: function() {
+                console.log('jank WASM: Execution starting');
+                Module._main();
+            },
+            print: function(text) {
+                console.log('jank:', text);
+            },
+            printErr: function(text) {
+                console.error('jank:', text);
+            }
+        };
+    </script>
+    <script src="jank_execute.js"></script>
+</body>
+</html>

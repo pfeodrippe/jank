@@ -1,7 +1,6 @@
 #include <regex>
 
-#include <cpptrace/from_current.hpp>
-#include <cpptrace/formatting.hpp>
+#include <jank/util/cpptrace.hpp>
 
 #include <jank/util/try.hpp>
 #include <jank/util/fmt/print.hpp>

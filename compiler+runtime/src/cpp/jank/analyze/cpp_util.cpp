@@ -1,8 +1,13 @@
 #include <algorithm>
 
-#include <clang/Interpreter/CppInterOp.h>
-#include <clang/Sema/Sema.h>
-#include <Interpreter/Compatibility.h>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <Interpreter/Compatibility.h>
+  #include <Interpreter/CppInterOpInterpreter.h>
+  #include <clang/Interpreter/CppInterOp.h>
+  #include <clang/Sema/Sema.h>
+  #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+  #include <llvm/Support/Error.h>
+#endif
 
 #include <jank/analyze/cpp_util.hpp>
 #include <jank/analyze/visit.hpp>
@@ -12,9 +17,11 @@
 #include <jank/util/scope_exit.hpp>
 #include <jank/error/analyze.hpp>
 #include <jank/error/codegen.hpp>
+#include <jank/error/runtime.hpp>
 
 namespace jank::analyze::cpp_util
 {
+#ifndef JANK_TARGET_EMSCRIPTEN
   /* Even with a SFINAE trap, Clang can get into a bad state when failing to instantiate
    * templates. In that bad state, whatever the next thing is that we parse fails. So, we
    * hack around this by trying to detect that state and them just giving Clang something
@@ -854,4 +861,175 @@ namespace jank::analyze::cpp_util
 
     return implicit_conversion_action::unknown;
   }
+#else
+  namespace
+  {
+    constexpr char const *cpp_unavailable_msg{
+      "C++ interop is unavailable when targeting emscripten." };
+
+    template<typename T>
+    jtl::string_result<T> cpp_unavailable_string_result()
+    {
+      return err(cpp_unavailable_msg);
+    }
+  }
+
+  jtl::string_result<void> instantiate_if_needed(jtl::ptr<void> const)
+  {
+    return err(cpp_unavailable_msg);
+  }
+
+  jtl::ptr<void> apply_pointers(jtl::ptr<void>, u8)
+  {
+    return {};
+  }
+
+  jtl::ptr<void> resolve_type(jtl::immutable_string const &, u8)
+  {
+    return {};
+  }
+
+  jtl::string_result<jtl::ptr<void>> resolve_scope(jtl::immutable_string const &)
+  {
+    return cpp_unavailable_string_result<jtl::ptr<void>>();
+  }
+
+  jtl::string_result<jtl::ptr<void>> resolve_literal_type(jtl::immutable_string const &)
+  {
+    return cpp_unavailable_string_result<jtl::ptr<void>>();
+  }
+
+  jtl::string_result<literal_value_result>
+  resolve_literal_value(jtl::immutable_string const &)
+  {
+    return cpp_unavailable_string_result<literal_value_result>();
+  }
+
+  native_vector<jtl::ptr<void>>
+  find_adl_scopes(native_vector<jtl::ptr<void>> const &)
+  {
+    return {};
+  }
+
+  jtl::immutable_string get_qualified_name(jtl::ptr<void>)
+  {
+    return {};
+  }
+
+  void register_rtti(jtl::ptr<void>)
+  {
+  }
+
+  jtl::ptr<void> expression_type(expression_ref)
+  {
+    return {};
+  }
+
+  jtl::ptr<void> non_void_expression_type(expression_ref)
+  {
+    return {};
+  }
+
+  jtl::ptr<void> expression_scope(expression_ref const)
+  {
+    return {};
+  }
+
+  jtl::string_result<std::vector<Cpp::TemplateArgInfo>>
+  find_best_arg_types_with_conversions(std::vector<void *> const &,
+                                       std::vector<Cpp::TemplateArgInfo> const &,
+                                       bool)
+  {
+    return cpp_unavailable_string_result<std::vector<Cpp::TemplateArgInfo>>();
+  }
+
+  jtl::string_result<jtl::ptr<void>>
+  find_best_overload(std::vector<void *> const &,
+                     std::vector<Cpp::TemplateArgInfo> &,
+                     std::vector<Cpp::TCppScope_t> const &)
+  {
+    return cpp_unavailable_string_result<jtl::ptr<void>>();
+  }
+
+  bool is_trait_convertible(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_untyped_object(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_typed_object(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_any_object(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_primitive(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_member_function(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_non_static_member_function(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_nullptr(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_implicitly_convertible(jtl::ptr<void>, jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  jtl::ptr<void> untyped_object_ptr_type()
+  {
+    return {};
+  }
+
+  jtl::ptr<void> untyped_object_ref_type()
+  {
+    return {};
+  }
+
+  usize offset_to_typed_object_base(jtl::ptr<void>)
+  {
+    return 0;
+  }
+
+  jtl::option<Cpp::Operator> match_operator(jtl::immutable_string const &)
+  {
+    return none;
+  }
+
+  jtl::option<jtl::immutable_string> operator_name(Cpp::Operator const)
+  {
+    return none;
+  }
+
+  jtl::result<void, error_ref> ensure_convertible(expression_ref const)
+  {
+    return error::runtime_unable_to_load_module(cpp_unavailable_msg);
+  }
+
+  implicit_conversion_action
+  determine_implicit_conversion(jtl::ptr<void>, jtl::ptr<void> const)
+  {
+    return implicit_conversion_action::unknown;
+  }
+#endif
 }

@@ -10,7 +10,12 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   set(build_cord OFF CACHE BOOL "Build cord")
   set(enable_docs OFF CACHE BOOL "Enable docs")
   set(enable_large_config ON CACHE BOOL "Optimize for large heap or root set")
-  set(enable_throw_bad_alloc_library ON CACHE BOOL "Enable C++ gctba library build")
+  if(jank_target_wasm)
+    # Skip gctba for wasm to avoid C++ header issues with emscripten
+    set(enable_throw_bad_alloc_library OFF CACHE BOOL "Enable C++ gctba library build")
+  else()
+    set(enable_throw_bad_alloc_library ON CACHE BOOL "Enable C++ gctba library build")
+  endif()
   add_subdirectory(third-party/bdwgc EXCLUDE_FROM_ALL)
 
   unset(enable_cplusplus)

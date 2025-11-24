@@ -1,6 +1,22 @@
 #pragma once
 
-#include <clang/Interpreter/CppInterOp.h>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <clang/Interpreter/CppInterOp.h>
+#else
+namespace Cpp
+{
+  struct TemplateArgInfo
+  {
+  };
+
+  using TCppScope_t = void *;
+
+  enum class Operator : int
+  {
+    Invalid = 0
+  };
+}
+#endif
 
 #include <jtl/ptr.hpp>
 #include <jtl/result.hpp>

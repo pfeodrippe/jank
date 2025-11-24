@@ -1,13 +1,15 @@
 #include <exception>
 
-#include <Interpreter/Compatibility.h>
-#include <clang/Interpreter/CppInterOp.h>
-#include <llvm/ExecutionEngine/Orc/LLJIT.h>
-#include <llvm/Bitcode/BitcodeWriter.h>
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/MC/TargetRegistry.h>
-#include <llvm/TargetParser/Host.h>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <Interpreter/Compatibility.h>
+  #include <clang/Interpreter/CppInterOp.h>
+  #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+  #include <llvm/Bitcode/BitcodeWriter.h>
+  #include <llvm/Target/TargetMachine.h>
+  #include <llvm/IR/LegacyPassManager.h>
+  #include <llvm/MC/TargetRegistry.h>
+  #include <llvm/TargetParser/Host.h>
+#endif
 
 #include <jank/read/lex.hpp>
 #include <jank/read/parse.hpp>
@@ -22,13 +24,15 @@
 #include <jank/analyze/pass/optimize.hpp>
 #include <jank/evaluate.hpp>
 #include <jank/jit/processor.hpp>
-#include <jank/util/clang.hpp>
-#include <jank/util/clang_format.hpp>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <jank/util/clang.hpp>
+  #include <jank/util/clang_format.hpp>
+  #include <jank/codegen/llvm_processor.hpp>
+  #include <jank/codegen/processor.hpp>
+#endif
 #include <jank/util/environment.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/scope_exit.hpp>
-#include <jank/codegen/llvm_processor.hpp>
-#include <jank/codegen/processor.hpp>
 #include <jank/error/codegen.hpp>
 #include <jank/error/runtime.hpp>
 #include <jank/profile/time.hpp>
@@ -45,7 +49,11 @@ namespace jank::runtime
     /* We want to initialize __rt_ctx ASAP so other code can start using it. */
     : binary_version{ (__rt_ctx = this, util::binary_version()) }
     , binary_cache_dir{ util::binary_cache_dir(binary_version) }
+#ifndef JANK_TARGET_EMSCRIPTEN
     , jit_prc{ binary_version }
+#else
+  , jit_prc{ "" }
+#endif
   {
     intern_ns(make_box<obj::symbol>("cpp"));
     auto const core(intern_ns(make_box<obj::symbol>("clojure.core")));
@@ -179,6 +187,13 @@ namespace jank::runtime
       forms.emplace_back(form.expect_ok().unwrap().ptr);
     }
 
+#ifdef JANK_TARGET_EMSCRIPTEN
+    if(truthy(compile_files_var->deref()))
+    {
+      throw error::internal_codegen_failure(
+        "Module compilation is unavailable when targeting emscripten.");
+    }
+#else
     /* When compiling, we analyze twice. This is because eval will modify its expression
      * in order to wrap it in a function. Undoing this is arduous and error prone, so
      * we just don't bother.
@@ -210,12 +225,10 @@ namespace jank::runtime
       else
       {
         codegen::processor cg_prc{ fn, module, codegen::compilation_target::module };
-        //util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
         auto const code{ cg_prc.declaration_str() };
         auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
         if(!parse_res)
         {
-          /* TODO: Helper to turn an llvm::Error into a string. */
           jtl::immutable_string const res{ "Unable to compile generated C++ source." };
           llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "error: ");
           throw error::internal_codegen_failure(res);
@@ -225,10 +238,18 @@ namespace jank::runtime
         write_module(module_name, partial_tu.TheModule.get()).expect_ok();
       }
     }
+#endif
 
     return ret;
   }
 
+#ifdef JANK_TARGET_EMSCRIPTEN
+  jtl::result<void, error_ref>
+  context::eval_cpp_string(jtl::immutable_string_view const &) const
+  {
+    return error::runtime_invalid_cpp_eval();
+  }
+#else
   jtl::result<void, error_ref>
   context::eval_cpp_string(jtl::immutable_string_view const &code) const
   {
@@ -263,6 +284,7 @@ namespace jank::runtime
     }
     return ok();
   }
+#endif
 
   object_ref context::read_string(jtl::immutable_string_view const &code)
   {
@@ -370,6 +392,14 @@ namespace jank::runtime
     return evaluate::eval(expr);
   }
 
+#ifdef JANK_TARGET_EMSCRIPTEN
+  jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
+                                                 jtl::ref<llvm::Module> const &) const
+  {
+    return err(util::format("Writing modules is unsupported on emscripten (module '{}').",
+                            module_name));
+  }
+#else
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
                                                  jtl::ref<llvm::Module> const &module) const
   {
@@ -420,6 +450,7 @@ namespace jank::runtime
 
     return ok();
   }
+#endif
 
   jtl::immutable_string context::unique_namespaced_string() const
   {

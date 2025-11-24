@@ -5,7 +5,7 @@
 
 #include <Interpreter/Compatibility.h>
 
-#include <cpptrace/from_current.hpp>
+#include <jank/util/cpptrace.hpp>
 
 #include <jank/read/reparse.hpp>
 #include <jank/runtime/visit.hpp>

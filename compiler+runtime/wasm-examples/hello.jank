@@ -1,0 +1,3 @@
+(ns my-ns)
+
+(println "Hello World") ;; Gets logged to the console

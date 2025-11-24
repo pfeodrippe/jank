@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  here="$(cd "$(dirname "$0")" && pwd)"
+else
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+repo_root="${here}/.."
+build_dir="${repo_root}/build-wasm"
+
+usage() {
+  cat <<'USAGE'
+Usage: emscripten-bundle [--build-dir DIR] [-- [extra cmake configure args]]
+
+Runs emcmake/cmake with -Djank_target_wasm=on and produces a wasm-friendly build tree.
+Any arguments after -- are forwarded directly to the emcmake configure invocation.
+USAGE
+}
+
+cmake_args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --build-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --build-dir expects an argument" >&2
+        exit 1
+      fi
+      build_dir="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      cmake_args+=("$@")
+      break
+      ;;
+    *)
+      cmake_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+for tool in emcmake cmake; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "error: required tool '$tool' not found in PATH" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "${build_dir}"
+
+run() {
+  echo "[emscripten-bundle] $*"
+  "$@"
+}
+
+pushd "${repo_root}" >/dev/null
+
+configure_cmd=(
+  emcmake
+  cmake
+  -S
+  .
+  -B
+  "${build_dir}"
+  -Djank_target_wasm=on
+)
+if [[ ${#cmake_args[@]} -gt 0 ]]; then
+  configure_cmd+=("${cmake_args[@]}")
+fi
+
+run "${configure_cmd[@]}"
+
+run cmake --build "${build_dir}"
+
+cat <<'TODO'
+[emscripten-bundle] Build complete.
+Next steps (manual for now):
+  1. Use the generated wasm/static archives under the build dir.
+  2. Run em++ to link your cached modules plus libjank-mini-wasm.a.
+  3. Emit hello.html/js via `em++ -sMODULARIZE ...` as described in docs/wasm-minimal-example.md.
+
+Automation for steps 2/3 is coming soon.
+TODO
+
+popd >/dev/null

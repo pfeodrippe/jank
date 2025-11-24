@@ -1,4 +1,4 @@
-#include <cpptrace/cpptrace.hpp>
+#include <jank/util/cpptrace.hpp>
 
 #include <jank/error.hpp>
 #include <jank/runtime/context.hpp>

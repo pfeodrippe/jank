@@ -13,6 +13,11 @@
 #include <jank/jit/processor.hpp>
 #include <jank/util/cli.hpp>
 
+namespace llvm
+{
+  class Module;
+}
+
 namespace jank
 {
   namespace jit

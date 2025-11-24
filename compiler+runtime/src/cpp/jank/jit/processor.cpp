@@ -20,7 +20,7 @@
 #include <llvm/Object/MachOUniversal.h>
 #include <llvm/Config/llvm-config.h>
 
-#include <cpptrace/gdb_jit.hpp>
+#include <jank/util/cpptrace.hpp>
 
 #include <jank/jit/processor.hpp>
 #include <jank/util/make_array.hpp>

@@ -1,7 +1,9 @@
-#include <Interpreter/Compatibility.h>
-#include <Interpreter/CppInterOpInterpreter.h>
-#include <clang/Interpreter/CppInterOp.h>
-#include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <Interpreter/Compatibility.h>
+  #include <Interpreter/CppInterOpInterpreter.h>
+  #include <clang/Interpreter/CppInterOp.h>
+  #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#endif
 
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/ns.hpp>
@@ -581,13 +583,15 @@ namespace jank::evaluate
 
   object_ref eval(expr::function_ref const expr)
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    throw make_box("unsupported eval: function (emscripten)").erase();
+#else
     auto const &module(
       module::nest_module(expect_object<ns>(__rt_ctx->current_ns_var->deref())->to_string(),
                           munge(expr->unique_name)));
 
     if(util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
     {
-      /* TODO: Remove extra wrapper, if possible. Just create function object directly? */
       auto const wrapped_expr(wrap_expression(expr, "repl_fn", {}));
 
       codegen::llvm_processor const cg_prc{ wrapped_expr,
@@ -605,8 +609,6 @@ namespace jank::evaluate
     }
     else
     {
-      /* Capture stderr output (C++ compilation errors) and forward them through
-       * the output redirection system so they appear in the IDE REPL. */
       runtime::scoped_stderr_redirect const stderr_redirect{};
 
       codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
@@ -618,13 +620,13 @@ namespace jank::evaluate
         __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
       if(res)
       {
-        /* TODO: Helper to turn an llvm::Error into a string. */
         jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
         llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
         throw error::internal_codegen_failure(msg);
       }
       return try_object<obj::jit_function>(v.convertTo<runtime::object *>());
     }
+#endif
   }
 
   object_ref eval(expr::recur_ref const)
