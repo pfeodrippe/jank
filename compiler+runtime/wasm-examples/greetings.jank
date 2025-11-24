@@ -1,0 +1,6 @@
+(ns greetings)
+
+(defn -main []
+  (println "Welcome to jank!")
+  (println "Compiled to WebAssembly")
+  (println "Running in Node.js"))

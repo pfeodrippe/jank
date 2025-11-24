@@ -1,4 +1,5 @@
 #include <exception>
+#include <fstream>
 
 #ifndef JANK_TARGET_EMSCRIPTEN
   #include <Interpreter/Compatibility.h>
@@ -226,6 +227,21 @@ namespace jank::runtime
       {
         codegen::processor cg_prc{ fn, module, codegen::compilation_target::module };
         auto const code{ cg_prc.declaration_str() };
+        
+        /* Save generated C++ to a file for inspection/WASM compilation. */
+        if(auto const save_cpp = std::getenv("JANK_SAVE_CPP"); save_cpp && std::string(save_cpp) == "1")
+        {
+          auto const cpp_path = util::format("{}/{}.cpp", binary_cache_dir, module::module_to_path(module));
+          std::filesystem::create_directories(std::filesystem::path{cpp_path}.parent_path());
+          std::ofstream cpp_out(cpp_path);
+          if(cpp_out.is_open())
+          {
+            cpp_out << code;
+            cpp_out.close();
+            std::cerr << "[jank] Saved generated C++ to: " << cpp_path << "\n";
+          }
+        }
+        
         auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
         if(!parse_res)
         {

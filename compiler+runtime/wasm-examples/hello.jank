@@ -1,3 +1,4 @@
-(ns my-ns)
+(ns hello)
 
-(println "Hello World") ;; Gets logged to the console
+(defn -main []
+  (println "Hello World")) ;; Gets logged to the console
