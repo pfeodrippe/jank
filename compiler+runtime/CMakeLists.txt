@@ -35,11 +35,13 @@ project(
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 cmake_policy(SET CMP0077 NEW)
 
-# CRITICAL FIX for emscripten: Force correct include order EARLY
-# Emscripten's toolchain adds system includes in wrong order, breaking libc++ wrapper headers
-# We must prepend c++/v1 BEFORE the regular include dir
+# Note: emscripten should handle C++ include paths automatically via its toolchain
+# We avoid adding extra -isystem flags that could conflict with emscripten's libc++
+# The order of system includes is critical: c++/v1 MUST come before sysroot/include
 if(jank_target_wasm)
-  set(CMAKE_CXX_FLAGS "-isystem /opt/homebrew/Cellar/emscripten/4.0.20/libexec/cache/sysroot/include/c++/v1 ${CMAKE_CXX_FLAGS}")
+  # Clear any default system include ordering that CMake might add
+  # and let emscripten's toolchain handle the C++ includes properly
+  set(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "")
 endif()
 
 # All options are available here.
@@ -426,32 +428,35 @@ endif()
 if(NOT jank_target_wasm)
   list(APPEND jank_lib_standalone_deps nanobench_lib clangCppInterOp cpptrace::cpptrace ftxui::screen ftxui::dom)
 endif()
-add_custom_command(
-  DEPENDS ${jank_lib_standalone_deps}
-  OUTPUT ${CMAKE_BINARY_DIR}/libjank-standalone-phase-1.a
-  COMMAND_EXPAND_LISTS
-  VERBATIM
-  COMMAND "${CMAKE_BINARY_DIR}/ar-merge" merge
-)
-add_custom_target(
-  jank_lib_standalone_phase_1
-  ALL
-  DEPENDS ${CMAKE_BINARY_DIR}/libjank-standalone-phase-1.a
-)
 
-add_custom_command(
-  DEPENDS ${jank_lib_standalone_deps}
-          jank_core_libraries
-  OUTPUT ${CMAKE_BINARY_DIR}/libjank-standalone.a
-  COMMAND_EXPAND_LISTS
-  VERBATIM
-  COMMAND "${CMAKE_BINARY_DIR}/ar-merge" merge-phase-2
-)
-add_custom_target(
-  jank_lib_standalone_phase_2
-  ALL
-  DEPENDS ${CMAKE_BINARY_DIR}/libjank-standalone.a
-)
+if(NOT jank_target_wasm)
+  add_custom_command(
+    DEPENDS ${jank_lib_standalone_deps}
+    OUTPUT ${CMAKE_BINARY_DIR}/libjank-standalone-phase-1.a
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+    COMMAND "${CMAKE_BINARY_DIR}/ar-merge" merge
+  )
+  add_custom_target(
+    jank_lib_standalone_phase_1
+    ALL
+    DEPENDS ${CMAKE_BINARY_DIR}/libjank-standalone-phase-1.a
+  )
+
+  add_custom_command(
+    DEPENDS ${jank_lib_standalone_deps}
+            jank_core_libraries
+    OUTPUT ${CMAKE_BINARY_DIR}/libjank-standalone.a
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+    COMMAND "${CMAKE_BINARY_DIR}/ar-merge" merge-phase-2
+  )
+  add_custom_target(
+    jank_lib_standalone_phase_2
+    ALL
+    DEPENDS ${CMAKE_BINARY_DIR}/libjank-standalone.a
+  )
+endif()
 
 # ---- Other dependencies ----
 # We want all deps built as static libs.
@@ -488,33 +493,22 @@ endif()
 # ---- Other dependencies ----
 
 # ---- libjank.a ----
-# Minimal wasm build - only panic/assert shims (no immer, no boost, minimal deps)
-set(jank_lib_sources
-  # Wasm stub to ensure library has at least one object file
-)
-if(jank_target_wasm)
-  list(APPEND jank_lib_sources src/cpp/jank/wasm_stub.cpp)
-endif()
-if(NOT jank_target_wasm)
-  list(APPEND jank_lib_sources
+# For WASM: include full runtime sources needed for clojure.core and clojure.set
+# For native: include everything including AOT/codegen/nREPL
+
+# Common runtime sources needed for both WASM and native builds
+set(jank_runtime_common_sources
   src/cpp/jank/hash.cpp
-  src/cpp/jank/util/sha256.cpp
-  src/cpp/jank/util/environment.cpp
   src/cpp/jank/util/scope_exit.cpp
   src/cpp/jank/util/escape.cpp
-  src/cpp/jank/util/cli.cpp
   src/cpp/jtl/string_builder.cpp
-  src/cpp/jank/util/clang_format.cpp
   src/cpp/jank/util/string.cpp
   src/cpp/jank/util/fmt.cpp
   src/cpp/jank/util/fmt/print.cpp
   src/cpp/jank/util/path.cpp
   src/cpp/jank/util/try.cpp
-  src/cpp/jank/util/clang.cpp
   src/cpp/jank/profile/time.cpp
   src/cpp/jank/error.cpp
-  src/cpp/jank/error/aot.cpp
-  src/cpp/jank/error/codegen.cpp
   src/cpp/jank/error/lex.cpp
   src/cpp/jank/error/parse.cpp
   src/cpp/jank/error/analyze.cpp
@@ -639,17 +633,42 @@ if(NOT jank_target_wasm)
   src/cpp/jank/analyze/pass/strip_source_meta.cpp
   src/cpp/jank/evaluate.cpp
   src/cpp/jank/c_api.cpp
-  src/cpp/jank/codegen/processor.cpp
-  src/cpp/jank/codegen/llvm_processor.cpp
-  src/cpp/jank/nrepl_server/asio.cpp
-  src/cpp/jank/nrepl_server/native_header_completion.cpp
-  src/cpp/jank/nrepl_server/native_header_index.cpp
-  src/cpp/jank/aot/processor.cpp
-  src/cpp/jank/aot/resource.cpp
   src/cpp/clojure/core_native.cpp
   src/cpp/clojure/string_native.cpp
-  src/cpp/jank/compiler_native.cpp
-  src/cpp/jank/perf_native.cpp
+)
+
+set(jank_lib_sources)
+
+# Add runtime sources for both WASM and native
+if(jank_target_wasm)
+  # WASM build: full runtime but no AOT/codegen/nREPL
+  list(APPEND jank_lib_sources ${jank_runtime_common_sources})
+  list(APPEND jank_lib_sources
+    src/cpp/jank/util/environment_wasm.cpp
+    src/cpp/jank/wasm_stub.cpp
+  )
+else()
+  # Native build: full runtime + AOT/codegen/nREPL
+  list(APPEND jank_lib_sources ${jank_runtime_common_sources})
+  list(APPEND jank_lib_sources
+    src/cpp/jank/util/environment.cpp
+    src/cpp/jank/util/sha256.cpp
+    src/cpp/jank/util/cli.cpp
+    src/cpp/jank/util/clang_format.cpp
+    src/cpp/jank/util/clang.cpp
+    src/cpp/jank/error/aot.cpp
+    src/cpp/jank/error/codegen.cpp
+    src/cpp/jank/codegen/processor.cpp
+    src/cpp/jank/codegen/llvm_processor.cpp
+    src/cpp/jank/nrepl_server/asio.cpp
+    src/cpp/jank/nrepl_server/native_header_completion.cpp
+    src/cpp/jank/nrepl_server/native_header_index.cpp
+    src/cpp/jank/aot/processor.cpp
+    src/cpp/jank/aot/resource.cpp
+    src/cpp/jank/compiler_native.cpp
+    src/cpp/jank/perf_native.cpp
+    src/cpp/jank/ui/highlight.cpp
+    src/cpp/jank/error/report.cpp
   )
 endif()
 
@@ -657,45 +676,6 @@ if(jank_target_wasm)
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor_stub_wasm.cpp)
 else()
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor.cpp)
-endif()
-
-if(jank_target_wasm)
-  list(REMOVE_ITEM
-    jank_lib_sources
-    src/cpp/jank/codegen/processor.cpp
-    src/cpp/jank/codegen/llvm_processor.cpp
-    src/cpp/jank/util/clang.cpp
-    src/cpp/jank/util/clang_format.cpp
-    src/cpp/jank/compiler_native.cpp
-    src/cpp/jank/perf_native.cpp
-    src/cpp/jank/aot/processor.cpp
-    src/cpp/jank/aot/resource.cpp
-    src/cpp/jank/nrepl_server/asio.cpp
-    src/cpp/jank/nrepl_server/native_header_completion.cpp
-    src/cpp/jank/nrepl_server/native_header_index.cpp)
-endif()
-
-if(jank_target_wasm)
-  list(REMOVE_ITEM
-    jank_lib_sources
-    src/cpp/jank/codegen/processor.cpp
-    src/cpp/jank/codegen/llvm_processor.cpp
-    src/cpp/jank/util/clang.cpp
-    src/cpp/jank/util/clang_format.cpp
-    src/cpp/jank/compiler_native.cpp
-    src/cpp/jank/perf_native.cpp
-    src/cpp/jank/aot/processor.cpp
-    src/cpp/jank/aot/resource.cpp
-    src/cpp/jank/nrepl_server/asio.cpp
-    src/cpp/jank/nrepl_server/native_header_completion.cpp
-    src/cpp/jank/nrepl_server/native_header_index.cpp)
-endif()
-
-if(NOT jank_target_wasm)
-  list(APPEND jank_lib_sources
-    src/cpp/jank/ui/highlight.cpp
-    src/cpp/jank/error/report.cpp
-  )
 endif()
 
 add_library(
@@ -718,11 +698,17 @@ if(jank_target_wasm)
     src/cpp/jtl/assert_wasm.cpp
   )
   
-  # Regular includes for project
+  # For WASM, only our project include is non-system
   target_include_directories(
     jank_lib
     PUBLIC
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include/cpp>"
+  )
+  # Third-party includes should be SYSTEM to not interfere with emscripten's libc++
+  target_include_directories(
+    jank_lib
+    SYSTEM
+    PUBLIC
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/immer>"
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bdwgc/include>"
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cli11/include>"
@@ -1065,34 +1051,36 @@ endif()
 # can know all of the types and functions within the jank runtime. This PCH is our
 # "incremental" PCH, named that way since it uses Clang's -fincremental-extensions flag.
 
-# Build a string of all of our AOT compilation flags so we can share them with our incremental PCH.
-set(jank_incremental_pch_flag ${CMAKE_BINARY_DIR}/incremental.pch)
+if(NOT jank_target_wasm)
+  # Build a string of all of our AOT compilation flags so we can share them with our incremental PCH.
+  set(jank_incremental_pch_flag ${CMAKE_BINARY_DIR}/incremental.pch)
 
-separate_arguments(jank_incremental_pch_cxx_flags UNIX_COMMAND ${CMAKE_CXX_FLAGS})
-list(REMOVE_ITEM jank_incremental_pch_cxx_flags -fPIC)
-add_custom_command(
-  DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1
-  OUTPUT ${jank_incremental_pch_flag}
-  COMMAND_EXPAND_LISTS
-  VERBATIM
-  COMMAND ${CMAKE_CXX_COMPILER}
-          #${jank_incremental_pch_cxx_flags}
-          ${jank_common_compiler_flags} ${jank_jit_compiler_flags} ${jank_lib_includes}
-          -Xclang -fincremental-extensions
-          -Xclang -emit-pch
-          -Xclang -fmodules-embed-all-files
-          -fno-modules-validate-system-headers
-          -fpch-instantiate-templates
-          -x c++-header
-          -w
-          -c ${PROJECT_SOURCE_DIR}/include/cpp/jank/prelude.hpp
-          -o ${jank_incremental_pch_flag}
-)
-add_custom_target(
-  jank_incremental_pch
-  ALL
-  DEPENDS ${jank_incremental_pch_flag}
-)
+  separate_arguments(jank_incremental_pch_cxx_flags UNIX_COMMAND ${CMAKE_CXX_FLAGS})
+  list(REMOVE_ITEM jank_incremental_pch_cxx_flags -fPIC)
+  add_custom_command(
+    DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1
+    OUTPUT ${jank_incremental_pch_flag}
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+    COMMAND ${CMAKE_CXX_COMPILER}
+            #${jank_incremental_pch_cxx_flags}
+            ${jank_common_compiler_flags} ${jank_jit_compiler_flags} ${jank_lib_includes}
+            -Xclang -fincremental-extensions
+            -Xclang -emit-pch
+            -Xclang -fmodules-embed-all-files
+            -fno-modules-validate-system-headers
+            -fpch-instantiate-templates
+            -x c++-header
+            -w
+            -c ${PROJECT_SOURCE_DIR}/include/cpp/jank/prelude.hpp
+            -o ${jank_incremental_pch_flag}
+  )
+  add_custom_target(
+    jank_incremental_pch
+    ALL
+    DEPENDS ${jank_incremental_pch_flag}
+  )
+endif()
 # ---- Incremental PCH ----
 
 # ---- Compiled Clojure libraries ----
@@ -1104,34 +1092,36 @@ add_custom_target(
 # With this setup, we'll compile when the flag file doesn't exist (i.e. on
 # first build or after a clean), when any of the jank sources for these libs
 # change, or whenever the jank binary changes.
-set(jank_core_libraries_flag "${CMAKE_BINARY_DIR}/classes/core-libraries")
-set(jank_core_library_commands "")
-list(LENGTH jank_core_modules jank_core_module_count)
-if(jank_core_module_count GREATER 0)
-  math(EXPR jank_core_module_last_index "${jank_core_module_count} - 1")
-  foreach(module_index RANGE 0 ${jank_core_module_last_index})
-    list(GET jank_core_modules ${module_index} jank_core_module_name)
-    list(GET jank_core_module_paths ${module_index} jank_core_module_path)
-    list(GET jank_core_library_objects ${module_index} jank_core_module_object)
-    get_filename_component(jank_core_module_dir ${jank_core_module_object} DIRECTORY)
-    list(APPEND jank_core_library_commands
-      COMMAND ${CMAKE_COMMAND} -E make_directory ${jank_core_module_dir}
-      COMMAND ${CMAKE_BINARY_DIR}/jank-phase-1 compile-module -o ${jank_core_module_object} ${jank_core_module_name}
-    )
-  endforeach()
+if(NOT jank_target_wasm)
+  set(jank_core_libraries_flag "${CMAKE_BINARY_DIR}/classes/core-libraries")
+  set(jank_core_library_commands "")
+  list(LENGTH jank_core_modules jank_core_module_count)
+  if(jank_core_module_count GREATER 0)
+    math(EXPR jank_core_module_last_index "${jank_core_module_count} - 1")
+    foreach(module_index RANGE 0 ${jank_core_module_last_index})
+      list(GET jank_core_modules ${module_index} jank_core_module_name)
+      list(GET jank_core_module_paths ${module_index} jank_core_module_path)
+      list(GET jank_core_library_objects ${module_index} jank_core_module_object)
+      get_filename_component(jank_core_module_dir ${jank_core_module_object} DIRECTORY)
+      list(APPEND jank_core_library_commands
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${jank_core_module_dir}
+        COMMAND ${CMAKE_BINARY_DIR}/jank-phase-1 compile-module -o ${jank_core_module_object} ${jank_core_module_name}
+      )
+    endforeach()
+  endif()
+  add_custom_command(
+    DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1 ${jank_core_module_sources} ${jank_incremental_pch_flag}
+    OUTPUT ${jank_core_libraries_flag}
+    BYPRODUCTS ${jank_core_library_objects}
+    ${jank_core_library_commands}
+    COMMAND touch ${jank_core_libraries_flag}
+  )
+  add_custom_target(
+    jank_core_libraries
+    ALL
+    DEPENDS ${jank_core_libraries_flag}
+  )
 endif()
-add_custom_command(
-  DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1 ${jank_core_module_sources} ${jank_incremental_pch_flag}
-  OUTPUT ${jank_core_libraries_flag}
-  BYPRODUCTS ${jank_core_library_objects}
-  ${jank_core_library_commands}
-  COMMAND touch ${jank_core_libraries_flag}
-)
-add_custom_target(
-  jank_core_libraries
-  ALL
-  DEPENDS ${jank_core_libraries_flag}
-)
 # ---- Compiled Clojure libraries ----
 
 # ---- Clang format YAML ----

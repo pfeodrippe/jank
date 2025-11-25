@@ -4,6 +4,9 @@
 
 namespace jank::runtime
 {
+// These operator overloads are only needed when native_big_integer is a class type (boost::multiprecision)
+// For WASM where native_big_integer = long long, the built-in operators work fine
+#ifndef JANK_TARGET_EMSCRIPTEN
   f64 operator+(native_big_integer const &l, f64 const &r);
   f64 operator+(f64 const &l, native_big_integer const &r);
   f64 operator-(native_big_integer const &l, f64 const &r);
@@ -24,6 +27,7 @@ namespace jank::runtime
   bool operator>(f64 const &l, native_big_integer const &r);
   bool operator>=(native_big_integer const &l, f64 const &r);
   bool operator>=(f64 const &l, native_big_integer const &r);
+#endif
 }
 
 namespace jank::runtime::obj
@@ -74,6 +78,7 @@ namespace jank::runtime::obj
     native_big_integer data{};
   };
 
+#ifndef JANK_TARGET_EMSCRIPTEN
   /* For some reason, operators defined in jank::runtime namespace cannot be accessed from jank namespace.
    * We therefore added the following as a workaround. The root cause is not clear, likely due to boost cpp_int quirks.*/
   using jank::runtime::operator+;
@@ -86,4 +91,5 @@ namespace jank::runtime::obj
   using jank::runtime::operator<=;
   using jank::runtime::operator>;
   using jank::runtime::operator>=;
+#endif
 }

@@ -239,10 +239,13 @@ namespace jtl
     return *this;
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Only needed when native_big_integer is a boost type with .str() method
   string_builder &string_builder::operator()(jank::native_big_integer const &d) &
   {
     return (*this)(d.str());
   }
+#endif
 
   string_builder &string_builder::operator()(char const d) &
   {
@@ -348,10 +351,12 @@ namespace jtl
     (*this)(d);
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
   void string_builder::push_back(jank::native_big_integer const &d) &
   {
     (*this)(d);
   }
+#endif
 
   void string_builder::push_back(char const d) &
   {

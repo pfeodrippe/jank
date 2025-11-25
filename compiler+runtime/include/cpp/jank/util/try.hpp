@@ -1,6 +1,8 @@
 #pragma once
 
-#include <cpptrace/from_current.hpp>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <cpptrace/from_current.hpp>
+#endif
 
 #include <jank/runtime/object.hpp>
 
@@ -45,35 +47,70 @@ namespace jank::util
  * One implication of this design is that we can provide a single
  * function to handle all expected exception types, with full type
  * info. For example: `JANK_CATCH([&](auto const &e){  })` */
-#define JANK_TRY CPPTRACE_TRY
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #define JANK_TRY CPPTRACE_TRY
+#else
+  // WASM: simple try without cpptrace tracing
+  #define JANK_TRY try
+#endif
 
 /* NOLINTNEXTLINE(cppcoreguidelines-macro-usage) */
-#define JANK_CATCH_THEN(fun, then)         \
-  CPPTRACE_CATCH(std::exception const &e)  \
-  {                                        \
-    fun(e);                                \
-    then;                                  \
-  }                                        \
-  catch(jank::runtime::object * const e)   \
-  {                                        \
-    fun(e);                                \
-    then;                                  \
-  }                                        \
-  catch(jank::runtime::object_ref const e) \
-  {                                        \
-    fun(e);                                \
-    then;                                  \
-  }                                        \
-  catch(jtl::immutable_string const &e)    \
-  {                                        \
-    fun(e);                                \
-    then;                                  \
-  }                                        \
-  catch(jank::error_ref const &e)          \
-  {                                        \
-    fun(e);                                \
-    then;                                  \
-  }
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #define JANK_CATCH_THEN(fun, then)         \
+    CPPTRACE_CATCH(std::exception const &e)  \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }                                        \
+    catch(jank::runtime::object * const e)   \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }                                        \
+    catch(jank::runtime::object_ref const e) \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }                                        \
+    catch(jtl::immutable_string const &e)    \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }                                        \
+    catch(jank::error_ref const &e)          \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }
+#else
+  // WASM: simple catch without cpptrace
+  #define JANK_CATCH_THEN(fun, then)         \
+    catch(std::exception const &e)           \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }                                        \
+    catch(jank::runtime::object * const e)   \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }                                        \
+    catch(jank::runtime::object_ref const e) \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }                                        \
+    catch(jtl::immutable_string const &e)    \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }                                        \
+    catch(jank::error_ref const &e)          \
+    {                                        \
+      fun(e);                                \
+      then;                                  \
+    }
+#endif
 
 /* NOLINTNEXTLINE(cppcoreguidelines-macro-usage) */
 #define JANK_CATCH(fun) JANK_CATCH_THEN(fun, ;)

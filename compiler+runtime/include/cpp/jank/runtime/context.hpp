@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <list>
 
-#include <folly/Synchronized.h>
+#include <jank/util/folly_shim.hpp>
 
 #include <jtl/result.hpp>
 #include <jank/analyze/processor.hpp>

@@ -44,6 +44,24 @@ em++ -O2 jank_execute.cpp -o jank_execute.js \
   -s EXPORTED_RUNTIME_METHODS='["ccall","cwrap"]'
 ```
 
+### Compiling jank Source Directly
+
+You can now turn a simple `.jank` file into a runnable WASM module in one step using the helper script:
+
+```bash
+cd /Users/pfeodrippe/dev/jank/compiler+runtime/wasm-examples
+./compile_jank_to_wasm.sh hello.jank
+```
+
+This does the following:
+
+- calls `../build/jank --codegen cpp run hello.jank`
+- wraps the generated C++ with the lightweight runtime stub in `minimal_jank_runtime.hpp`
+- adds a tiny driver that instantiates `hello/-main`
+- invokes `em++` to build `hello.{js,wasm}` with `_jank_run_main` exported
+
+Limitations: the stub runtime currently knows how to resolve `println` and simple string literals only. More complex programs still need the full runtime ported to WASM.
+
 ### Running the Examples
 
 Start a local HTTP server:
