@@ -186,10 +186,13 @@ if [[ -n "${jank_source}" ]]; then
   # The native jank compiler generates C++ code that em++ can compile to WASM
   cpp_output="${output_dir}/${module_name}_generated.cpp"
   
+  # Remove old generated file to start fresh (jank appends to file)
+  rm -f "${cpp_output}"
+  
   echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm_aot..."
   
-  # Try to compile with wasm_aot codegen
-  # This generates standalone C++ that can be compiled by emscripten
+  # Try to compile module with wasm_aot codegen using 'run' command
+  # The 'run' command evaluates the file and generates AOT code
   if "${native_jank}" run \
     --codegen wasm_aot \
     --save-cpp \
@@ -212,37 +215,112 @@ if [[ -n "${jank_source}" ]]; then
     # Munge the module name for C++ symbol generation (replace - with _)
     munged_module_name="${module_name//-/_}"
     
+    # Detect dependencies from generated code (find all jank_load_* functions except the main one)
+    # These are dependencies that need to be loaded before the main module
+    deps_extern=""
+    deps_load=""
+    
+    # Find all jank_load_X functions in the generated code that are module loaders
+    # These are defined as "void* jank_load_X()" at the top level
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^[[:space:]]*void\*[[:space:]]+jank_load_([a-zA-Z_][a-zA-Z0-9_]*)\(\)[[:space:]]*\{ ]]; then
+        dep_func="jank_load_${BASH_REMATCH[1]}"
+        # Skip the main module itself
+        if [[ "$dep_func" != "jank_load_${munged_module_name}" ]]; then
+          # Convert underscores back to dots for display
+          dep_name="${BASH_REMATCH[1]//_/.}"
+          deps_extern+="  void* ${dep_func}();\\n"
+          deps_load+="  printf(\"[jank-wasm] Loading dependency: ${dep_name}...\\\\n\");\\n"
+          deps_load+="  ${dep_func}();\\n"
+        fi
+      fi
+    done < "${cpp_output}"
+    
     cat > "${entrypoint_cpp}" <<ENTRY_EOF
 // Auto-generated AOT entrypoint for ${module_name}
 // Uses pre-compiled jank code (no runtime evaluation needed!)
 #include <cstdio>
+#include <exception>
+#include <jank/runtime/context.hpp>
+#include <jank/runtime/core/to_string.hpp>
+#include <jank/error.hpp>
 
 // jank C API
 extern "C" {
   int jank_init(int argc, char const** argv, bool init_ctx, int (*fn)(int, char const**));
   void* jank_load_clojure_core_native();
+  void* jank_setup_clojure_core_for_wasm();
+  
+  // Dependency module init functions
+$(echo -e "${deps_extern}")
+  // Main module init function (returns void* which is an erased object_ref)
+  void* jank_load_${munged_module_name}();
 }
 
-// Generated module init function  
-extern "C" void* jank_load_${munged_module_name}();
-extern "C" jank::runtime::object_ref jank_wasm_init_${munged_module_name}();
+static void* safe_load_module() {
+  using namespace jank;
+  using namespace jank::runtime;
+  try {
+    printf("[jank-wasm] Now calling the actual load function...\\n");
+    return jank_load_${munged_module_name}();
+  } catch(error_ref const& e) {
+    printf("[jank-wasm] jank error during load: %s\\n", e->message.c_str());
+    return nullptr;
+  } catch(oref<object> const& e) {
+    printf("[jank-wasm] jank oref exception during load: %s\\n", to_string(e).c_str());
+    return nullptr;
+  } catch(std::exception const& e) {
+    printf("[jank-wasm] C++ std::exception during load: %s\\n", e.what());
+    return nullptr;
+  } catch(...) {
+    printf("[jank-wasm] Unknown C++ exception during load\\n");
+    return nullptr;
+  }
+}
 
 static int jank_main(int argc, char const** argv) {
-  printf("[jank-wasm] AOT mode: using pre-compiled code\\n");
-  
-  // Load core native functions
-  printf("[jank-wasm] Loading clojure.core-native...\\n");
-  jank_load_clojure_core_native();
-  printf("[jank-wasm] Core native loaded!\\n");
-  printf("\\n");
-  
-  // Call the pre-compiled module
-  printf("[jank-wasm] Executing pre-compiled module: ${module_name}\\n");
-  auto result = jank_wasm_init_${munged_module_name}();
-  printf("[jank-wasm] Result: %s\\n", jank::runtime::to_string(result).c_str());
-  
-  printf("\\n[jank-wasm] Done (AOT mode)!\\n");
-  return 0;
+  using namespace jank;
+  using namespace jank::runtime;
+  try {
+    printf("[jank-wasm] AOT mode: using pre-compiled code\\n");
+    
+    // Load core native functions
+    printf("[jank-wasm] Loading clojure.core-native...\\n");
+    jank_load_clojure_core_native();
+    printf("[jank-wasm] Core native loaded!\\n");
+    
+    // Set up clojure.core namespace by referring all vars from clojure.core-native
+    printf("[jank-wasm] Setting up clojure.core namespace...\\n");
+    jank_setup_clojure_core_for_wasm();
+    printf("[jank-wasm] clojure.core ready!\\n");
+    printf("\\n");
+    
+    // Load dependencies
+$(echo -e "${deps_load}")
+    // Call the pre-compiled module
+    printf("[jank-wasm] Executing pre-compiled module: ${module_name}\\n");
+    void* result = safe_load_module();
+    if(!result) {
+      printf("[jank-wasm] Module load failed!\\n");
+      return 1;
+    }
+    printf("[jank-wasm] Result: %p\\n", result);
+    
+    printf("\\n[jank-wasm] Done (AOT mode)!\\n");
+    return 0;
+  } catch(error_ref const& e) {
+    printf("[jank-wasm] jank error: %s\\n", e->message.c_str());
+    return 1;
+  } catch(object_ref const& e) {
+    printf("[jank-wasm] jank exception: %s\\n", to_string(e).c_str());
+    return 1;
+  } catch(std::exception const& e) {
+    printf("[jank-wasm] C++ exception: %s\\n", e.what());
+    return 1;
+  } catch(...) {
+    printf("[jank-wasm] Unknown C++ exception\\n");
+    return 1;
+  }
 }
 
 int main(int argc, char const** argv) {
@@ -372,12 +450,44 @@ done
 # Emscripten linking flags
 # Note: jank wasm build is a library, not an executable, so we don't export main
 # Instead, we create a module that can be loaded and used via ccall/cwrap
+
+# Include paths for generated C++ that needs jank headers
+jank_include_flags=(
+  -I"${repo_root}/include/cpp"
+  -I"${repo_root}/third-party/immer"
+  -I"${repo_root}/third-party/bdwgc/include"
+  -I"${repo_root}/third-party/folly"
+  -I"${repo_root}/third-party/bpptree/include"
+  -I"${repo_root}/third-party/cli11/include"
+  -I"${repo_root}/third-party/boost-preprocessor/include"
+  -I"${repo_root}/third-party/boost-multiprecision/include"
+)
+
+# Compiler flags for emscripten compatibility (must match CMakeLists.txt WASM build flags)
+jank_compile_flags=(
+  -std=c++20
+  -D_LIBCPP_HAS_NO_INCOMPLETE_FORMAT
+  -D_LIBCPP_HAS_NO_LOCALIZATION
+  -DIMMER_HAS_LIBGC=1
+  -DIMMER_TAGGED_NODE=0
+  -DHAVE_CXX14=1
+  -DFOLLY_HAVE_JEMALLOC=0
+  -DFOLLY_HAVE_TCMALLOC=0
+  -DFOLLY_ASSUME_NO_JEMALLOC=1
+  -DFOLLY_ASSUME_NO_TCMALLOC=1
+  -DJANK_TARGET_EMSCRIPTEN
+  -DJANK_TARGET_WASM=1
+  -Wno-invalid-constexpr
+)
+
 em_link_cmd=(
   em++
   -o "${output_dir}/${output_name}.js"
   "${libjank}"
   "${libjankzip}"
   "${libgc}"
+  "${jank_include_flags[@]}"
+  "${jank_compile_flags[@]}"
 )
 
 # Add compiled objects if any
@@ -418,6 +528,8 @@ em_link_cmd+=(
   -sENVIRONMENT=web,node
   # Error handling
   -sABORTING_MALLOC=0
+  # Enable RTTI for exception handling
+  -frtti
 )
 
 # Check if shell file exists for HTML generation
@@ -433,6 +545,8 @@ if [[ -f "${shell_file}" ]]; then
     "${libjank}"
     "${libjankzip}"
     "${libgc}"
+    "${jank_include_flags[@]}"
+    "${jank_compile_flags[@]}"
   )
   
   # Add compiled objects if any

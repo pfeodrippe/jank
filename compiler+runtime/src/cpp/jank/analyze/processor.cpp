@@ -1672,13 +1672,18 @@ namespace jank::analyze
         latest_expansion(macro_expansions));
     }
 
+    /* Use the var's actual namespace for the qualified symbol, not the current namespace.
+     * This is important for referred vars - e.g. when clojure.set uses 'reduce', we want
+     * to generate code that looks up clojure.core/reduce, not clojure.set/reduce. */
+    auto const var_qualified_sym(make_box<runtime::obj::symbol>(var->n->name->name, var->name->name));
+
     /* Macros aren't lifted, since they're not used during runtime. */
     auto const macro_kw(__rt_ctx->intern_keyword("", "macro", true).expect_ok());
     if(var->meta.is_none() || get(var->meta.unwrap(), macro_kw).is_nil())
     {
-      current_frame->lift_var(qualified_sym);
+      current_frame->lift_var(var_qualified_sym);
     }
-    return jtl::make_ref<expr::var_deref>(position, current_frame, true, qualified_sym, var);
+    return jtl::make_ref<expr::var_deref>(position, current_frame, true, var_qualified_sym, var);
   }
 
   jtl::result<expr::function_arity, error_ref>

@@ -13,6 +13,7 @@
 #include <jank/runtime/core/to_string.hpp>
 #include <jank/runtime/obj/persistent_string.hpp>
 #include <jank/runtime/obj/persistent_vector.hpp>
+#include <jank/runtime/obj/persistent_hash_map.hpp>
 #include <jank/runtime/detail/type.hpp>
 #include <jank/analyze/processor.hpp>
 #include <jank/c_api.h>
@@ -52,7 +53,25 @@ namespace jank
 
     {
       profile::timer const timer{ "eval user code" };
-      util::println("{}", to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file)));
+      /* For WASM AOT or LLVM IR codegen, set compile_files_var to true so that eval_string 
+       * generates proper module loader functions (jank_load_*).
+       * This makes the generated code compatible with the WASM runtime. */
+      if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot
+         || util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
+      {
+        /* Derive module name from file path (e.g., "wasm-examples/eita.jank" -> "eita") */
+        std::filesystem::path file_path{ util::cli::opts.target_file.c_str() };
+        auto const module_name{ file_path.stem().string() };
+        
+        context::binding_scope const compile_scope{ obj::persistent_hash_map::create_unique(
+          std::make_pair(__rt_ctx->compile_files_var, jank_true),
+          std::make_pair(__rt_ctx->current_module_var, make_box(module_name))) };
+        util::println("{}", to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file)));
+      }
+      else
+      {
+        util::println("{}", to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file)));
+      }
     }
 
     //ankerl::nanobench::Config config;

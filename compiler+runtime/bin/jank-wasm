@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# jank-wasm: Compile jank to WASM using LLVM IR path
+# Usage: jank-wasm <input.jank>
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUILD_WASM="$ROOT_DIR/build-wasm"
+CORE_LIBS="$BUILD_WASM/core-libs"
+
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <input.jank>"
+  exit 1
+fi
+
+INPUT_FILE="$1"
+INPUT_DIR="$(cd "$(dirname "$INPUT_FILE")" && pwd)"
+INPUT_NAME="$(basename "$INPUT_FILE" .jank)"
+
+echo "[jank-wasm] Compiling $INPUT_FILE to WASM via LLVM IR..."
+
+# Ensure core-libs directory exists
+mkdir -p "$CORE_LIBS/clojure"
+
+# 1. Check if clojure.core.o exists for WASM, if not build it
+CORE_O="$CORE_LIBS/clojure/core.o"
+if [ ! -f "$CORE_O" ]; then
+  echo "[jank-wasm] Building clojure.core for WASM (first time only)..."
+  
+  # Generate LLVM IR for clojure.core
+  echo "[jank-wasm] Generating LLVM IR for clojure.core..."
+  "$ROOT_DIR/build/jank" --codegen llvm_ir --save-llvm-ir --save-llvm-ir-path "$CORE_LIBS/clojure/core.ll" compile-module clojure.core 2>&1 || {
+    echo "[jank-wasm] Warning: compile-module failed, trying alternative approach..."
+    # Alternative: create a minimal file that loads clojure.core
+    echo "(in-ns 'user)" > "$BUILD_WASM/_core_loader.jank"
+    "$ROOT_DIR/build/jank" --codegen llvm_ir --save-llvm-ir --save-llvm-ir-path "$CORE_LIBS/clojure/core.ll" run "$BUILD_WASM/_core_loader.jank" 2>&1 || true
+    rm -f "$BUILD_WASM/_core_loader.jank"
+  }
+  
+  if [ -f "$CORE_LIBS/clojure/core.ll" ]; then
+    # Patch for WASM target
+    sed 's/target triple = "arm64-apple-macosx[^"]*"/target triple = "wasm32-unknown-emscripten"/' \
+      "$CORE_LIBS/clojure/core.ll" > "$CORE_LIBS/clojure/core_wasm.ll"
+    sed -i '' 's/e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32/e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20/' \
+      "$CORE_LIBS/clojure/core_wasm.ll"
+    
+    # Compile to WASM object
+    llc -march=wasm32 -filetype=obj -o "$CORE_O" "$CORE_LIBS/clojure/core_wasm.ll"
+    echo "[jank-wasm] Built clojure.core.o for WASM"
+  else
+    echo "[jank-wasm] Warning: Could not generate clojure.core LLVM IR, continuing without it..."
+  fi
+fi
+
+# 2. Generate LLVM IR for user module
+echo "[jank-wasm] Step 1: Generating LLVM IR for $INPUT_NAME..."
+"$ROOT_DIR/build/jank" --codegen llvm_ir --save-llvm-ir --save-llvm-ir-path "$BUILD_WASM/${INPUT_NAME}.ll" \
+  run "$INPUT_FILE" 2>&1 || true
+
+if [ ! -f "$BUILD_WASM/${INPUT_NAME}.ll" ]; then
+  echo "[jank-wasm] ERROR: Failed to generate LLVM IR for $INPUT_NAME"
+  exit 1
+fi
+
+# 3. Patch target triple for WASM
+echo "[jank-wasm] Step 2: Patching for WASM target..."
+sed 's/target triple = "arm64-apple-macosx[^"]*"/target triple = "wasm32-unknown-emscripten"/' \
+  "$BUILD_WASM/${INPUT_NAME}.ll" > "$BUILD_WASM/${INPUT_NAME}_wasm.ll"
+sed -i '' 's/e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32/e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20/' \
+  "$BUILD_WASM/${INPUT_NAME}_wasm.ll"
+
+# 4. Compile LLVM IR to WASM object
+echo "[jank-wasm] Step 3: Compiling to WASM object..."
+llc -march=wasm32 -filetype=obj -o "$BUILD_WASM/${INPUT_NAME}.o" "$BUILD_WASM/${INPUT_NAME}_wasm.ll"
+
+# 5. Extract function names from IR
+GLOBAL_INIT=$(grep "^define void @.*jank_global_init" "$BUILD_WASM/${INPUT_NAME}.ll" | sed 's/define void @\([^(]*\).*/\1/' | head -1)
+LOAD_FN=$(grep "^define ptr @jank_load_" "$BUILD_WASM/${INPUT_NAME}.ll" | sed 's/define ptr @\([^(]*\).*/\1/' | head -1)
+
+echo "[jank-wasm] Found functions: global_init=$GLOBAL_INIT, load=$LOAD_FN"
+
+# 6. Build list of object files to link
+OBJECTS="$BUILD_WASM/${INPUT_NAME}.o"
+EXPORTED_FUNCS="\"_jank_init\",\"_${GLOBAL_INIT}\",\"_${LOAD_FN}\",\"_jank_load_clojure_core_native\",\"_jank_setup_clojure_core_for_wasm\""
+
+# Add clojure.core.o if it exists
+if [ -f "$CORE_O" ]; then
+  OBJECTS="$OBJECTS $CORE_O"
+  # Extract core's functions
+  CORE_GLOBAL_INIT=$(grep "^define void @.*jank_global_init" "$CORE_LIBS/clojure/core.ll" 2>/dev/null | sed 's/define void @\([^(]*\).*/\1/' | head -1 || true)
+  CORE_LOAD_FN=$(grep "^define ptr @jank_load_clojure_core" "$CORE_LIBS/clojure/core.ll" 2>/dev/null | sed 's/define ptr @\([^(]*\).*/\1/' | head -1 || true)
+  if [ -n "$CORE_GLOBAL_INIT" ]; then
+    EXPORTED_FUNCS="$EXPORTED_FUNCS,\"_${CORE_GLOBAL_INIT}\""
+  fi
+  if [ -n "$CORE_LOAD_FN" ]; then
+    EXPORTED_FUNCS="$EXPORTED_FUNCS,\"_${CORE_LOAD_FN}\""
+  fi
+  echo "[jank-wasm] Including clojure.core.o (global_init=$CORE_GLOBAL_INIT, load=$CORE_LOAD_FN)"
+fi
+
+# 7. Link with emscripten
+echo "[jank-wasm] Step 4: Linking with emscripten..."
+em++ -o "$BUILD_WASM/${INPUT_NAME}.js" \
+  $OBJECTS \
+  "$BUILD_WASM/libjank.a" \
+  "$BUILD_WASM/libjankzip.a" \
+  "$BUILD_WASM/third-party/bdwgc/libgc.a" \
+  -sEXPORT_ES6=1 -sMODULARIZE=1 -sEXPORT_NAME=createJankModule \
+  -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=1048576 \
+  -sENVIRONMENT=node \
+  -sEXPORTED_FUNCTIONS="[$EXPORTED_FUNCS]" \
+  "-sEXPORTED_RUNTIME_METHODS=[\"cwrap\",\"ccall\",\"UTF8ToString\",\"stringToUTF8\",\"addFunction\"]" \
+  -sALLOW_TABLE_GROWTH=1 -fexceptions -frtti
+
+# 8. Generate runner script
+CORE_INIT_CODE=""
+if [ -n "$CORE_GLOBAL_INIT" ] && [ -n "$CORE_LOAD_FN" ]; then
+  CORE_INIT_CODE="
+    // Initialize clojure.core
+    const core_global_init = Module._${CORE_GLOBAL_INIT};
+    const core_load = Module._${CORE_LOAD_FN};
+    if (core_global_init) core_global_init();
+    if (core_load) core_load(0);"
+fi
+
+cat > "$BUILD_WASM/run_${INPUT_NAME}.mjs" << EOF
+import createJankModule from './${INPUT_NAME}.js';
+
+async function main() {
+  const Module = await createJankModule();
+  
+  const jank_init = Module.cwrap('jank_init', 'number', ['number', 'number', 'number', 'number']);
+  const load_core_native = Module._jank_load_clojure_core_native;
+  const setup_core_wasm = Module._jank_setup_clojure_core_for_wasm;
+  const global_init = Module._${GLOBAL_INIT};
+  const load_module = Module._${LOAD_FN};
+  
+  const callback = Module.addFunction((argc, argv) => {
+    // 1. Load native core functions (C++ implementations)
+    load_core_native();
+    // 2. Setup clojure.core namespace by referring from core-native
+    setup_core_wasm();
+    ${CORE_INIT_CODE}
+    // 3. Initialize and load user module
+    global_init();
+    load_module(0);
+    return 0;
+  }, 'iii');
+  
+  jank_init(0, 0, 1, callback);
+}
+
+main().catch(console.error);
+EOF
+
+echo "[jank-wasm] Done! Run with:"
+echo "  cd $BUILD_WASM && node run_${INPUT_NAME}.mjs"

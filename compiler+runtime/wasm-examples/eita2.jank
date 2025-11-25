@@ -1,0 +1,9 @@
+(ns eita2)
+
+;; Test basic core functions
+(def numbers [1 2 3 (+ 44 49) 5])
+(def doubled (map #(* 2 %) numbers))
+(def filtered (filter even? numbers))
+
+(println "Numbers:" numbers)
+(println "WASM build test completed successfully!")

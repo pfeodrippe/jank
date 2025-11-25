@@ -45,6 +45,12 @@ namespace jank::util::cli
     cli.add_option("--save-cpp-path",
                    opts.save_cpp_path,
                    "Path to save generated C++ code (requires --save-cpp or --codegen cpp).");
+    cli.add_flag("--save-llvm-ir",
+                 opts.save_llvm_ir,
+                 "Save generated LLVM IR to a file (useful for WASM/cross-compilation).");
+    cli.add_option("--save-llvm-ir-path",
+                   opts.save_llvm_ir_path,
+                   "Path to save generated LLVM IR code.");
     cli
       .add_option("-O,--optimization",
                   opts.optimization_level,

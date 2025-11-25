@@ -6,6 +6,8 @@
 ## Rules
 
 - **Never use `/dev/null`** - Do not redirect output to `/dev/null`. Always capture and show output for debugging purposes.
+- Put the raw prompt inside a PROMPTS.md file, always update it with exactly my instructions (and nothing else!), append each new instruction to the end
+- For the jank -> wasm work, also read AGENTS_CONTEXT.md. In the end, add the output for a given instruction for what was learnt (one for each thinking, context, barriers, discoveries, ideas you have, commands you have learnt etc) 
 
 ## Command Log
 

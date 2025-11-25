@@ -613,60 +613,26 @@ namespace jank::evaluate
     }
     else if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
     {
-      /* WASM AOT mode: generate C++ and save to file, but also JIT compile it
-       * so we can evaluate it on the host. The generated C++ can then be
-       * compiled by emscripten for the WASM target.
+      /* WASM AOT mode: For per-function evaluation, we use LLVM IR codegen 
+       * (which is more robust) for JIT on the host. The final module compilation
+       * will use C++ codegen with wasm_aot target.
        *
-       * We use the 'eval' target here for JIT, but save the 'wasm_aot' version
-       * to the file for emscripten compilation. */
-      runtime::scoped_stderr_redirect const stderr_redirect{};
+       * Using LLVM IR for eval avoids edge cases in C++ codegen that can cause
+       * JIT failures during clojure.core loading. */
+      auto const wrapped_expr(wrap_expression(expr, "repl_fn", {}));
 
-      /* For JIT on host, use eval target */
-      codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
-      auto const code_for_jit{ cg_prc.declaration_str() };
+      codegen::llvm_processor const cg_prc{ wrapped_expr,
+                                            module,
+                                            codegen::compilation_target::eval };
+      cg_prc.gen().expect_ok();
+      cg_prc.optimize();
 
-      /* For saving to file for WASM, use wasm_aot target */
-      if(util::cli::opts.save_cpp || !util::cli::opts.save_cpp_path.empty())
-      {
-        auto const &cpp_path = util::cli::opts.save_cpp_path;
-        if(!cpp_path.empty())
-        {
-          codegen::processor wasm_cg_prc{ expr, module, codegen::compilation_target::wasm_aot };
-          auto const formatted_code{
-            util::format_cpp_source(wasm_cg_prc.declaration_str()).expect_ok()
-          };
+      __rt_ctx->jit_prc.load_ir_module(jtl::move(cg_prc.get_module()));
 
-          auto const parent_path = std::filesystem::path{ cpp_path }.parent_path();
-          if(!parent_path.empty())
-          {
-            std::filesystem::create_directories(parent_path);
-          }
-          std::ofstream cpp_out(cpp_path, std::ios::app);
-          if(cpp_out.is_open())
-          {
-            cpp_out << formatted_code << "\n\n";
-            cpp_out.close();
-            std::cerr << "[jank] WASM AOT: Saved C++ to: " << cpp_path << "\n";
-          }
-        }
-      }
-
-      /* JIT compile on the host so we can get the result */
-      auto const formatted_code{ util::format_cpp_source(code_for_jit).expect_ok() };
-      util::println("{}\n", formatted_code);
-
-      __rt_ctx->jit_prc.eval_string(code_for_jit);
-      auto const expr_str{ cg_prc.expression_str(true) + ".erase()" };
-      clang::Value v;
-      auto res(
-        __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
-      if(res)
-      {
-        jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
-        llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
-        throw error::internal_codegen_failure(msg);
-      }
-      return try_object<obj::jit_function>(v.convertTo<runtime::object *>());
+      auto const fn(
+        __rt_ctx->jit_prc.find_symbol(util::format("{}_0", munge(cg_prc.get_root_fn_name())))
+          .expect_ok());
+      return reinterpret_cast<object *(*)()>(fn)();
     }
     else
     {

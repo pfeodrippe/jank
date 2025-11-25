@@ -44,6 +44,8 @@ namespace jank::util::cli
     bool direct_call{};
     bool save_cpp{};
     std::string save_cpp_path;
+    bool save_llvm_ir{};
+    std::string save_llvm_ir_path;
 
     /* Run command. */
     std::string target_file;

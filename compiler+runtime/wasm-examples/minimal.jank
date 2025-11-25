@@ -1,4 +1,3 @@
-;; Minimal WASM test - just tests basic runtime without clojure.core
-;; This should work as soon as the runtime initializes
-
-42
+; Minimal test - no ns form
+(def x 42)
+(println "x =" x)

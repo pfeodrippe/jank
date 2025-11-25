@@ -255,6 +255,223 @@ extern "C"
     return try_object<obj::persistent_string>(reinterpret_cast<object *>(o))->data.c_str();
   }
 
+  jank_object_ref jank_symbol_create(jank_object_ref const ns, jank_object_ref const name)
+  {
+    auto const ns_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(ns)));
+    auto const name_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(name)));
+    return make_box<obj::symbol>(ns_obj->data, name_obj->data).erase();
+  }
+
+  jank_object_ref jank_var_set_dynamic(jank_object_ref const var, jank_object_ref const dynamic)
+  {
+    auto const var_obj(try_object<runtime::var>(reinterpret_cast<object *>(var)));
+    var_obj->dynamic = runtime::truthy(reinterpret_cast<object *>(dynamic));
+    return var;
+  }
+
+  jank_object_ref jank_list_create(jank_u64 const size, ...)
+  {
+    va_list args;
+    va_start(args, size);
+    runtime::detail::native_transient_vector v;
+    for(jank_u64 i = 0; i < size; ++i)
+    {
+      v.push_back(reinterpret_cast<object *>(va_arg(args, jank_object_ref)));
+    }
+    va_end(args);
+    auto const pv = v.persistent();
+    return make_box<obj::persistent_list>(
+             runtime::detail::native_persistent_list{ pv.begin(), pv.end() })
+      .erase();
+  }
+
+  jank_object_ref jank_vector_create(jank_u64 const size, ...)
+  {
+    va_list args;
+    va_start(args, size);
+    runtime::detail::native_transient_vector v;
+    for(jank_u64 i = 0; i < size; ++i)
+    {
+      v.push_back(reinterpret_cast<object *>(va_arg(args, jank_object_ref)));
+    }
+    va_end(args);
+    return make_box<obj::persistent_vector>(v.persistent()).erase();
+  }
+
+  jank_object_ref jank_map_create(jank_u64 const pairs, ...)
+  {
+    va_list args;
+    va_start(args, pairs);
+    runtime::detail::native_transient_hash_map m;
+    for(jank_u64 i = 0; i < pairs; ++i)
+    {
+      auto const key = reinterpret_cast<object *>(va_arg(args, jank_object_ref));
+      auto const val = reinterpret_cast<object *>(va_arg(args, jank_object_ref));
+      m.set(key, val);
+    }
+    va_end(args);
+    return make_box<obj::persistent_hash_map>(m.persistent()).erase();
+  }
+
+  jank_object_ref jank_set_create(jank_u64 const size, ...)
+  {
+    va_list args;
+    va_start(args, size);
+    runtime::detail::native_transient_hash_set s;
+    for(jank_u64 i = 0; i < size; ++i)
+    {
+      s.insert(reinterpret_cast<object *>(va_arg(args, jank_object_ref)));
+    }
+    va_end(args);
+    return make_box<obj::persistent_hash_set>(s.persistent()).erase();
+  }
+
+  jank_arity_flags jank_function_build_arity_flags(jank_u8 const highest_fixed_arity,
+                                                   jank_bool const is_variadic,
+                                                   jank_bool const is_variadic_ambiguous)
+  {
+    return obj::jit_function::build_arity_flags(highest_fixed_arity,
+                                                is_variadic,
+                                                is_variadic_ambiguous);
+  }
+
+  jank_object_ref jank_function_create(jank_arity_flags const arity_flags)
+  {
+    return make_box<obj::jit_function>(arity_flags).erase();
+  }
+
+  void jank_function_set_arity0(jank_object_ref const fn, jank_object_ref (*const f)(jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_0 = reinterpret_cast<function_arity<0>>(f);
+  }
+
+  void jank_function_set_arity1(jank_object_ref const fn,
+                                jank_object_ref (*const f)(jank_object_ref, jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_1 = reinterpret_cast<function_arity<1>>(f);
+  }
+
+  void jank_function_set_arity2(
+    jank_object_ref const fn,
+    jank_object_ref (*const f)(jank_object_ref, jank_object_ref, jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_2 = reinterpret_cast<function_arity<2>>(f);
+  }
+
+  void jank_function_set_arity3(
+    jank_object_ref const fn,
+    jank_object_ref (*const f)(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_3 = reinterpret_cast<function_arity<3>>(f);
+  }
+
+  void jank_function_set_arity4(jank_object_ref const fn,
+                                jank_object_ref (*const f)(jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_4 = reinterpret_cast<function_arity<4>>(f);
+  }
+
+  void jank_function_set_arity5(jank_object_ref const fn,
+                                jank_object_ref (*const f)(jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_5 = reinterpret_cast<function_arity<5>>(f);
+  }
+
+  void jank_function_set_arity6(jank_object_ref const fn,
+                                jank_object_ref (*const f)(jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_6 = reinterpret_cast<function_arity<6>>(f);
+  }
+
+  void jank_function_set_arity7(jank_object_ref const fn,
+                                jank_object_ref (*const f)(jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_7 = reinterpret_cast<function_arity<7>>(f);
+  }
+
+  void jank_function_set_arity8(jank_object_ref const fn,
+                                jank_object_ref (*const f)(jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_8 = reinterpret_cast<function_arity<8>>(f);
+  }
+
+  void jank_function_set_arity9(jank_object_ref const fn,
+                                jank_object_ref (*const f)(jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref,
+                                                           jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_9 = reinterpret_cast<function_arity<9>>(f);
+  }
+
+  void jank_function_set_arity10(jank_object_ref const fn,
+                                 jank_object_ref (*const f)(jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_10 = reinterpret_cast<function_arity<10>>(f);
+  }
+
+  void jank_set_meta(jank_object_ref const o, jank_object_ref const meta)
+  {
+    runtime::reset_meta(reinterpret_cast<object *>(o), reinterpret_cast<object *>(meta));
+  }
+
   jank_object_ref jank_pointer_create(void * const p)
   {
     return make_box<obj::native_pointer_wrapper>(p).erase();
@@ -309,6 +526,7 @@ extern "C"
 
   void jank_throw(jank_object_ref const o)
   {
+    util::println("jank_throw called with object: {}", runtime::to_code_string(reinterpret_cast<object *>(o)));
     throw runtime::object_ref{ reinterpret_cast<object *>(o) };
   }
 
@@ -367,6 +585,41 @@ extern "C"
     catch(std::exception const &e)
     {
       util::println("Error: {}", e.what());
+      return 1;
+    }
+    catch(runtime::object_ref const &e)
+    {
+      util::println("Error: {}", runtime::to_code_string(e));
+      return 1;
+    }
+    catch(error_ref const &e)
+    {
+      util::println("Error: {}", e->message);
+      return 1;
+    }
+    catch(error::base const &e)
+    {
+      util::println("Error: {}", e.message);
+      return 1;
+    }
+    catch(error::base *e)
+    {
+      util::println("Error: {}", e->message);
+      return 1;
+    }
+    catch(char const *e)
+    {
+      util::println("Error: {}", e);
+      return 1;
+    }
+    catch(std::string const &e)
+    {
+      util::println("Error: {}", e);
+      return 1;
+    }
+    catch(int e)
+    {
+      util::println("Error: int {}", e);
       return 1;
     }
     catch(...)

@@ -230,6 +230,38 @@ namespace jank::runtime
         codegen::llvm_processor const cg_prc{ fn, module, codegen::compilation_target::module };
         cg_prc.gen().expect_ok();
         cg_prc.optimize();
+        
+        /* Save LLVM IR to a file if requested */
+        if(util::cli::opts.save_llvm_ir || !util::cli::opts.save_llvm_ir_path.empty())
+        {
+          jtl::immutable_string ll_path;
+          if(!util::cli::opts.save_llvm_ir_path.empty())
+          {
+            ll_path = util::cli::opts.save_llvm_ir_path;
+          }
+          else
+          {
+            ll_path = util::format("{}/{}.ll", binary_cache_dir, module::module_to_path(module));
+          }
+          auto const parent_path = std::filesystem::path{ ll_path.c_str() }.parent_path();
+          if(!parent_path.empty())
+          {
+            std::filesystem::create_directories(parent_path);
+          }
+          
+          std::error_code ec;
+          llvm::raw_fd_ostream ll_out(ll_path.c_str(), ec, llvm::sys::fs::OF_Text);
+          if(!ec)
+          {
+            cg_prc.get_module().getModuleUnlocked()->print(ll_out, nullptr);
+            std::cerr << "[jank] Saved LLVM IR to: " << ll_path << "\n";
+          }
+          else
+          {
+            std::cerr << "[jank] Failed to save LLVM IR to: " << ll_path << ": " << ec.message() << "\n";
+          }
+        }
+        
         write_module(cg_prc.get_module_name(), cg_prc.get_module().getModuleUnlocked()).expect_ok();
       }
       else
@@ -259,9 +291,32 @@ namespace jank::runtime
           {
             std::filesystem::create_directories(parent_path);
           }
+          
+          /* For WASM AOT, we need to add includes at the top of the file.
+           * Check if file exists - if not, we'll write the includes first. */
+          bool const file_exists = std::filesystem::exists(cpp_path.c_str());
+          bool const is_wasm_aot = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
+          
           std::ofstream cpp_out(cpp_path.c_str(), std::ios::app);
           if(cpp_out.is_open())
           {
+            /* Write WASM AOT includes at the start of a new file */
+            if(is_wasm_aot && !file_exists)
+            {
+              cpp_out << "// WASM AOT generated code - requires jank runtime headers\n";
+              cpp_out << "#include <jank/runtime/context.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/jit_function.hpp>\n";
+              cpp_out << "#include <jank/runtime/core.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_hash_set.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_array_map.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_hash_map.hpp>\n";
+              /* Include keyword and symbol for static_cast conversions in vectors */
+              cpp_out << "#include <jank/runtime/obj/keyword.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/symbol.hpp>\n";
+              /* Include convert for type conversions (bool, int, etc.) */
+              cpp_out << "#include <jank/runtime/convert/builtin.hpp>\n\n";
+            }
+            
             cpp_out << code << "\n\n";
             cpp_out.close();
             std::cerr << "[jank] Saved generated C++ to: " << cpp_path << "\n";
@@ -435,7 +490,13 @@ namespace jank::runtime
     binding_scope const preserve{ obj::persistent_hash_map::create_unique(
       std::make_pair(compile_files_var, jank_true)) };
 
-    return load_module(util::format("/{}", module), module::origin::latest);
+    /* For WASM AOT compilation, we need to force loading from source to recompile
+     * the module rather than using cached object files. */
+    auto const ori = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
+      ? module::origin::source
+      : module::origin::latest;
+
+    return load_module(util::format("/{}", module), ori);
   }
 
 #ifndef JANK_TARGET_WASM

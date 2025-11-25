@@ -233,13 +233,22 @@ namespace jank::codegen
                               "jank::runtime::__rt_ctx->read_string(\"{}\"), ",
                               util::escape(runtime::to_code_string(typed_o->meta.unwrap())));
             }
-            util::format_to(buffer, "std::in_place ");
+            /* Use explicit initializer_list for type deduction.
+             * Cast each element to object_ref to ensure uniform type. */
+            util::format_to(buffer, "std::in_place, std::initializer_list<jank::runtime::object_ref>{");
+            bool first = true;
             for(auto const &form : typed_o->data)
             {
-              util::format_to(buffer, ", ");
+              if(!first)
+              {
+                util::format_to(buffer, ", ");
+              }
+              first = false;
+              util::format_to(buffer, "static_cast<jank::runtime::object_ref>(");
               gen_constant(form, buffer, true);
+              util::format_to(buffer, ")");
             }
-            util::format_to(buffer, ")");
+            util::format_to(buffer, "})");
           }
           else if constexpr(std::same_as<T, runtime::obj::persistent_list>)
           {
@@ -1107,11 +1116,31 @@ namespace jank::codegen
       detail::gen_constant(expr->meta.unwrap(), body_buffer, true);
       util::format_to(body_buffer, ", ");
     }
-    util::format_to(body_buffer, "std::in_place ");
-    for(auto const &tmp : data_tmps)
+    
+    if(target == compilation_target::wasm_aot)
     {
-      util::format_to(body_buffer, ", ");
-      util::format_to(body_buffer, "{}", tmp.str(true));
+      /* For WASM AOT, use explicit initializer_list for proper type deduction */
+      util::format_to(body_buffer, "std::in_place, std::initializer_list<jank::runtime::object_ref>{");
+      bool first = true;
+      for(auto const &tmp : data_tmps)
+      {
+        if(!first)
+        {
+          util::format_to(body_buffer, ", ");
+        }
+        first = false;
+        util::format_to(body_buffer, "{}.erase()", tmp.str(true));
+      }
+      util::format_to(body_buffer, "}");
+    }
+    else
+    {
+      util::format_to(body_buffer, "std::in_place ");
+      for(auto const &tmp : data_tmps)
+      {
+        util::format_to(body_buffer, ", ");
+        util::format_to(body_buffer, "{}", tmp.str(true));
+      }
     }
     util::format_to(body_buffer, "));");
 
@@ -1788,15 +1817,26 @@ namespace jank::codegen
                                      bool const box_needed)
   {
     auto ret_tmp(runtime::munge(__rt_ctx->unique_namespaced_string("cpp_cast")));
-    auto const value_tmp{ gen(expr->value_expr, arity, box_needed) };
-
-    util::format_to(
-      body_buffer,
-      "auto const {}{ jank::runtime::convert<{}>::{}({}) };",
-      ret_tmp,
-      Cpp::GetTypeAsString(expr->conversion_type),
-      (expr->policy == conversion_policy::into_object ? "into_object" : "from_object"),
-      value_tmp.unwrap().str(true));
+    auto const type_str{ Cpp::GetTypeAsString(expr->conversion_type) };
+    
+    /* Handle void specially - void functions can't have their result stored */
+    if(type_str == "void" && expr->policy == conversion_policy::into_object)
+    {
+      /* For void -> object conversion, just call the void function and return nil */
+      gen(expr->value_expr, arity, box_needed);
+      util::format_to(body_buffer, "auto const {}{ jank::runtime::convert<void>::into_object() };", ret_tmp);
+    }
+    else
+    {
+      auto const value_tmp{ gen(expr->value_expr, arity, box_needed) };
+      util::format_to(
+        body_buffer,
+        "auto const {}{ jank::runtime::convert<{}>::{}({}) };",
+        ret_tmp,
+        type_str,
+        (expr->policy == conversion_policy::into_object ? "into_object" : "from_object"),
+        value_tmp.unwrap().str(true));
+    }
 
     if(expr->position == expression_position::tail)
     {
@@ -1823,10 +1863,22 @@ namespace jank::codegen
         arg_tmps.emplace_back(gen(arg_expr, arity, false).unwrap());
       }
 
-      util::format_to(body_buffer,
-                      "auto const {}{ {}(",
-                      ret_tmp,
-                      Cpp::GetQualifiedCompleteName(source->scope));
+      /* Check if the return type is void */
+      auto const return_type_str{ Cpp::GetTypeAsString(expr->type) };
+      bool const is_void_return = (return_type_str == "void");
+      
+      if(is_void_return)
+      {
+        /* For void-returning functions, just call without storing result */
+        util::format_to(body_buffer, "{}(", Cpp::GetQualifiedCompleteName(source->scope));
+      }
+      else
+      {
+        util::format_to(body_buffer,
+                        "auto const {}{ {}(",
+                        ret_tmp,
+                        Cpp::GetQualifiedCompleteName(source->scope));
+      }
 
       bool need_comma{};
       for(auto const &arg_tmp : arg_tmps)
@@ -1839,15 +1891,26 @@ namespace jank::codegen
         need_comma = true;
       }
 
-      util::format_to(body_buffer, ") };");
-
-      if(expr->position == expression_position::tail)
+      if(is_void_return)
       {
-        util::format_to(body_buffer, "return {};", ret_tmp);
+        util::format_to(body_buffer, ");");
+        /* Void functions can't be in tail position and return a value directly */
+        if(expr->position == expression_position::tail)
+        {
+          util::format_to(body_buffer, "return jank_nil;");
+        }
         return none;
       }
-
-      return ret_tmp;
+      else
+      {
+        util::format_to(body_buffer, ") };");
+        if(expr->position == expression_position::tail)
+        {
+          util::format_to(body_buffer, "return {};", ret_tmp);
+          return none;
+        }
+        return ret_tmp;
+      }
     }
     else
     {
@@ -2274,6 +2337,7 @@ namespace jank::codegen
           ) final {
           using namespace jank;
           using namespace jank::runtime;
+          using namespace jank::runtime::obj;
         )");
 
       //util::format_to(body_buffer, "jank::profile::timer __timer{ \"{}\" };", root_fn->name);
@@ -2359,6 +2423,24 @@ namespace jank::codegen
     }
     else if(target == compilation_target::wasm_aot)
     {
+      /* For WASM AOT, only generate wrapper for functions that have a 0-arity call method.
+       * Functions that require arguments can't be called with no args. */
+      bool has_zero_arity{ false };
+      for(auto const &arity : root_fn->arities)
+      {
+        if(arity.fn_ctx->param_count == 0 && !arity.fn_ctx->is_variadic)
+        {
+          has_zero_arity = true;
+          break;
+        }
+      }
+
+      if(!has_zero_arity)
+      {
+        /* Skip generating wrapper for functions that require arguments */
+        return;
+      }
+
       /* For WASM AOT, generate a registration function that:
        * 1. Can be called at WASM startup to initialize the module
        * 2. Creates and executes the module's top-level forms
