@@ -20,7 +20,9 @@ namespace cpptrace
   class stacktrace
   {
   public:
-    void print() const {}
+    void print() const
+    {
+    }
   };
 
   inline stacktrace generate_trace()
@@ -76,20 +78,22 @@ namespace cpptrace
       return *this;
     }
 
-    template<typename Fn>
+    template <typename Fn>
     formatter &transform(Fn &&)
     {
       return *this;
     }
 
-    template<typename Fn>
+    template <typename Fn>
     formatter &filter(Fn &&)
     {
       return *this;
     }
 
-    template<typename Trace>
-    void print(Trace const &) const {}
+    template <typename Trace>
+    void print(Trace const &) const
+    {
+    }
   };
 
   namespace detail
@@ -108,6 +112,8 @@ namespace cpptrace
     inline jit_debug_descriptor __jit_debug_descriptor{};
   }
 
-  inline void register_jit_object(void const *, std::size_t) {}
+  inline void register_jit_object(void const *, std::size_t)
+  {
+  }
 }
 #endif

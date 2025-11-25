@@ -1,6 +1,7 @@
 #pragma once
 
 #include <any>
+#include <iostream>
 
 #include <jank/runtime/object.hpp>
 #include <jank/runtime/behavior/callable.hpp>

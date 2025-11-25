@@ -10,22 +10,43 @@ from textwrap import dedent
 
 
 def extract_cpp(source: str) -> tuple[str, str, str]:
-    """Return (sanitized_cpp, namespace, struct_name)."""
-    if "#'" in source:
-        source = source.split("#'", 1)[0]
-    source = source.strip()
+    """Return (sanitized_cpp, namespace, struct_name).
+    
+    The struct_name returned is the LAST jit_function struct found,
+    as that's typically the entry point (main function).
+    """
+    # Remove everything after the C++ code ends
+    # The C++ code ends after the last closing brace of a namespace
+    lines = source.split('\n')
+    cpp_lines = []
+    for line in lines:
+        # Stop at lines that don't look like C++ (e.g., "Hello from WASM!", "nil")
+        # C++ code typically starts with whitespace, keywords, braces, etc.
+        if cpp_lines and not line.strip().startswith(('namespace', 'struct', '{', '}', 'using', 
+                                                       'auto', 'return', 'jank::', 'object_ref',
+                                                       '//', '/*', '*', '#', 'explicit', 'virtual',
+                                                       'final', 'override', '.', ',', ')', '(', 
+                                                       ';', 'if', 'else', 'for', 'while')):
+            if line and not line[0].isspace() and line.strip() != '}':
+                break
+        cpp_lines.append(line)
+    
+    source = '\n'.join(cpp_lines).strip()
+    
     if not source:
         raise RuntimeError("jank did not emit any C++ code")
 
     ns_match = re.search(r"namespace\s+([A-Za-z0-9_]+)\s*\{", source)
     if not ns_match:
         raise RuntimeError("could not find namespace in generated C++")
-    struct_match = re.search(r"struct\s+([A-Za-z0-9_]+)\s*:\s*jank::runtime::obj::jit_function", source)
-    if not struct_match:
+    
+    # Find ALL jit_function structs and use the LAST one (entry point)
+    struct_matches = list(re.finditer(r"struct\s+([A-Za-z0-9_]+)\s*:\s*jank::runtime::obj::jit_function", source))
+    if not struct_matches:
         raise RuntimeError("could not find jit_function struct in generated C++")
 
     namespace = ns_match.group(1)
-    struct_name = struct_match.group(1)
+    struct_name = struct_matches[-1].group(1)  # Use the LAST struct (entry point)
     return source, namespace, struct_name
 
 

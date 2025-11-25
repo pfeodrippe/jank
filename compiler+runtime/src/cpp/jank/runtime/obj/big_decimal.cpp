@@ -4,7 +4,9 @@
 
 namespace jank::runtime
 {
-
+// These operator overloads are only needed when native_big_integer is a class type (boost::multiprecision)
+// For WASM where native_big_integer is 'long long', these would be invalid (no class type parameter)
+#ifndef JANK_TARGET_EMSCRIPTEN
   native_big_decimal operator+(native_big_decimal const &l, native_big_integer const &r)
   {
     return l + native_big_decimal(r.str());
@@ -105,6 +107,7 @@ namespace jank::runtime
   {
     return native_big_decimal(l.str()) <= r;
   }
+#endif
 }
 
 namespace jank::runtime::obj
@@ -120,12 +123,20 @@ namespace jank::runtime::obj
   }
 
   big_decimal::big_decimal(jtl::immutable_string const &val)
+#ifdef JANK_TARGET_EMSCRIPTEN
+    : data{ std::stod(val.c_str()) }
+#else
     : data{ val.c_str() }
+#endif
   {
   }
 
   big_decimal::big_decimal(native_big_integer const &val)
+#ifdef JANK_TARGET_EMSCRIPTEN
+    : data{ static_cast<native_big_decimal>(val) }
+#else
     : data{ val.real() }
+#endif
   {
   }
 
@@ -146,12 +157,20 @@ namespace jank::runtime::obj
 
   jtl::immutable_string big_decimal::to_string() const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return std::to_string(data);
+#else
     return data.str();
+#endif
   }
 
   void big_decimal::to_string(jtl::string_builder &buff) const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    buff(std::to_string(data));
+#else
     buff(data.str());
+#endif
   }
 
   jtl::immutable_string big_decimal::to_code_string() const
@@ -176,12 +195,20 @@ namespace jank::runtime::obj
 
   i64 big_decimal::to_integer() const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return static_cast<i64>(data);
+#else
     return data.convert_to<i64>();
+#endif
   }
 
   f64 big_decimal::to_real() const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return static_cast<f64>(data);
+#else
     return data.convert_to<f64>();
+#endif
   }
 
   object_ref big_decimal::create(jtl::immutable_string const &val)

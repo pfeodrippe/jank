@@ -30,8 +30,7 @@ namespace jank::jit
     throw std::runtime_error{ unsupported_msg };
   }
 
-  jtl::string_result<void>
-  processor::load_dynamic_library(jtl::immutable_string const &) const
+  jtl::string_result<void> processor::load_dynamic_library(jtl::immutable_string const &) const
   {
     return err(unsupported_msg);
   }
@@ -41,8 +40,8 @@ namespace jank::jit
     throw std::runtime_error{ unsupported_msg };
   }
 
-  void processor::load_bitcode(jtl::immutable_string const &,
-                               jtl::immutable_string_view const &) const
+  void
+  processor::load_bitcode(jtl::immutable_string const &, jtl::immutable_string_view const &) const
   {
     throw std::runtime_error{ unsupported_msg };
   }
@@ -52,8 +51,7 @@ namespace jank::jit
     return err(unsupported_msg);
   }
 
-  jtl::string_result<void *>
-  processor::find_symbol(jtl::immutable_string const &) const
+  jtl::string_result<void *> processor::find_symbol(jtl::immutable_string const &) const
   {
     return err(unsupported_msg);
   }

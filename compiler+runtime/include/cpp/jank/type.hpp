@@ -27,7 +27,7 @@ namespace jank
 {
   template <typename T>
   using native_allocator = gc_allocator<T>;
-  
+
   // Same memory policy for both native and WASM - uses immer's gc_heap
   using memory_policy = immer::memory_policy<immer::heap_policy<immer::gc_heap>,
                                              immer::no_refcount_policy,
@@ -48,8 +48,8 @@ namespace jank
   using native_vector = folly::fbvector<T, native_allocator<T>>;
 #else
   // Minimal stubs for WASM - boost-multiprecision causes math.h macro conflicts
-  using native_big_integer = long long;  // Stub
-  using native_big_decimal = double;      // Stub
+  using native_big_integer = long long; // Stub
+  using native_big_decimal = double; // Stub
 
   template <typename T>
   using native_vector = std::vector<T, native_allocator<T>>;

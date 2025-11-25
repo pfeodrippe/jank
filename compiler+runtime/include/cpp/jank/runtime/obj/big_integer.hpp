@@ -43,8 +43,11 @@ namespace jank::runtime::obj
     big_integer(big_integer &&) noexcept = default;
     big_integer(big_integer const &) = default;
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+    // Only needed when native_big_integer != i64 (boost::multiprecision)
     explicit big_integer(native_big_integer const &);
     explicit big_integer(native_big_integer &&);
+#endif
     explicit big_integer(i64);
     explicit big_integer(jtl::immutable_string const &);
     explicit big_integer(jtl::immutable_string const &, i64, bool);

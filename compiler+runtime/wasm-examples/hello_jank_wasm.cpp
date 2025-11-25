@@ -35,31 +35,28 @@ namespace hello
   };
 }
 
-extern "C" {
-
-EMSCRIPTEN_KEEPALIVE
-void run_hello() {
+extern "C"
+{
+  EMSCRIPTEN_KEEPALIVE
+  void run_hello()
+  {
     // Initialize jank runtime if needed
     // Then call the generated function
     auto hello_fn = jank::runtime::make_box<hello::hello__main_2>();
     hello_fn->call();
-}
+  }
 
-int main() {
-    emscripten_run_script(
-        "document.getElementById('output').innerHTML = "
-        "'<h1>🎉 Running jank Hello World in WASM!</h1>';"
-    );
-    
+  int main()
+  {
+    emscripten_run_script("document.getElementById('output').innerHTML = "
+                          "'<h1>🎉 Running jank Hello World in WASM!</h1>';");
+
     // Run the jank function
     run_hello();
-    
-    emscripten_run_script(
-        "document.getElementById('output').innerHTML += "
-        "'<p><strong>✓ jank function executed successfully!</strong></p>';"
-    );
-    
-    return 0;
-}
 
+    emscripten_run_script("document.getElementById('output').innerHTML += "
+                          "'<p><strong>✓ jank function executed successfully!</strong></p>';");
+
+    return 0;
+  }
 }

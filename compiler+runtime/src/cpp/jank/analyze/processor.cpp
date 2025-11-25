@@ -3,7 +3,9 @@
 #include <cstdlib>
 #include <stdexcept>
 
-#include <Interpreter/Compatibility.h>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <Interpreter/Compatibility.h>
+#endif
 
 #include <jank/util/cpptrace.hpp>
 

@@ -609,7 +609,7 @@ namespace jank::runtime::module
       return error::runtime_unable_to_open_file(util::format("Unable to map file '{}'.", path));
     }
 
-    return ok(file_view{ path, fd, head, file_size });
+    return ok(file_view{ path, fd, head, static_cast<usize>(file_size) });
   }
 
   jtl::result<file_view, error_ref> loader::read_file(jtl::immutable_string const &path)
@@ -950,7 +950,7 @@ namespace jank::runtime::module
         break;
       default:
         res = error::internal_runtime_failure(
-          util::format("Unknown module type '{}'.", module_type_to_load));
+          util::format("Unknown module type '{}'.", static_cast<int>(module_type_to_load)));
     }
 
     if(res.is_err())
@@ -1066,8 +1066,8 @@ namespace jank::runtime::module
   jtl::result<void, error_ref> loader::load_jank(file_entry const &entry) const
   {
 #ifdef JANK_TARGET_EMSCRIPTEN
-    return error::runtime_unable_to_load_module(
-      "Loading source modules at runtime is unsupported on emscripten; precompile modules on the host.");
+    return error::runtime_unable_to_load_module("Loading source modules at runtime is unsupported "
+                                                "on emscripten; precompile modules on the host.");
 #else
     if(entry.archive_path.is_some())
     {

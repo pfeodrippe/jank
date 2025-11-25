@@ -4,6 +4,8 @@ namespace jank
   namespace detail
   {
     // Dummy function to ensure this translation unit isn't empty
-    void wasm_stub_init() {}
+    void wasm_stub_init()
+    {
+    }
   }
 }

@@ -7,7 +7,12 @@ namespace jank::jit
   // Minimal stub - just enough to link
   struct processor
   {
-    processor(void const *) {}
-    ~processor() {}
+    processor(void const *)
+    {
+    }
+
+    ~processor()
+    {
+    }
   };
 }

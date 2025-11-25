@@ -53,7 +53,7 @@ namespace jank::runtime
 #ifndef JANK_TARGET_EMSCRIPTEN
     , jit_prc{ binary_version }
 #else
-  , jit_prc{ "" }
+    , jit_prc{ "" }
 #endif
   {
     intern_ns(make_box<obj::symbol>("cpp"));
@@ -227,12 +227,14 @@ namespace jank::runtime
       {
         codegen::processor cg_prc{ fn, module, codegen::compilation_target::module };
         auto const code{ cg_prc.declaration_str() };
-        
+
         /* Save generated C++ to a file for inspection/WASM compilation. */
-        if(auto const save_cpp = std::getenv("JANK_SAVE_CPP"); save_cpp && std::string(save_cpp) == "1")
+        if(auto const save_cpp = std::getenv("JANK_SAVE_CPP");
+           save_cpp && std::string(save_cpp) == "1")
         {
-          auto const cpp_path = util::format("{}/{}.cpp", binary_cache_dir, module::module_to_path(module));
-          std::filesystem::create_directories(std::filesystem::path{cpp_path}.parent_path());
+          auto const cpp_path
+            = util::format("{}/{}.cpp", binary_cache_dir, module::module_to_path(module));
+          std::filesystem::create_directories(std::filesystem::path{ cpp_path }.parent_path());
           std::ofstream cpp_out(cpp_path);
           if(cpp_out.is_open())
           {
@@ -241,7 +243,7 @@ namespace jank::runtime
             std::cerr << "[jank] Saved generated C++ to: " << cpp_path << "\n";
           }
         }
-        
+
         auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
         if(!parse_res)
         {
@@ -260,8 +262,7 @@ namespace jank::runtime
   }
 
 #ifdef JANK_TARGET_EMSCRIPTEN
-  jtl::result<void, error_ref>
-  context::eval_cpp_string(jtl::immutable_string_view const &) const
+  jtl::result<void, error_ref> context::eval_cpp_string(jtl::immutable_string_view const &) const
   {
     return error::runtime_invalid_cpp_eval();
   }
@@ -412,8 +413,8 @@ namespace jank::runtime
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
                                                  jtl::ref<llvm::Module> const &) const
   {
-    return err(util::format("Writing modules is unsupported on emscripten (module '{}').",
-                            module_name));
+    return err(
+      util::format("Writing modules is unsupported on emscripten (module '{}').", module_name));
   }
 #else
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,

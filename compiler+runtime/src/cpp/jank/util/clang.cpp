@@ -24,7 +24,7 @@
 
 namespace Cpp
 {
-  std::string DetectResourceDir(char const *ClangBinaryName = "clang");
+  std::string DetectResourceDir(char const *ClangBinaryName);
 }
 
 namespace jank::util

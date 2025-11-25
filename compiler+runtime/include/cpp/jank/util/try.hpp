@@ -54,8 +54,8 @@ namespace jank::util
   #define JANK_TRY try
 #endif
 
-/* NOLINTNEXTLINE(cppcoreguidelines-macro-usage) */
 #ifndef JANK_TARGET_EMSCRIPTEN
+  /* NOLINTNEXTLINE(cppcoreguidelines-macro-usage) */
   #define JANK_CATCH_THEN(fun, then)         \
     CPPTRACE_CATCH(std::exception const &e)  \
     {                                        \
@@ -84,6 +84,7 @@ namespace jank::util
     }
 #else
   // WASM: simple catch without cpptrace
+  /* NOLINTNEXTLINE(cppcoreguidelines-macro-usage) */
   #define JANK_CATCH_THEN(fun, then)         \
     catch(std::exception const &e)           \
     {                                        \

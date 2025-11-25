@@ -865,9 +865,10 @@ namespace jank::analyze::cpp_util
   namespace
   {
     constexpr char const *cpp_unavailable_msg{
-      "C++ interop is unavailable when targeting emscripten." };
+      "C++ interop is unavailable when targeting emscripten."
+    };
 
-    template<typename T>
+    template <typename T>
     jtl::string_result<T> cpp_unavailable_string_result()
     {
       return err(cpp_unavailable_msg);
@@ -899,14 +900,12 @@ namespace jank::analyze::cpp_util
     return cpp_unavailable_string_result<jtl::ptr<void>>();
   }
 
-  jtl::string_result<literal_value_result>
-  resolve_literal_value(jtl::immutable_string const &)
+  jtl::string_result<literal_value_result> resolve_literal_value(jtl::immutable_string const &)
   {
     return cpp_unavailable_string_result<literal_value_result>();
   }
 
-  native_vector<jtl::ptr<void>>
-  find_adl_scopes(native_vector<jtl::ptr<void>> const &)
+  native_vector<jtl::ptr<void>> find_adl_scopes(native_vector<jtl::ptr<void>> const &)
   {
     return {};
   }
@@ -943,10 +942,9 @@ namespace jank::analyze::cpp_util
     return cpp_unavailable_string_result<std::vector<Cpp::TemplateArgInfo>>();
   }
 
-  jtl::string_result<jtl::ptr<void>>
-  find_best_overload(std::vector<void *> const &,
-                     std::vector<Cpp::TemplateArgInfo> &,
-                     std::vector<Cpp::TCppScope_t> const &)
+  jtl::string_result<jtl::ptr<void>> find_best_overload(std::vector<void *> const &,
+                                                        std::vector<Cpp::TemplateArgInfo> &,
+                                                        std::vector<Cpp::TCppScope_t> const &)
   {
     return cpp_unavailable_string_result<jtl::ptr<void>>();
   }
@@ -1026,8 +1024,7 @@ namespace jank::analyze::cpp_util
     return error::runtime_unable_to_load_module(cpp_unavailable_msg);
   }
 
-  implicit_conversion_action
-  determine_implicit_conversion(jtl::ptr<void>, jtl::ptr<void> const)
+  implicit_conversion_action determine_implicit_conversion(jtl::ptr<void>, jtl::ptr<void> const)
   {
     return implicit_conversion_action::unknown;
   }

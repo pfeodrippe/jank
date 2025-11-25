@@ -8,6 +8,9 @@
 namespace jank::runtime
 {
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // These operators are only needed for boost::multiprecision
+  // For WASM where native_big_integer = long long, built-in operators work fine
   f64 operator+(native_big_integer const &l, f64 const &r)
   {
     return obj::big_integer::to_f64(l) + r;
@@ -108,11 +111,14 @@ namespace jank::runtime
   {
     return l > r || l == r;
   }
+#endif // JANK_TARGET_EMSCRIPTEN
 
 }
 
 namespace jank::runtime::obj
 {
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Native build: use boost::multiprecision features
   big_integer::big_integer(native_big_integer const &val)
     : data(val)
   {
@@ -201,6 +207,171 @@ namespace jank::runtime::obj
     }
   }
 
+  jtl::immutable_string big_integer::to_string() const
+  {
+    return data.str() + 'N';
+  }
+
+  template <class T>
+  static void hash_combine(std::size_t &seed, T const &v)
+  {
+    std::hash<T> const hasher;
+    seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+
+  uhash big_integer::to_hash(native_big_integer const &data)
+  {
+    auto const &backend{ data.backend() };
+
+    auto const *limbs{ backend.limbs() };
+    auto const size{ backend.size() };
+    auto const sign{ backend.sign() };
+
+    auto seed{ static_cast<std::size_t>(sign) };
+    for(unsigned i = 0; i < size; ++i)
+    {
+      hash_combine(seed, limbs[i]);
+    }
+
+    return static_cast<uhash>(seed);
+  }
+
+  i64 big_integer::compare(big_integer const &o) const
+  {
+    return data.compare(o.data);
+  }
+
+  native_big_integer big_integer::gcd(native_big_integer const &l, native_big_integer const &r)
+  {
+    /* NOLINTNEXTLINE(clang-analyzer-core.StackAddressEscape) */
+    return boost::multiprecision::gcd(l, r);
+  }
+
+  i64 big_integer::to_i64(native_big_integer const &d)
+  {
+    if(d > std::numeric_limits<i64>::max() || d < std::numeric_limits<i64>::min())
+    {
+      throw std::runtime_error{ "Value out of range for integer." };
+    }
+    return static_cast<i64>(d);
+  }
+
+  f64 big_integer::to_f64(native_big_integer const &data)
+  {
+    try
+    {
+      return data.convert_to<f64>();
+    }
+    catch(std::overflow_error const &)
+    {
+      return data < 0 ? -std::numeric_limits<f64>::infinity()
+                      : std::numeric_limits<f64>::infinity();
+    }
+    catch(std::exception const &e)
+    {
+      throw std::runtime_error(util::format("Error converting BigInteger to f64: {}", e.what()));
+    }
+  }
+
+#else
+  // WASM build: native_big_integer is just long long
+  big_integer::big_integer(i64 const val)
+    : data(val)
+  {
+  }
+
+  void big_integer::init(jtl::immutable_string const &s)
+  {
+    if(s.empty())
+    {
+      throw std::runtime_error(util::format("Failed to construct BigInteger from empty string"));
+    }
+
+    try
+    {
+      std::string str_val;
+      if(s.ends_with('N'))
+      {
+        str_val = std::string(s.substr(0, s.size() - 1));
+      }
+      else
+      {
+        str_val = std::string(s);
+      }
+      data = std::strtoll(str_val.c_str(), nullptr, 10);
+    }
+    catch(std::exception const &e)
+    {
+      throw std::runtime_error(
+        util::format("Failed to construct BigInteger from string '{}': {}", s, e.what()));
+    }
+  }
+
+  big_integer::big_integer(jtl::immutable_string const &s)
+  {
+    init(s);
+  }
+
+  big_integer::big_integer(jtl::immutable_string const &s, i64 const radix, bool const is_negative)
+  {
+    /* Radix passed from lexer, and it's made sure to be between 2 and 36. */
+    if(radix == 10)
+    {
+      init(s);
+    }
+    else
+    {
+      /* For all radixes, we can use strtoll with the radix */
+      data = std::strtoll(s.data(), nullptr, static_cast<int>(radix));
+    }
+
+    if(is_negative)
+    {
+      data *= -1;
+    }
+  }
+
+  jtl::immutable_string big_integer::to_string() const
+  {
+    return std::to_string(data) + 'N';
+  }
+
+  uhash big_integer::to_hash(native_big_integer const &data)
+  {
+    return static_cast<uhash>(std::hash<i64>{}(data));
+  }
+
+  i64 big_integer::compare(big_integer const &o) const
+  {
+    return (data > o.data) - (data < o.data);
+  }
+
+  native_big_integer big_integer::gcd(native_big_integer const &l, native_big_integer const &r)
+  {
+    // Simple GCD for long long
+    native_big_integer a = l < 0 ? -l : l;
+    native_big_integer b = r < 0 ? -r : r;
+    while(b != 0)
+    {
+      native_big_integer t = b;
+      b = a % b;
+      a = t;
+    }
+    return a;
+  }
+
+  i64 big_integer::to_i64(native_big_integer const &d)
+  {
+    return d; // Already i64 compatible
+  }
+
+  f64 big_integer::to_f64(native_big_integer const &data)
+  {
+    return static_cast<f64>(data);
+  }
+#endif // JANK_TARGET_EMSCRIPTEN
+
+  // Common methods for both builds
   object_ref
   big_integer::create(jtl::immutable_string const &s, i64 const radix, bool const is_negative)
   {
@@ -233,11 +404,6 @@ namespace jank::runtime::obj
     return false;
   }
 
-  jtl::immutable_string big_integer::to_string() const
-  {
-    return data.str() + 'N';
-  }
-
   void big_integer::to_string(jtl::string_builder &buff) const
   {
     buff(to_string());
@@ -246,30 +412,6 @@ namespace jank::runtime::obj
   jtl::immutable_string big_integer::to_code_string() const
   {
     return to_string();
-  }
-
-  template <class T>
-  static void hash_combine(std::size_t &seed, T const &v)
-  {
-    std::hash<T> const hasher;
-    seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  }
-
-  uhash big_integer::to_hash(native_big_integer const &data)
-  {
-    auto const &backend{ data.backend() };
-
-    auto const *limbs{ backend.limbs() };
-    auto const size{ backend.size() };
-    auto const sign{ backend.sign() };
-
-    auto seed{ static_cast<std::size_t>(sign) };
-    for(unsigned i = 0; i < size; ++i)
-    {
-      hash_combine(seed, limbs[i]);
-    }
-
-    return static_cast<uhash>(seed);
   }
 
   uhash big_integer::to_hash() const
@@ -287,46 +429,9 @@ namespace jank::runtime::obj
       &o);
   }
 
-  i64 big_integer::compare(big_integer const &o) const
-  {
-    return data.compare(o.data);
-  }
-
-  native_big_integer big_integer::gcd(native_big_integer const &l, native_big_integer const &r)
-  {
-    /* NOLINTNEXTLINE(clang-analyzer-core.StackAddressEscape) */
-    return boost::multiprecision::gcd(l, r);
-  }
-
-  i64 big_integer::to_i64(native_big_integer const &d)
-  {
-    if(d > std::numeric_limits<i64>::max() || d < std::numeric_limits<i64>::min())
-    {
-      throw std::runtime_error{ "Value out of range for integer." };
-    }
-    return static_cast<i64>(d);
-  }
-
   i64 big_integer::to_integer() const
   {
     return big_integer::to_i64(data);
-  }
-
-  f64 big_integer::to_f64(native_big_integer const &data)
-  {
-    try
-    {
-      return data.convert_to<f64>();
-    }
-    catch(std::overflow_error const &)
-    {
-      return data < 0 ? -std::numeric_limits<f64>::infinity()
-                      : std::numeric_limits<f64>::infinity();
-    }
-    catch(std::exception const &e)
-    {
-      throw std::runtime_error(util::format("Error converting BigInteger to f64: {}", e.what()));
-    }
   }
 
   f64 big_integer::to_real() const

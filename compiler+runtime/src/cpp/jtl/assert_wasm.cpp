@@ -1,6 +1,6 @@
 // Minimal WASM implementation of assert - NO standard library includes
 
-// Declare abort without including headers  
+// Declare abort without including headers
 extern "C" void abort(void) __attribute__((noreturn));
 
 // Minimal string view to avoid including headers

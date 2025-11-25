@@ -1,8 +1,9 @@
 #pragma once
 
-#include <llvm/Support/Casting.h>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <llvm/Support/Casting.h>
 
-#include <jank/analyze/expression.hpp>
+  #include <jank/analyze/expression.hpp>
 
 namespace llvm
 {
@@ -16,3 +17,4 @@ namespace llvm
     }
   };
 }
+#endif

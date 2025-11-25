@@ -527,7 +527,6 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/core/munge.cpp
   src/cpp/jank/runtime/core/math.cpp
   src/cpp/jank/runtime/core/meta.cpp
-  src/cpp/jank/runtime/perf.cpp
   src/cpp/jank/runtime/module/loader.cpp
   src/cpp/jank/runtime/object.cpp
   src/cpp/jank/runtime/detail/native_array_map.cpp
@@ -589,52 +588,6 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/obj/reduced.cpp
   src/cpp/jank/runtime/behavior/callable.cpp
   src/cpp/jank/runtime/behavior/metadatable.cpp
-  src/cpp/jank/analyze/processor.cpp
-  src/cpp/jank/analyze/expression.cpp
-  src/cpp/jank/analyze/expr/vector.cpp
-  src/cpp/jank/analyze/expr/recursion_reference.cpp
-  src/cpp/jank/analyze/expr/map.cpp
-  src/cpp/jank/analyze/expr/do.cpp
-  src/cpp/jank/analyze/expr/var_deref.cpp
-  src/cpp/jank/analyze/expr/recur.cpp
-  src/cpp/jank/analyze/expr/named_recursion.cpp
-  src/cpp/jank/analyze/expr/local_reference.cpp
-  src/cpp/jank/analyze/expr/def.cpp
-  src/cpp/jank/analyze/expr/let.cpp
-  src/cpp/jank/analyze/expr/letfn.cpp
-  src/cpp/jank/analyze/expr/throw.cpp
-  src/cpp/jank/analyze/expr/if.cpp
-  src/cpp/jank/analyze/expr/list.cpp
-  src/cpp/jank/analyze/expr/primitive_literal.cpp
-  src/cpp/jank/analyze/expr/call.cpp
-  src/cpp/jank/analyze/expr/set.cpp
-  src/cpp/jank/analyze/expr/var_ref.cpp
-  src/cpp/jank/analyze/expr/function.cpp
-  src/cpp/jank/analyze/expr/try.cpp
-  src/cpp/jank/analyze/expr/case.cpp
-  src/cpp/jank/analyze/expr/cpp_raw.cpp
-  src/cpp/jank/analyze/expr/cpp_type.cpp
-  src/cpp/jank/analyze/expr/cpp_value.cpp
-  src/cpp/jank/analyze/expr/cpp_cast.cpp
-  src/cpp/jank/analyze/expr/cpp_call.cpp
-  src/cpp/jank/analyze/expr/cpp_constructor_call.cpp
-  src/cpp/jank/analyze/expr/cpp_member_call.cpp
-  src/cpp/jank/analyze/expr/cpp_member_access.cpp
-  src/cpp/jank/analyze/expr/cpp_builtin_operator_call.cpp
-  src/cpp/jank/analyze/expr/cpp_box.cpp
-  src/cpp/jank/analyze/expr/cpp_unbox.cpp
-  src/cpp/jank/analyze/expr/cpp_new.cpp
-  src/cpp/jank/analyze/expr/cpp_delete.cpp
-  src/cpp/jank/analyze/local_frame.cpp
-  src/cpp/jank/analyze/step/force_boxed.cpp
-  src/cpp/jank/analyze/cpp_util.cpp
-  src/cpp/jank/analyze/pass/walk.cpp
-  src/cpp/jank/analyze/pass/optimize.cpp
-  src/cpp/jank/analyze/pass/strip_source_meta.cpp
-  src/cpp/jank/evaluate.cpp
-  src/cpp/jank/c_api.cpp
-  src/cpp/clojure/core_native.cpp
-  src/cpp/clojure/string_native.cpp
 )
 
 set(jank_lib_sources)
@@ -646,6 +599,7 @@ if(jank_target_wasm)
   list(APPEND jank_lib_sources
     src/cpp/jank/util/environment_wasm.cpp
     src/cpp/jank/wasm_stub.cpp
+    src/cpp/jank/runtime/perf_wasm.cpp
   )
 else()
   # Native build: full runtime + AOT/codegen/nREPL
@@ -669,6 +623,55 @@ else()
     src/cpp/jank/perf_native.cpp
     src/cpp/jank/ui/highlight.cpp
     src/cpp/jank/error/report.cpp
+    src/cpp/jank/runtime/perf.cpp
+    # Analyze files (require LLVM, not available in WASM)
+    src/cpp/jank/analyze/processor.cpp
+    src/cpp/jank/analyze/expression.cpp
+    src/cpp/jank/analyze/expr/vector.cpp
+    src/cpp/jank/analyze/expr/recursion_reference.cpp
+    src/cpp/jank/analyze/expr/map.cpp
+    src/cpp/jank/analyze/expr/do.cpp
+    src/cpp/jank/analyze/expr/var_deref.cpp
+    src/cpp/jank/analyze/expr/recur.cpp
+    src/cpp/jank/analyze/expr/named_recursion.cpp
+    src/cpp/jank/analyze/expr/local_reference.cpp
+    src/cpp/jank/analyze/expr/def.cpp
+    src/cpp/jank/analyze/expr/let.cpp
+    src/cpp/jank/analyze/expr/letfn.cpp
+    src/cpp/jank/analyze/expr/throw.cpp
+    src/cpp/jank/analyze/expr/if.cpp
+    src/cpp/jank/analyze/expr/list.cpp
+    src/cpp/jank/analyze/expr/primitive_literal.cpp
+    src/cpp/jank/analyze/expr/call.cpp
+    src/cpp/jank/analyze/expr/set.cpp
+    src/cpp/jank/analyze/expr/var_ref.cpp
+    src/cpp/jank/analyze/expr/function.cpp
+    src/cpp/jank/analyze/expr/try.cpp
+    src/cpp/jank/analyze/expr/case.cpp
+    src/cpp/jank/analyze/expr/cpp_raw.cpp
+    src/cpp/jank/analyze/expr/cpp_type.cpp
+    src/cpp/jank/analyze/expr/cpp_value.cpp
+    src/cpp/jank/analyze/expr/cpp_cast.cpp
+    src/cpp/jank/analyze/expr/cpp_call.cpp
+    src/cpp/jank/analyze/expr/cpp_constructor_call.cpp
+    src/cpp/jank/analyze/expr/cpp_member_call.cpp
+    src/cpp/jank/analyze/expr/cpp_member_access.cpp
+    src/cpp/jank/analyze/expr/cpp_builtin_operator_call.cpp
+    src/cpp/jank/analyze/expr/cpp_box.cpp
+    src/cpp/jank/analyze/expr/cpp_unbox.cpp
+    src/cpp/jank/analyze/expr/cpp_new.cpp
+    src/cpp/jank/analyze/expr/cpp_delete.cpp
+    src/cpp/jank/analyze/local_frame.cpp
+    src/cpp/jank/analyze/step/force_boxed.cpp
+    src/cpp/jank/analyze/cpp_util.cpp
+    src/cpp/jank/analyze/pass/walk.cpp
+    src/cpp/jank/analyze/pass/optimize.cpp
+    src/cpp/jank/analyze/pass/strip_source_meta.cpp
+    # Common utility files
+    src/cpp/jank/evaluate.cpp
+    src/cpp/jank/c_api.cpp
+    src/cpp/clojure/core_native.cpp
+    src/cpp/clojure/string_native.cpp
   )
 endif()
 

@@ -51,11 +51,23 @@ namespace jank::runtime
     {
       return static_cast<f64>(val);
     }
+#ifdef JANK_TARGET_EMSCRIPTEN
+    // For WASM: native_big_integer = long long, native_big_decimal = double
+    else if constexpr(std::is_same_v<T, native_big_integer>)
+    {
+      return static_cast<f64>(val);
+    }
+    else if constexpr(std::is_same_v<T, native_big_decimal>)
+    {
+      return val;
+    }
+#else
     else if constexpr(std::is_same_v<T, native_big_integer>
                       || std::is_same_v<T, native_big_decimal>)
     {
       return val.template convert_to<f64>();
     }
+#endif
     else if constexpr(std::is_same_v<T, f64>)
     {
       return val;
