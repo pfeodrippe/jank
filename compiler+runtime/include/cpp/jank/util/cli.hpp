@@ -18,7 +18,8 @@ namespace jank::util::cli
   enum class codegen_type : u8
   {
     llvm_ir,
-    cpp
+    cpp,
+    wasm_aot // Generates standalone C++ for WASM AOT compilation
   };
 
   struct options
@@ -41,6 +42,8 @@ namespace jank::util::cli
     bool debug{};
     u8 optimization_level{};
     bool direct_call{};
+    bool save_cpp{};
+    std::string save_cpp_path;
 
     /* Run command. */
     std::string target_file;

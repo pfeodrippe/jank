@@ -39,6 +39,12 @@ namespace jank::util::cli
     cli.add_flag("--direct-call",
                  opts.direct_call,
                  "Elides the dereferencing of vars for improved performance.");
+    cli.add_flag("--save-cpp",
+                 opts.save_cpp,
+                 "Save generated C++ code to a file (useful for AOT/WASM compilation).");
+    cli.add_option("--save-cpp-path",
+                   opts.save_cpp_path,
+                   "Path to save generated C++ code (requires --save-cpp or --codegen cpp).");
     cli
       .add_option("-O,--optimization",
                   opts.optimization_level,
@@ -47,11 +53,12 @@ namespace jank::util::cli
       ->check(CLI::Range(0, 3));
 
     std::map<std::string, codegen_type> const codegen_types{
-      { "llvm_ir", codegen_type::llvm_ir },
-      {     "cpp",     codegen_type::cpp }
+      {  "llvm_ir",  codegen_type::llvm_ir },
+      {      "cpp",      codegen_type::cpp },
+      { "wasm_aot", codegen_type::wasm_aot }
     };
     cli.add_option("--codegen", opts.codegen, "The type of code generation to use.")
-      ->transform(CLI::CheckedTransformer(codegen_types).description("{llvm_ir,cpp}"))
+      ->transform(CLI::CheckedTransformer(codegen_types).description("{llvm_ir,cpp,wasm_aot}"))
       ->default_str(make_default("llvm_ir"));
 
     /* Native dependencies. */

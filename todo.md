@@ -1,5 +1,6 @@
 - [x] compile it to a standalone and check the nREPL server
   - [x] compile
+- [ ] I know that clang-repl (the Interpreter) has some wasm support, research it in the internet (check sample projects using it) so we can see if we can have WASM JIT!!
 - [ ] require native headers
   - [x] :as
   - [x] :refer

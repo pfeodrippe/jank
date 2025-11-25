@@ -234,35 +234,60 @@ namespace jank::runtime
       }
       else
       {
-        codegen::processor cg_prc{ fn, module, codegen::compilation_target::module };
+        /* For WASM AOT, use the wasm_aot target; otherwise use module target */
+        auto const cg_target = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
+          ? codegen::compilation_target::wasm_aot
+          : codegen::compilation_target::module;
+        codegen::processor cg_prc{ fn, module, cg_target };
         auto const code{ cg_prc.declaration_str() };
 
         /* Save generated C++ to a file for inspection/WASM compilation. */
-        if(auto const save_cpp = std::getenv("JANK_SAVE_CPP");
-           save_cpp && std::string(save_cpp) == "1")
+        if(util::cli::opts.save_cpp || !util::cli::opts.save_cpp_path.empty()
+           || util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
         {
-          auto const cpp_path
-            = util::format("{}/{}.cpp", binary_cache_dir, module::module_to_path(module));
-          std::filesystem::create_directories(std::filesystem::path{ cpp_path }.parent_path());
-          std::ofstream cpp_out(cpp_path);
+          jtl::immutable_string cpp_path;
+          if(!util::cli::opts.save_cpp_path.empty())
+          {
+            cpp_path = util::cli::opts.save_cpp_path;
+          }
+          else
+          {
+            cpp_path = util::format("{}/{}.cpp", binary_cache_dir, module::module_to_path(module));
+          }
+          auto const parent_path = std::filesystem::path{ cpp_path.c_str() }.parent_path();
+          if(!parent_path.empty())
+          {
+            std::filesystem::create_directories(parent_path);
+          }
+          std::ofstream cpp_out(cpp_path.c_str(), std::ios::app);
           if(cpp_out.is_open())
           {
-            cpp_out << code;
+            cpp_out << code << "\n\n";
             cpp_out.close();
             std::cerr << "[jank] Saved generated C++ to: " << cpp_path << "\n";
           }
         }
 
-        auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
-        if(!parse_res)
+        /* For WASM AOT, we only generate C++ code - skip JIT compilation.
+         * The generated C++ will be compiled by emscripten separately. */
+        if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
         {
-          jtl::immutable_string const res{ "Unable to compile generated C++ source." };
-          llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "error: ");
-          throw error::internal_codegen_failure(res);
+          /* Don't JIT compile for WASM AOT - just save the C++ file */
+          std::cerr << "[jank] WASM AOT mode: skipping JIT compilation\n";
         }
-        auto &partial_tu{ parse_res.get() };
-        auto module_name{ runtime::to_string(current_module_var->deref()) };
-        write_module(module_name, partial_tu.TheModule.get()).expect_ok();
+        else
+        {
+          auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
+          if(!parse_res)
+          {
+            jtl::immutable_string const res{ "Unable to compile generated C++ source." };
+            llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "error: ");
+            throw error::internal_codegen_failure(res);
+          }
+          auto &partial_tu{ parse_res.get() };
+          auto module_name{ runtime::to_string(current_module_var->deref()) };
+          write_module(module_name, partial_tu.TheModule.get()).expect_ok();
+        }
       }
     }
 #endif

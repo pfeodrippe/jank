@@ -157,6 +157,7 @@ run() {
 # --- Compile jank source if provided ---
 compiled_objects=()
 entrypoint_cpp=""
+aot_mode=false  # Whether we're using true AOT compilation
 
 if [[ -n "${jank_source}" ]]; then
   if [[ ! -f "${jank_source}" ]]; then
@@ -178,38 +179,104 @@ if [[ -n "${jank_source}" ]]; then
   jank_source_dir="$(dirname "${jank_source_abs}")"
   module_name="$(basename "${jank_source}" .jank)"
   
-  # Read the jank source file and escape it for C++ raw string literal
-  # Using R"JANK( ... )JANK" avoids escaping issues
+  # Read the jank source file for embedding (fallback mode)
   jank_source_content=$(cat "${jank_source}")
   
   # Use C++ codegen so we can compile with emscripten
   # The native jank compiler generates C++ code that em++ can compile to WASM
   cpp_output="${output_dir}/${module_name}_generated.cpp"
   
-  echo "[emscripten-bundle] NOTE: jank WASM support is experimental."
-  echo "[emscripten-bundle] The full runtime (clojure.core) is not yet available in WASM."
-  echo "[emscripten-bundle] Only the base runtime library is bundled."
-  echo ""
+  echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm_aot..."
   
-  # For now, just note that we would compile here
-  # The actual compilation requires the full jank infrastructure to be WASM-ready
-  cat > "${cpp_output}" <<CPP_EOF
-// Placeholder for ${module_name} - full codegen not yet WASM-ready
-// The jank source would be compiled to C++ here once the WASM runtime is complete.
+  # Try to compile with wasm_aot codegen
+  # This generates standalone C++ that can be compiled by emscripten
+  if "${native_jank}" run \
+    --codegen wasm_aot \
+    --save-cpp \
+    --save-cpp-path "${cpp_output}" \
+    "${jank_source}" 2>&1; then
+    echo "[emscripten-bundle] AOT compilation successful!"
+    aot_mode=true
+  else
+    echo "[emscripten-bundle] AOT compilation failed, falling back to runtime eval mode"
+    aot_mode=false
+  fi
+  
+  if [[ "${aot_mode}" == "true" && -f "${cpp_output}" ]]; then
+    echo "[emscripten-bundle] Using pre-compiled C++: ${cpp_output}"
+    compiled_objects+=("${cpp_output}")
+    
+    # Generate an entrypoint that calls the pre-compiled module init
+    entrypoint_cpp="${output_dir}/${module_name}_entry.cpp"
+    
+    # Munge the module name for C++ symbol generation (replace - with _)
+    munged_module_name="${module_name//-/_}"
+    
+    cat > "${entrypoint_cpp}" <<ENTRY_EOF
+// Auto-generated AOT entrypoint for ${module_name}
+// Uses pre-compiled jank code (no runtime evaluation needed!)
+#include <cstdio>
 
+// jank C API
+extern "C" {
+  int jank_init(int argc, char const** argv, bool init_ctx, int (*fn)(int, char const**));
+  void* jank_load_clojure_core_native();
+}
+
+// Generated module init function  
+extern "C" void* jank_load_${munged_module_name}();
+extern "C" jank::runtime::object_ref jank_wasm_init_${munged_module_name}();
+
+static int jank_main(int argc, char const** argv) {
+  printf("[jank-wasm] AOT mode: using pre-compiled code\\n");
+  
+  // Load core native functions
+  printf("[jank-wasm] Loading clojure.core-native...\\n");
+  jank_load_clojure_core_native();
+  printf("[jank-wasm] Core native loaded!\\n");
+  printf("\\n");
+  
+  // Call the pre-compiled module
+  printf("[jank-wasm] Executing pre-compiled module: ${module_name}\\n");
+  auto result = jank_wasm_init_${munged_module_name}();
+  printf("[jank-wasm] Result: %s\\n", jank::runtime::to_string(result).c_str());
+  
+  printf("\\n[jank-wasm] Done (AOT mode)!\\n");
+  return 0;
+}
+
+int main(int argc, char const** argv) {
+  printf("[jank-wasm] jank WebAssembly Runtime (AOT)\\n");
+  printf("[jank-wasm] Module: ${module_name}\\n");
+  printf("\\n");
+  
+  printf("[jank-wasm] Calling jank_init...\\n");
+  return jank_init(argc, argv, true, jank_main);
+}
+ENTRY_EOF
+  else
+    # Fallback: embed source and evaluate at runtime (limited functionality in WASM)
+    echo "[emscripten-bundle] NOTE: jank WASM support is experimental."
+    echo "[emscripten-bundle] Falling back to runtime evaluation mode."
+    echo "[emscripten-bundle] Only parsing will work - full evaluation requires clojure.core."
+    echo ""
+    
+    cat > "${cpp_output}" <<CPP_EOF
+// Placeholder for ${module_name} - runtime eval mode
+// Full AOT compilation requires clojure.core to be pre-compiled.
 #include <cstdio>
 
 extern "C" void jank_${module_name}_placeholder() {
-  printf("[jank-wasm] Module '${module_name}' - source compilation requires pre-compiled clojure.core\\n");
+  printf("[jank-wasm] Module '${module_name}' using runtime eval mode\\n");
 }
 CPP_EOF
 
-  compiled_objects+=("${cpp_output}")
-  
-  # Generate a simple entrypoint that initializes the jank runtime
-  entrypoint_cpp="${output_dir}/${module_name}_entry.cpp"
-  
-  cat > "${entrypoint_cpp}" <<ENTRY_EOF
+    compiled_objects+=("${cpp_output}")
+    
+    # Generate a simple entrypoint that initializes the jank runtime
+    entrypoint_cpp="${output_dir}/${module_name}_entry.cpp"
+    
+    cat > "${entrypoint_cpp}" <<ENTRY_EOF
 // Auto-generated entrypoint for ${module_name}
 // Initializes the jank WASM runtime
 #include <cstdio>
@@ -261,6 +328,7 @@ int main(int argc, char const** argv) {
   return jank_init(argc, argv, true, jank_main);
 }
 ENTRY_EOF
+  fi
   
   echo "[emscripten-bundle] Generated entrypoint: ${entrypoint_cpp}"
 fi

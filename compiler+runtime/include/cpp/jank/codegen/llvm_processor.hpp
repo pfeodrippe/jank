@@ -78,7 +78,8 @@ namespace jank::codegen
   {
     module,
     function,
-    eval
+    eval,
+    wasm_aot // Generates standalone C++ modules for WASM (no JIT)
   };
 
   constexpr char const *compilation_target_str(compilation_target const t)
@@ -91,6 +92,8 @@ namespace jank::codegen
         return "function";
       case compilation_target::eval:
         return "eval";
+      case compilation_target::wasm_aot:
+        return "wasm_aot";
       default:
         return "unknown";
     }

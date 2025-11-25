@@ -39,6 +39,12 @@ namespace jank::runtime
     {
       return const_cast<object *>(t);
     }
+
+    /* Allow converting from object_ref to object pointer. */
+    static constexpr object *from_object(object_ref const t)
+    {
+      return t.data;
+    }
   };
 
   /* Any typed object can convert to/from itself easily. */

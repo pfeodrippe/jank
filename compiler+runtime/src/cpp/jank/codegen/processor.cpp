@@ -1318,12 +1318,40 @@ namespace jank::codegen
     }
 
     auto arg_tmp_it(arg_tmps.begin());
-    for(auto const &param : fn_arity.params)
+    if(expr->loop_target.is_some())
     {
-      util::format_to(body_buffer, "{} = {};", runtime::munge(param->name), arg_tmp_it->str(true));
-      ++arg_tmp_it;
+      /* Loop/recur - update the loop bindings */
+      auto const let{ expr->loop_target.unwrap() };
+      for(usize i{}; i < expr->arg_exprs.size(); ++i)
+      {
+        auto const &pair{ let->pairs[i] };
+        auto const local(expr->frame->find_local_or_capture(pair.first));
+        auto const &local_name(runtime::munge(local.unwrap().binding->native_name));
+        auto const &val_name(arg_tmp_it->str(true));
+
+        if(local_name != val_name)
+        {
+          util::format_to(body_buffer, "{} = {};", local_name, val_name);
+        }
+        ++arg_tmp_it;
+      }
+
+      util::format_to(body_buffer, "continue;");
     }
-    util::format_to(body_buffer, "continue;");
+    else
+    {
+      /* Function-level tail recursion - update function params */
+      for(auto const &param : fn_arity.params)
+      {
+        util::format_to(body_buffer,
+                        "{} = {};",
+                        runtime::munge(param->name),
+                        arg_tmp_it->str(true));
+        ++arg_tmp_it;
+      }
+      util::format_to(body_buffer, "continue;");
+    }
+
     return none;
   }
 
@@ -1418,23 +1446,62 @@ namespace jank::codegen
                                                pair.first->to_string()) };
       }
 
+      auto const local_type{ cpp_util::expression_type(pair.second) };
       auto const &val_tmp(gen(pair.second, fn_arity, pair.second->needs_box));
       auto const &munged_name(runtime::munge(local.unwrap().binding->native_name));
       /* Every binding is wrapped in its own scope, to allow shadowing.
        *
        * Also, bindings are references to their value expression, rather than a copy.
        * This is important for C++ interop, since the we don't want to, and we may not
-       * be able to, just copy stack-allocated C++ objects around willy nillly. */
-      util::format_to(body_buffer, "{ auto &&{}({}); ", munged_name, val_tmp.unwrap().str(false));
-
-      auto const binding(local.unwrap().binding);
-      if(!binding->needs_box && binding->has_boxed_usage)
+       * be able to, just copy stack-allocated C++ objects around willy nilly. */
+      if(expr->is_loop)
       {
-        util::format_to(body_buffer,
-                        "auto const {}({});",
-                        detail::boxed_local_name(munged_name),
-                        val_tmp.unwrap().str(true));
+        /* For loops, we need mutable bindings that can be updated by recur.
+         * Loop bindings always need to be boxed since recur may pass in boxed values.
+         * We also need to generate a boxed alias since local_reference codegen uses it. */
+        if(cpp_util::is_any_object(local_type))
+        {
+          util::format_to(body_buffer,
+                          "{ object_ref {}({}); ",
+                          munged_name,
+                          val_tmp.unwrap().str(true));
+        }
+        else
+        {
+          util::format_to(body_buffer,
+                          "{ auto &&{}({}); ",
+                          munged_name,
+                          val_tmp.unwrap().str(true));
+        }
+
+        /* Generate the boxed alias for cases where local_reference expects it */
+        auto const binding(local.unwrap().binding);
+        if(!binding->needs_box && binding->has_boxed_usage)
+        {
+          util::format_to(body_buffer,
+                          "auto const &{}({});",
+                          detail::boxed_local_name(munged_name),
+                          munged_name);
+        }
       }
+      else
+      {
+        util::format_to(body_buffer, "{ auto &&{}({}); ", munged_name, val_tmp.unwrap().str(false));
+
+        auto const binding(local.unwrap().binding);
+        if(!binding->needs_box && binding->has_boxed_usage)
+        {
+          util::format_to(body_buffer,
+                          "auto const {}({});",
+                          detail::boxed_local_name(munged_name),
+                          val_tmp.unwrap().str(true));
+        }
+      }
+    }
+
+    if(expr->is_loop)
+    {
+      util::format_to(body_buffer, "while(true){");
     }
 
     for(auto it(expr->body->values.begin()); it != expr->body->values.end();)
@@ -1444,17 +1511,15 @@ namespace jank::codegen
       /* We ignore all values but the last. */
       if(++it == expr->body->values.end() && val_tmp.is_some())
       {
-        if(expr->needs_box)
+        /* The last expression tmp needs to be movable. */
+        util::format_to(body_buffer,
+                        "{} = std::move({});",
+                        ret_tmp.str(true),
+                        val_tmp.unwrap().str(expr->needs_box));
+
+        if(expr->is_loop)
         {
-          /* The last expression tmp needs to be movable. */
-          util::format_to(body_buffer,
-                          "{} = std::move({});",
-                          ret_tmp.str(true),
-                          val_tmp.unwrap().str(expr->needs_box));
-        }
-        else
-        {
-          util::format_to(body_buffer, "return {};", val_tmp.unwrap().str(expr->needs_box));
+          util::format_to(body_buffer, " break;");
         }
       }
     }
@@ -1464,14 +1529,20 @@ namespace jank::codegen
       util::format_to(body_buffer, "}");
     }
 
-    if(expr->needs_box)
+    if(expr->is_loop)
     {
       util::format_to(body_buffer, "}");
     }
-    else
-    {
-      util::format_to(body_buffer, "}());");
-    }
+
+    util::format_to(body_buffer, "}");
+    //if(expr->needs_box)
+    //{
+    //  util::format_to(body_buffer, "}");
+    //}
+    //else
+    //{
+    //  util::format_to(body_buffer, "}());");
+    //}
 
     if(expr->position == analyze::expression_position::tail)
     {
@@ -2285,6 +2356,58 @@ namespace jank::codegen
                       runtime::module::module_to_native_ns(module),
                       runtime::munge(struct_name.name));
       util::format_to(footer_buffer, "}");
+    }
+    else if(target == compilation_target::wasm_aot)
+    {
+      /* For WASM AOT, generate a registration function that:
+       * 1. Can be called at WASM startup to initialize the module
+       * 2. Creates and executes the module's top-level forms
+       * 3. Returns the result for debugging/inspection */
+      auto const native_ns{ runtime::module::module_to_native_ns(module) };
+
+      /* Create a C-safe identifier from module name (replace . and $ with _) */
+      auto const make_c_safe = [](jtl::immutable_string const &s) {
+        native_transient_string result;
+        for(auto const c : runtime::munge(s))
+        {
+          if(c == '.' || c == '$')
+          {
+            result += '_';
+          }
+          else
+          {
+            result += c;
+          }
+        }
+        return jtl::immutable_string{ result };
+      };
+
+      auto const c_safe_module{ make_c_safe(module) };
+      auto const load_fn_name{ util::format("jank_load_{}", c_safe_module) };
+      auto const munged_struct_name{ runtime::munge(struct_name.name) };
+
+      /* Generate a WASM-friendly init function.
+       * Note: jank's custom format doesn't support {{ escaping, so we build strings manually. */
+      util::format_to(footer_buffer, "\n// WASM AOT module registration for {}\n", module);
+      util::format_to(footer_buffer, "extern \"C\" {\n");
+      util::format_to(footer_buffer,
+                      "  // Module load function (compatible with standard module loading)\n");
+      util::format_to(footer_buffer, "  void* {}() {\n", load_fn_name);
+      util::format_to(footer_buffer,
+                      "    return {}::{}{ }.call().erase();\n",
+                      native_ns,
+                      munged_struct_name);
+      util::format_to(footer_buffer, "  }\n\n");
+      util::format_to(footer_buffer, "  // WASM-specific init function with result capture\n");
+      util::format_to(footer_buffer,
+                      "  jank::runtime::object_ref jank_wasm_init_{}() {\n",
+                      c_safe_module);
+      util::format_to(footer_buffer,
+                      "    return {}::{}{ }.call();\n",
+                      native_ns,
+                      munged_struct_name);
+      util::format_to(footer_buffer, "  }\n");
+      util::format_to(footer_buffer, "}\n");
     }
   }
 

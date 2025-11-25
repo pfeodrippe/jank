@@ -3,6 +3,10 @@
 - This agent can build and test the jank compiler+runtime by following
 	`.claude/skills/jank-build-and-test/SKILL.md`.
 
+## Rules
+
+- **Never use `/dev/null`** - Do not redirect output to `/dev/null`. Always capture and show output for debugging purposes.
+
 ## Command Log
 
 ### Build
