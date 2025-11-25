@@ -1248,7 +1248,13 @@ namespace jank::read::parse
     object_ref ret{};
 
     /* Specials, such as fn*, let*, try, etc. just get left alone. We can't qualify them more. */
-    if(__rt_ctx->an_prc.is_special(form))
+#ifdef JANK_TARGET_WASM
+    /* In WASM, an_prc doesn't exist, so we skip the is_special check */
+    bool const is_special_form = false;
+#else
+    bool const is_special_form = __rt_ctx->an_prc.is_special(form);
+#endif
+    if(is_special_form)
     {
       ret = make_box<obj::persistent_list>(std::in_place, make_box<obj::symbol>("quote"), form);
     }

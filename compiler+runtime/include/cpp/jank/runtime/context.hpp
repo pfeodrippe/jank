@@ -6,11 +6,13 @@
 #include <jank/util/folly_shim.hpp>
 
 #include <jtl/result.hpp>
-#include <jank/analyze/processor.hpp>
+#ifndef JANK_TARGET_WASM
+  #include <jank/analyze/processor.hpp>
+  #include <jank/jit/processor.hpp>
+#endif
 #include <jank/runtime/module/loader.hpp>
 #include <jank/runtime/ns.hpp>
 #include <jank/runtime/var.hpp>
-#include <jank/jit/processor.hpp>
 #include <jank/util/cli.hpp>
 
 namespace llvm
@@ -89,8 +91,10 @@ namespace jank::runtime
     object_ref eval_string(jtl::immutable_string_view const &code);
     jtl::result<void, error_ref> eval_cpp_string(jtl::immutable_string_view const &code) const;
     object_ref read_string(jtl::immutable_string_view const &code);
+#ifndef JANK_TARGET_WASM
     native_vector<analyze::expression_ref>
     analyze_string(jtl::immutable_string_view const &code, bool const eval = true);
+#endif
 
     /* Finds the specified module on the module path and loads it. If
      * the module is already loaded, nothing is done.
@@ -181,12 +185,14 @@ namespace jank::runtime
     obj::persistent_hash_map_ref get_thread_bindings() const;
     jtl::option<thread_binding_frame> current_thread_binding_frame();
 
+#ifndef JANK_TARGET_WASM
     /* The analyze processor is reused across evaluations so we can keep the semantic information
      * of previous code. This is essential for REPL use.
      *
      * TODO: Is it? I think we can remove this. */
     /* TODO: This needs to be synchronized, if it's kept. */
     analyze::processor an_prc;
+#endif
     jtl::immutable_string binary_version;
     /* TODO: This needs to be a dynamic var. */
     native_unordered_map<jtl::immutable_string, native_vector<jtl::immutable_string>>
@@ -212,9 +218,11 @@ namespace jank::runtime
     static thread_local native_unordered_map<context const *, std::list<thread_binding_frame>>
       thread_binding_frames;
 
+#ifndef JANK_TARGET_WASM
     /* This must go last, since it'll try to access other bits in the runtime context during
      * its initialization and we need them to be ready. */
     jit::processor jit_prc;
+#endif
   };
 
   /* NOLINTNEXTLINE */

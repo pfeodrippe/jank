@@ -185,7 +185,9 @@ namespace jank::runtime
     }
   };
 
-  /* Native big integer. */
+#ifndef JANK_TARGET_EMSCRIPTEN
+  /* Native big integer - only needed when native_big_integer is a class type (boost::multiprecision)
+   * In WASM, native_big_integer is just long long, so the integer convert above handles it. */
   template <>
   struct convert<native_big_integer>
   {
@@ -204,6 +206,7 @@ namespace jank::runtime
       return o->data;
     }
   };
+#endif
 
   /* Native floating point primitives. */
   template <typename T>

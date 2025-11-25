@@ -178,6 +178,10 @@ if [[ -n "${jank_source}" ]]; then
   jank_source_dir="$(dirname "${jank_source_abs}")"
   module_name="$(basename "${jank_source}" .jank)"
   
+  # Read the jank source file and escape it for C++ raw string literal
+  # Using R"JANK( ... )JANK" avoids escaping issues
+  jank_source_content=$(cat "${jank_source}")
+  
   # Use C++ codegen so we can compile with emscripten
   # The native jank compiler generates C++ code that em++ can compile to WASM
   cpp_output="${output_dir}/${module_name}_generated.cpp"
@@ -196,36 +200,69 @@ if [[ -n "${jank_source}" ]]; then
 #include <cstdio>
 
 extern "C" void jank_${module_name}_placeholder() {
-  printf("[jank-wasm] Module '${module_name}' placeholder - full compilation pending WASM runtime completion.\\n");
+  printf("[jank-wasm] Module '${module_name}' - source compilation requires pre-compiled clojure.core\\n");
 }
 CPP_EOF
 
   compiled_objects+=("${cpp_output}")
   
-  # Generate a simple entrypoint 
+  # Generate a simple entrypoint that initializes the jank runtime
   entrypoint_cpp="${output_dir}/${module_name}_entry.cpp"
   
   cat > "${entrypoint_cpp}" <<ENTRY_EOF
 // Auto-generated entrypoint for ${module_name}
-// NOTE: This is a placeholder until the full jank WASM runtime is ready.
+// Initializes the jank WASM runtime
 #include <cstdio>
 
-extern "C" void jank_${module_name}_placeholder();
+// Embedded jank source code (using raw string literal)
+static char const* const jank_source_code = R"JANK(${jank_source_content})JANK";
 
-int main(int argc, char const** argv) {
-  printf("[jank-wasm] jank WebAssembly runtime\\n");
-  printf("[jank-wasm] Module: ${module_name}\\n");
-  printf("[jank-wasm] Status: Experimental - core libraries not yet available\\n");
+// jank C API - defined in c_api_wasm.cpp
+extern "C" {
+  // Runtime initialization
+  int jank_init(int argc, char const** argv, bool init_ctx, int (*fn)(int, char const**));
+  
+  // Core library loading
+  void* jank_load_clojure_core_native();
+  
+  // Evaluate jank source and get result as string
+  char const* jank_eval_string_c(char const* s);
+  
+  // Module placeholder
+  void jank_${module_name}_placeholder();
+}
+
+static int jank_main(int argc, char const** argv) {
+  printf("[jank-wasm] Inside jank_main, runtime context should be initialized\\n");
+  
+  // Load core native functions
+  printf("[jank-wasm] Loading clojure.core-native...\\n");
+  jank_load_clojure_core_native();
+  printf("[jank-wasm] Core native loaded!\\n");
   printf("\\n");
   
-  jank_${module_name}_placeholder();
+  // Evaluate the embedded jank source
+  printf("[jank-wasm] Evaluating jank source...\\n");
+  printf("[jank-wasm] Source:\\n%s\\n\\n", jank_source_code);
   
-  printf("\\n[jank-wasm] To complete WASM support, see docs/wasm-minimal-example.md\\n");
+  char const* result = jank_eval_string_c(jank_source_code);
+  printf("[jank-wasm] Result: %s\\n", result);
+  
+  printf("\\n[jank-wasm] Done!\\n");
   return 0;
+}
+
+int main(int argc, char const** argv) {
+  printf("[jank-wasm] jank WebAssembly Runtime\\n");
+  printf("[jank-wasm] Module: ${module_name}\\n");
+  printf("\\n");
+  
+  printf("[jank-wasm] Calling jank_init...\\n");
+  return jank_init(argc, argv, true, jank_main);
 }
 ENTRY_EOF
   
-  echo "[emscripten-bundle] Generated placeholder entrypoint: ${entrypoint_cpp}"
+  echo "[emscripten-bundle] Generated entrypoint: ${entrypoint_cpp}"
 fi
 
 pushd "${repo_root}" >/dev/null
@@ -302,6 +339,8 @@ em_link_cmd+=(
   # Memory settings
   -sALLOW_MEMORY_GROWTH=1
   -sINITIAL_MEMORY=67108864
+  # Enable C++ exceptions for better debugging
+  -fexceptions
   # Export settings for JS interop
   -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8
   # Module settings

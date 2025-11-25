@@ -1,5 +1,9 @@
 #include <clojure/core_native.hpp>
-#include <jank/nrepl_server/native_header_completion.hpp>
+
+#ifndef JANK_TARGET_WASM
+  #include <jank/nrepl_server/native_header_completion.hpp>
+#endif
+
 #include <jank/runtime/behavior/callable.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/convert/function.hpp>
@@ -273,6 +277,9 @@ namespace clojure::core_native
     return jank_nil;
   }
 
+#ifndef JANK_TARGET_WASM
+  // These functions require JIT/nREPL and are not available in WASM builds
+
   object_ref compile(object_ref const path)
   {
     __rt_ctx->compile_module(runtime::to_string(path)).expect_ok();
@@ -350,6 +357,7 @@ namespace clojure::core_native
     return make_box<obj::persistent_vector>(
       runtime::detail::native_persistent_vector{ boxed.begin(), boxed.end() });
   }
+#endif // !JANK_TARGET_WASM
 
   object_ref eval(object_ref const expr)
   {
@@ -605,9 +613,11 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
   intern_fn("ns-unmap", &core_native::ns_unmap);
   intern_fn("refer", &core_native::refer);
   intern_fn("load-module", &core_native::load_module);
+#ifndef JANK_TARGET_WASM
   intern_fn("compile", &core_native::compile);
   intern_fn("register-native-header", &core_native::register_native_header);
   intern_fn("native-header-functions", &core_native::native_header_functions);
+#endif
   intern_fn("eval", &core_native::eval);
   intern_fn("hash-unordered-coll", &core_native::hash_unordered);
   intern_fn("read-string", &core_native::read_string);

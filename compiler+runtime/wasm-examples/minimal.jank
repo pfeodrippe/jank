@@ -1,0 +1,4 @@
+;; Minimal WASM test - just tests basic runtime without clojure.core
+;; This should work as soon as the runtime initializes
+
+42

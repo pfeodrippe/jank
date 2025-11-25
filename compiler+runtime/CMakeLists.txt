@@ -600,6 +600,14 @@ if(jank_target_wasm)
     src/cpp/jank/util/environment_wasm.cpp
     src/cpp/jank/wasm_stub.cpp
     src/cpp/jank/runtime/perf_wasm.cpp
+    # WASM-specific C API (no LLVM deps)
+    src/cpp/jank/c_api_wasm.cpp
+    # Core native functions (original file with WASM guards)
+    src/cpp/clojure/core_native.cpp
+    # GC stub for missing gc_badalc.cc
+    src/cpp/jank/gc_wasm_stub.cpp
+    # Stubs for native-only functionality
+    src/cpp/jank/wasm_native_stubs.cpp
   )
 else()
   # Native build: full runtime + AOT/codegen/nREPL
@@ -700,6 +708,9 @@ if(jank_target_wasm)
     src/cpp/jtl/panic_wasm.cpp
     src/cpp/jtl/assert_wasm.cpp
   )
+  
+  # Define JANK_TARGET_WASM for conditional compilation
+  target_compile_definitions(jank_lib PUBLIC JANK_TARGET_WASM=1)
   
   # For WASM, only our project include is non-system
   target_include_directories(

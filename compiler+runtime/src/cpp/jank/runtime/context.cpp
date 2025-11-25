@@ -20,11 +20,13 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/munge.hpp>
 #include <jank/runtime/core/meta.hpp>
-#include <jank/analyze/processor.hpp>
-#include <jank/analyze/expr/primitive_literal.hpp>
-#include <jank/analyze/pass/optimize.hpp>
-#include <jank/evaluate.hpp>
-#include <jank/jit/processor.hpp>
+#ifndef JANK_TARGET_WASM
+  #include <jank/analyze/processor.hpp>
+  #include <jank/analyze/expr/primitive_literal.hpp>
+  #include <jank/analyze/pass/optimize.hpp>
+  #include <jank/evaluate.hpp>
+  #include <jank/jit/processor.hpp>
+#endif
 #ifndef JANK_TARGET_EMSCRIPTEN
   #include <jank/util/clang.hpp>
   #include <jank/util/clang_format.hpp>
@@ -50,10 +52,8 @@ namespace jank::runtime
     /* We want to initialize __rt_ctx ASAP so other code can start using it. */
     : binary_version{ (__rt_ctx = this, util::binary_version()) }
     , binary_cache_dir{ util::binary_cache_dir(binary_version) }
-#ifndef JANK_TARGET_EMSCRIPTEN
+#ifndef JANK_TARGET_WASM
     , jit_prc{ binary_version }
-#else
-    , jit_prc{ "" }
 #endif
   {
     intern_ns(make_box<obj::symbol>("cpp"));
@@ -179,6 +179,11 @@ namespace jank::runtime
     native_vector<object_ref> forms{};
     for(auto const &form : p_prc)
     {
+#ifdef JANK_TARGET_WASM
+      /* WASM doesn't support JIT - just return the parsed form */
+      ret = form.expect_ok().unwrap().ptr;
+      forms.emplace_back(ret);
+#else
       analyze::processor an_prc;
       auto const expr(analyze::pass::optimize(
         an_prc.analyze(form.expect_ok().unwrap().ptr, analyze::expression_position::statement)
@@ -186,9 +191,13 @@ namespace jank::runtime
       ret = evaluate::eval(expr);
 
       forms.emplace_back(form.expect_ok().unwrap().ptr);
+#endif
     }
 
-#ifdef JANK_TARGET_EMSCRIPTEN
+#ifdef JANK_TARGET_WASM
+    /* WASM doesn't support module compilation */
+    (void)forms;
+#elif defined(JANK_TARGET_EMSCRIPTEN)
     if(truthy(compile_files_var->deref()))
     {
       throw error::internal_codegen_failure(
@@ -324,6 +333,7 @@ namespace jank::runtime
     return ret;
   }
 
+#ifndef JANK_TARGET_WASM
   native_vector<analyze::expression_ref>
   context::analyze_string(jtl::immutable_string_view const &code, bool const eval)
   {
@@ -353,6 +363,7 @@ namespace jank::runtime
 
     return ret;
   }
+#endif
 
   jtl::result<void, error_ref>
   context::load_module(jtl::immutable_string_view const &module, module::origin const ori)
@@ -402,12 +413,20 @@ namespace jank::runtime
     return load_module(util::format("/{}", module), module::origin::latest);
   }
 
+#ifndef JANK_TARGET_WASM
   object_ref context::eval(object_ref const o)
   {
     auto const expr(
       analyze::pass::optimize(an_prc.analyze(o, analyze::expression_position::value).expect_ok()));
     return evaluate::eval(expr);
   }
+#else
+  object_ref context::eval(object_ref const o)
+  {
+    /* WASM doesn't support JIT evaluation - just return the object */
+    return o;
+  }
+#endif
 
 #ifdef JANK_TARGET_EMSCRIPTEN
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
