@@ -1,0 +1,27 @@
+(ns eita
+  (:require
+   [clojure.set :as set]
+   [clojure.core :as core]))
+
+;; Test basic set operations from clojure.set
+(def s1 #{1 2 3 4})
+(def s2 #{3 4 5 6})
+(def intersection (set/intersection s1 s2))
+(def union (set/union s1 s2))
+(def difference (set/difference s1 s2))
+
+(println "Set 1:" s1)
+(println "Set 2:" s2)
+(println "Intersection:" intersection)
+(println "Union:" union)
+(println "Difference:" difference)
+
+;; Test basic core functions
+(def numbers [1 2 3 4 5])
+(def doubled (core/map #(* 2 %) numbers))
+(def filtered (core/filter even? numbers))
+
+(println "Numbers:" numbers)
+(println "Doubled:" (core/vec doubled))
+(println "Even numbers:" (core/vec filtered))
+(println "WASM build test completed successfully!")

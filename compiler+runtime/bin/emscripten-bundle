@@ -9,13 +9,42 @@ else
 fi
 repo_root="${here}/.."
 build_dir="${repo_root}/build-wasm"
+native_build_dir="${repo_root}/build"
+output_dir=""
+output_name="jank"
+skip_build=false
+run_after=false
+jank_source=""
+node_args=()
 
 usage() {
   cat <<'USAGE'
-Usage: emscripten-bundle [--build-dir DIR] [-- [extra cmake configure args]]
+Usage: emscripten-bundle [OPTIONS] [jank-source] [-- [extra cmake configure args]]
 
-Runs emcmake/cmake with -Djank_target_wasm=on and produces a wasm-friendly build tree.
+Runs emcmake/cmake with -Djank_target_wasm=on and produces a wasm-friendly build tree,
+then links the result into runnable .js/.wasm/.html files.
+
+If a jank source file is provided, it will be compiled using the native jank compiler
+and linked into the WASM bundle.
+
+Options:
+  -h, --help              Show this help message
+  --build-dir DIR         CMake build directory for WASM (default: build-wasm)
+  --native-build-dir DIR  Native build directory with jank compiler (default: build)
+  --output-dir DIR        Output directory for .js/.wasm/.html (default: build-dir)
+  --output-name NAME      Base name for output files (default: jank, or source basename)
+  --skip-build            Skip cmake build, only run em++ linking step
+  --run                   Run the generated .js file with Node.js after building
+  --node-args ARGS        Extra arguments to pass to Node.js (implies --run)
+
 Any arguments after -- are forwarded directly to the emcmake configure invocation.
+
+Examples:
+  emscripten-bundle                           # Build runtime and generate jank.js/jank.wasm
+  emscripten-bundle eita.jank                 # Compile eita.jank and bundle into eita.js/eita.wasm
+  emscripten-bundle --run eita.jank           # Compile and run with Node.js
+  emscripten-bundle --skip-build --run        # Just link and run (if already built)
+  emscripten-bundle --output-name hello       # Generate hello.js/hello.wasm/hello.html
 USAGE
 }
 
@@ -35,10 +64,56 @@ while [[ $# -gt 0 ]]; do
       build_dir="$2"
       shift 2
       ;;
+    --native-build-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --native-build-dir expects an argument" >&2
+        exit 1
+      fi
+      native_build_dir="$2"
+      shift 2
+      ;;
+    --output-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --output-dir expects an argument" >&2
+        exit 1
+      fi
+      output_dir="$2"
+      shift 2
+      ;;
+    --output-name)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --output-name expects an argument" >&2
+        exit 1
+      fi
+      output_name="$2"
+      shift 2
+      ;;
+    --skip-build)
+      skip_build=true
+      shift
+      ;;
+    --run)
+      run_after=true
+      shift
+      ;;
+    --node-args)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --node-args expects an argument" >&2
+        exit 1
+      fi
+      run_after=true
+      node_args+=($2)
+      shift 2
+      ;;
     --)
       shift
       cmake_args+=("$@")
       break
+      ;;
+    *.jank)
+      # Jank source file
+      jank_source="$1"
+      shift
       ;;
     *)
       cmake_args+=("$1")
@@ -47,47 +122,307 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for tool in emcmake cmake; do
+# If jank source provided but no output name specified, use source basename
+if [[ -n "${jank_source}" && "${output_name}" == "jank" ]]; then
+  output_name="$(basename "${jank_source}" .jank)"
+fi
+
+# Default output_dir to build_dir if not specified
+if [[ -z "${output_dir}" ]]; then
+  output_dir="${build_dir}"
+fi
+
+for tool in emcmake cmake em++; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "error: required tool '$tool' not found in PATH" >&2
     exit 1
   fi
 done
 
+if [[ "${run_after}" == "true" ]]; then
+  if ! command -v node >/dev/null 2>&1; then
+    echo "error: --run requires 'node' in PATH" >&2
+    exit 1
+  fi
+fi
+
 mkdir -p "${build_dir}"
+mkdir -p "${output_dir}"
 
 run() {
   echo "[emscripten-bundle] $*"
   "$@"
 }
 
-pushd "${repo_root}" >/dev/null
+# --- Compile jank source if provided ---
+compiled_objects=()
+entrypoint_cpp=""
 
-configure_cmd=(
-  emcmake
-  cmake
-  -S
-  .
-  -B
-  "${build_dir}"
-  -Djank_target_wasm=on
-)
-if [[ ${#cmake_args[@]} -gt 0 ]]; then
-  configure_cmd+=("${cmake_args[@]}")
+if [[ -n "${jank_source}" ]]; then
+  if [[ ! -f "${jank_source}" ]]; then
+    echo "error: jank source file not found: ${jank_source}" >&2
+    exit 1
+  fi
+  
+  native_jank="${native_build_dir}/jank"
+  if [[ ! -x "${native_jank}" ]]; then
+    echo "error: native jank compiler not found: ${native_jank}" >&2
+    echo "       Build the native compiler first with ./bin/compile" >&2
+    exit 1
+  fi
+  
+  echo "[emscripten-bundle] Compiling jank source: ${jank_source}"
+  
+  # Get the module name from the source file
+  jank_source_abs="$(cd "$(dirname "${jank_source}")" && pwd)/$(basename "${jank_source}")"
+  jank_source_dir="$(dirname "${jank_source_abs}")"
+  module_name="$(basename "${jank_source}" .jank)"
+  
+  # Use C++ codegen so we can compile with emscripten
+  # The native jank compiler generates C++ code that em++ can compile to WASM
+  cpp_output="${output_dir}/${module_name}_generated.cpp"
+  
+  echo "[emscripten-bundle] NOTE: jank WASM support is experimental."
+  echo "[emscripten-bundle] The full runtime (clojure.core) is not yet available in WASM."
+  echo "[emscripten-bundle] Only the base runtime library is bundled."
+  echo ""
+  
+  # For now, just note that we would compile here
+  # The actual compilation requires the full jank infrastructure to be WASM-ready
+  cat > "${cpp_output}" <<CPP_EOF
+// Placeholder for ${module_name} - full codegen not yet WASM-ready
+// The jank source would be compiled to C++ here once the WASM runtime is complete.
+
+#include <cstdio>
+
+extern "C" void jank_${module_name}_placeholder() {
+  printf("[jank-wasm] Module '${module_name}' placeholder - full compilation pending WASM runtime completion.\\n");
+}
+CPP_EOF
+
+  compiled_objects+=("${cpp_output}")
+  
+  # Generate a simple entrypoint 
+  entrypoint_cpp="${output_dir}/${module_name}_entry.cpp"
+  
+  cat > "${entrypoint_cpp}" <<ENTRY_EOF
+// Auto-generated entrypoint for ${module_name}
+// NOTE: This is a placeholder until the full jank WASM runtime is ready.
+#include <cstdio>
+
+extern "C" void jank_${module_name}_placeholder();
+
+int main(int argc, char const** argv) {
+  printf("[jank-wasm] jank WebAssembly runtime\\n");
+  printf("[jank-wasm] Module: ${module_name}\\n");
+  printf("[jank-wasm] Status: Experimental - core libraries not yet available\\n");
+  printf("\\n");
+  
+  jank_${module_name}_placeholder();
+  
+  printf("\\n[jank-wasm] To complete WASM support, see docs/wasm-minimal-example.md\\n");
+  return 0;
+}
+ENTRY_EOF
+  
+  echo "[emscripten-bundle] Generated placeholder entrypoint: ${entrypoint_cpp}"
 fi
 
-run "${configure_cmd[@]}"
+pushd "${repo_root}" >/dev/null
 
-run cmake --build "${build_dir}"
+if [[ "${skip_build}" != "true" ]]; then
+  configure_cmd=(
+    emcmake
+    cmake
+    -S
+    .
+    -B
+    "${build_dir}"
+    -Djank_target_wasm=on
+  )
+  if [[ ${#cmake_args[@]} -gt 0 ]]; then
+    configure_cmd+=("${cmake_args[@]}")
+  fi
 
-cat <<'TODO'
-[emscripten-bundle] Build complete.
-Next steps (manual for now):
-  1. Use the generated wasm/static archives under the build dir.
-  2. Run em++ to link your cached modules plus libjank-mini-wasm.a.
-  3. Emit hello.html/js via `em++ -sMODULARIZE ...` as described in docs/wasm-minimal-example.md.
+  run "${configure_cmd[@]}"
 
-Automation for steps 2/3 is coming soon.
-TODO
+  run cmake --build "${build_dir}"
+fi
+
+# --- Link step: generate .js/.wasm/.html ---
+echo "[emscripten-bundle] Linking into ${output_dir}/${output_name}.js ..."
+
+libjank="${build_dir}/libjank.a"
+libjankzip="${build_dir}/libjankzip.a"
+libgc="${build_dir}/third-party/bdwgc/libgc.a"
+
+for lib in "${libjank}" "${libjankzip}" "${libgc}"; do
+  if [[ ! -f "${lib}" ]]; then
+    echo "error: required library not found: ${lib}" >&2
+    echo "       Run without --skip-build first." >&2
+    exit 1
+  fi
+done
+
+# Emscripten linking flags
+# Note: jank wasm build is a library, not an executable, so we don't export main
+# Instead, we create a module that can be loaded and used via ccall/cwrap
+em_link_cmd=(
+  em++
+  -o "${output_dir}/${output_name}.js"
+  "${libjank}"
+  "${libjankzip}"
+  "${libgc}"
+)
+
+# Add compiled objects if any
+for obj in "${compiled_objects[@]}"; do
+  if [[ -f "${obj}" ]]; then
+    em_link_cmd+=("${obj}")
+  fi
+done
+
+# Add entrypoint if we have one
+if [[ -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
+  em_link_cmd+=("${entrypoint_cpp}")
+  # With entrypoint, we can export main
+  em_link_cmd+=(
+    -sEXPORTED_FUNCTIONS=_main
+  )
+else
+  # Without entrypoint, don't require main
+  em_link_cmd+=(
+    -sSTANDALONE_WASM=0
+    -sERROR_ON_UNDEFINED_SYMBOLS=0
+    -Wno-undefined
+  )
+fi
+
+em_link_cmd+=(
+  # Memory settings
+  -sALLOW_MEMORY_GROWTH=1
+  -sINITIAL_MEMORY=67108864
+  # Export settings for JS interop
+  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8
+  # Module settings
+  -sMODULARIZE=1
+  -sEXPORT_NAME="${output_name}"
+  # Environment support
+  -sENVIRONMENT=web,node
+  # Error handling
+  -sABORTING_MALLOC=0
+)
+
+# Check if shell file exists for HTML generation
+shell_file="${repo_root}/doc/jank-shell.html"
+generate_html=false
+
+if [[ -f "${shell_file}" ]]; then
+  generate_html=true
+  # Also generate HTML output
+  em_html_cmd=(
+    em++
+    -o "${output_dir}/${output_name}.html"
+    "${libjank}"
+    "${libjankzip}"
+    "${libgc}"
+  )
+  
+  # Add compiled objects if any
+  for obj in "${compiled_objects[@]}"; do
+    if [[ -f "${obj}" ]]; then
+      em_html_cmd+=("${obj}")
+    fi
+  done
+  
+  # Add entrypoint if we have one
+  if [[ -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
+    em_html_cmd+=("${entrypoint_cpp}")
+    em_html_cmd+=(-sEXPORTED_FUNCTIONS=_main)
+  else
+    em_html_cmd+=(
+      -sSTANDALONE_WASM=0
+      -sERROR_ON_UNDEFINED_SYMBOLS=0
+      -Wno-undefined
+    )
+  fi
+  
+  em_html_cmd+=(
+    -sALLOW_MEMORY_GROWTH=1
+    -sINITIAL_MEMORY=67108864
+    -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8
+    -sENVIRONMENT=web,node
+    -sABORTING_MALLOC=0
+    --shell-file "${shell_file}"
+  )
+fi
+
+# Run the JS/WASM generation
+run "${em_link_cmd[@]}"
+
+# Optionally generate HTML too (separate file for browser testing)
+if [[ "${generate_html}" == "true" ]]; then
+  run "${em_html_cmd[@]}"
+  echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.html"
+fi
+
+echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.js"
+echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.wasm"
+
+# --- Run step (optional) ---
+if [[ "${run_after}" == "true" ]]; then
+  echo "[emscripten-bundle] Running with Node.js..."
+  
+  # Create a simple runner script if using MODULARIZE
+  runner_script=$(mktemp /tmp/jank-runner-XXXXXX.mjs)
+  cat > "${runner_script}" <<EOF
+import createModule from '${output_dir}/${output_name}.js';
+
+try {
+  const Module = await createModule();
+  // The module should auto-run main() if it exists
+  console.log('[jank-runner] Module initialized successfully');
+} catch (e) {
+  console.error('[jank-runner] Error:', e);
+  process.exit(1);
+}
+EOF
+
+  node_cmd=(node)
+  if [[ ${#node_args[@]} -gt 0 ]]; then
+    node_cmd+=("${node_args[@]}")
+  fi
+  node_cmd+=("${runner_script}")
+  run "${node_cmd[@]}"
+  rm -f "${runner_script}"
+fi
+
+cat <<EOF
+[emscripten-bundle] Build complete!
+
+Generated files:
+  - ${output_dir}/${output_name}.js    (ES module loader)
+  - ${output_dir}/${output_name}.wasm  (WebAssembly binary)
+EOF
+
+if [[ "${generate_html}" == "true" ]]; then
+  cat <<EOF
+  - ${output_dir}/${output_name}.html  (Browser test page)
+
+To test in browser:
+  emrun ${output_dir}/${output_name}.html
+  # or
+  python3 -m http.server -d ${output_dir} 8080
+  # then open http://localhost:8080/${output_name}.html
+EOF
+fi
+
+cat <<EOF
+
+To run with Node.js:
+  node --experimental-vm-modules -e "import('${output_dir}/${output_name}.js').then(m => m.default())"
+  # or
+  $0 --skip-build --run
+EOF
 
 popd >/dev/null

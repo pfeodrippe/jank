@@ -1,6 +1,0 @@
-(ns math)
-
-(defn -main []
-  (println (+ 5 3))
-  (println (* 4 7))
-  (println (- 100 25)))
