@@ -256,32 +256,44 @@ if [[ -n "${jank_source}" ]]; then
     
     # Generate an entrypoint that calls the pre-compiled module init
     entrypoint_cpp="${output_dir}/${module_name}_entry.cpp"
-    
+
     # Munge the module name for C++ symbol generation (replace - with _)
     munged_module_name="${module_name//-/_}"
-    
-    # Detect dependencies from generated code (find all jank_load_* functions except the main one)
-    # These are dependencies that need to be loaded before the main module
-    deps_extern=""
-    deps_load=""
-    
-    # Find all jank_load_X functions in the generated code that are module loaders
-    # These are defined as "void* jank_load_X()" at the top level
-    while IFS= read -r line; do
-      if [[ "$line" =~ ^[[:space:]]*void\*[[:space:]]+jank_load_([a-zA-Z_][a-zA-Z0-9_]*)\(\)[[:space:]]*\{ ]]; then
-        dep_func="jank_load_${BASH_REMATCH[1]}"
-        # Skip the main module itself
-        if [[ "$dep_func" != "jank_load_${munged_module_name}" ]]; then
-          # Convert underscores back to dots for display
-          dep_name="${BASH_REMATCH[1]//_/.}"
-          deps_extern+="  void* ${dep_func}();\\n"
-          deps_load+="  printf(\"[jank-wasm] Loading dependency: ${dep_name}...\\\\n\");\\n"
-          deps_load+="  ${dep_func}();\\n"
+
+    # Only regenerate entrypoint if it doesn't exist or if the generated module changed
+    # (which might indicate dependencies changed)
+    need_entrypoint_regen=false
+    if [[ ! -f "${entrypoint_cpp}" ]]; then
+      need_entrypoint_regen=true
+    elif [[ "${cpp_output}" -nt "${entrypoint_cpp}" ]]; then
+      need_entrypoint_regen=true
+    fi
+
+    if [[ "${need_entrypoint_regen}" == "true" ]]; then
+      echo "[emscripten-bundle] Generating entrypoint C++ for ${module_name}..."
+
+      # Detect dependencies from generated code (find all jank_load_* functions except the main one)
+      # These are dependencies that need to be loaded before the main module
+      deps_extern=""
+      deps_load=""
+
+      # Find all jank_load_X functions in the generated code that are module loaders
+      # These are defined as "void* jank_load_X()" at the top level
+      while IFS= read -r line; do
+        if [[ "$line" =~ ^[[:space:]]*void\*[[:space:]]+jank_load_([a-zA-Z_][a-zA-Z0-9_]*)\(\)[[:space:]]*\{ ]]; then
+          dep_func="jank_load_${BASH_REMATCH[1]}"
+          # Skip the main module itself
+          if [[ "$dep_func" != "jank_load_${munged_module_name}" ]]; then
+            # Convert underscores back to dots for display
+            dep_name="${BASH_REMATCH[1]//_/.}"
+            deps_extern+="  void* ${dep_func}();\\n"
+            deps_load+="  printf(\"[jank-wasm] Loading dependency: ${dep_name}...\\\\n\");\\n"
+            deps_load+="  ${dep_func}();\\n"
+          fi
         fi
-      fi
-    done < "${cpp_output}"
-    
-    cat > "${entrypoint_cpp}" <<ENTRY_EOF
+      done < "${cpp_output}"
+
+      cat > "${entrypoint_cpp}" <<ENTRY_EOF
 // Auto-generated AOT entrypoint for ${module_name}
 // Uses pre-compiled jank code (no runtime evaluation needed!)
 #include <cstdio>
@@ -391,6 +403,9 @@ int main(int argc, char const** argv) {
   return jank_init(argc, argv, true, jank_main);
 }
 ENTRY_EOF
+    else
+      echo "[emscripten-bundle] Using cached entrypoint: ${entrypoint_cpp}"
+    fi
   else
     # Fallback: embed source and evaluate at runtime (limited functionality in WASM)
     echo "[emscripten-bundle] NOTE: jank WASM support is experimental."
@@ -551,6 +566,9 @@ em_link_cmd=(
 
 # Compile CPP files to object files first for caching
 compiled_object_files=()
+core_object_files=()  # Track core libs separately for prelinking
+user_object_files=()  # Track user code separately
+
 for cpp_file in "${compiled_objects[@]}"; do
   if [[ -f "${cpp_file}" ]]; then
     obj_file="${cpp_file%.cpp}.o"
@@ -566,19 +584,115 @@ for cpp_file in "${compiled_objects[@]}"; do
     fi
 
     compiled_object_files+=("${obj_file}")
+
+    # Categorize: core libs (clojure.core, clojure.set) vs user code
+    if [[ "${cpp_file}" == *"clojure_core_generated.cpp" ]] || \
+       [[ "${cpp_file}" == *"clojure_set_generated.cpp" ]]; then
+      core_object_files+=("${obj_file}")
+    else
+      user_object_files+=("${obj_file}")
+    fi
   fi
 done
 
-# Add compiled object files to link command
-for obj in "${compiled_object_files[@]}"; do
-  if [[ -f "${obj}" ]]; then
-    em_link_cmd+=("${obj}")
-  fi
-done
+# EXPERIMENTAL: Prelinked runtime for fast iteration
+# Combine libjank.a + libgc.a + core libs into a single prelinked object
+# This dramatically speeds up linking when only user code changes
+prelinked_runtime="${build_dir}/jank_runtime_prelinked.o"
+need_prelink=false
 
-# Add entrypoint if we have one
+if [[ "${PRELINK_RUNTIME:-1}" == "1" ]]; then
+  # Check if prelinked runtime needs to be regenerated
+  if [[ ! -f "${prelinked_runtime}" ]]; then
+    need_prelink=true
+    echo "[emscripten-bundle] Prelinked runtime doesn't exist, need to create..."
+  else
+    # Check if any dependencies are newer than prelinked runtime
+    if [[ "${libjank}" -nt "${prelinked_runtime}" ]] || \
+       [[ "${libjankzip}" -nt "${prelinked_runtime}" ]] || \
+       [[ "${libgc}" -nt "${prelinked_runtime}" ]]; then
+      need_prelink=true
+      echo "[emscripten-bundle] Static libraries changed, need to relink runtime..."
+    fi
+
+    # Check core object files
+    for core_obj in "${core_object_files[@]}"; do
+      if [[ -f "${core_obj}" && "${core_obj}" -nt "${prelinked_runtime}" ]]; then
+        need_prelink=true
+        echo "[emscripten-bundle] Core lib ${core_obj} changed, need to relink runtime..."
+        break
+      fi
+    done
+  fi
+
+  # Create or update prelinked runtime
+  if [[ "${need_prelink}" == "true" ]]; then
+    echo "[emscripten-bundle] Creating prelinked runtime (this is slow but only happens when core libs change)..."
+    echo "[emscripten-bundle] Combining: libjank.a + libjankzip.a + libgc.a + core object files..."
+
+    # Use em++ with -r flag to create a relocatable object file
+    # This combines all the core runtime components into one file
+    # Use --whole-archive to ensure all symbols from .a files are included
+    em++ -r -o "${prelinked_runtime}" \
+      -Wl,--whole-archive \
+      "${libjank}" \
+      "${libjankzip}" \
+      "${libgc}" \
+      -Wl,--no-whole-archive \
+      "${core_object_files[@]}" \
+      "${jank_include_flags[@]}" \
+      "${jank_compile_flags[@]}"
+
+    echo "[emscripten-bundle] Prelinked runtime created: ${prelinked_runtime}"
+  else
+    echo "[emscripten-bundle] Using cached prelinked runtime"
+  fi
+fi
+
+# Add inputs to link command (either prelinked runtime + user code, or all separately)
+if [[ "${PRELINK_RUNTIME:-1}" == "1" && -f "${prelinked_runtime}" ]]; then
+  # Fast path: Use prelinked runtime + user code only
+  echo "[emscripten-bundle] Using prelinked runtime for fast linking"
+  em_link_cmd=()
+  em_link_cmd=(
+    em++
+    -o "${output_dir}/${output_name}.js"
+    "${prelinked_runtime}"
+    "${jank_include_flags[@]}"
+    "${jank_compile_flags[@]}"
+  )
+
+  # Add only user object files (core libs are in prelinked runtime)
+  for obj in "${user_object_files[@]}"; do
+    if [[ -f "${obj}" ]]; then
+      em_link_cmd+=("${obj}")
+    fi
+  done
+else
+  # Slow path: Link everything separately (original behavior)
+  for obj in "${compiled_object_files[@]}"; do
+    if [[ -f "${obj}" ]]; then
+      em_link_cmd+=("${obj}")
+    fi
+  done
+fi
+
+# Compile entrypoint to .o for caching (if we have one)
+entrypoint_obj=""
 if [[ -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
-  em_link_cmd+=("${entrypoint_cpp}")
+  entrypoint_obj="${entrypoint_cpp%.cpp}.o"
+
+  # Check if we need to recompile entrypoint
+  if [[ ! -f "${entrypoint_obj}" ]] || [[ "${entrypoint_cpp}" -nt "${entrypoint_obj}" ]]; then
+    echo "[emscripten-bundle] Compiling entrypoint ${entrypoint_cpp} to ${entrypoint_obj}..."
+    em++ -c "${entrypoint_cpp}" -o "${entrypoint_obj}" \
+      "${jank_include_flags[@]}" \
+      "${jank_compile_flags[@]}"
+  else
+    echo "[emscripten-bundle] Using cached entrypoint object: ${entrypoint_obj}"
+  fi
+
+  em_link_cmd+=("${entrypoint_obj}")
   # With entrypoint, we can export main
   em_link_cmd+=(
     -sEXPORTED_FUNCTIONS=_main
@@ -611,15 +725,27 @@ em_link_cmd+=(
   -frtti
 )
 
-# Fast development mode: Use -O0 for much faster linking (no optimization)
-# Set DEBUG=1 to enable. This dramatically speeds up linking at cost of runtime performance.
-if [[ "${DEBUG:-}" == "1" ]]; then
-  echo "[emscripten-bundle] DEBUG MODE: Using -O0 for fast linking (no optimization)"
-  em_link_cmd+=(-O0)
-else
-  # Production: Use -O2 for good performance
+# Development mode (default): Use -O0 for fast linking and readable output
+# Set RELEASE=1 for production builds with optimization and minification
+if [[ "${RELEASE:-}" == "1" ]]; then
+  echo "[emscripten-bundle] RELEASE MODE: Using -O2 for optimized, minified output"
   em_link_cmd+=(-O2)
+else
+  # Development (default): Fast linking, readable output, full debugging
+  echo "[emscripten-bundle] DEV MODE: Using -O0 for fast linking (no optimization, non-minified)"
+  em_link_cmd+=(
+    -O0
+    -g3
+    --minify 0
+    -sASSERTIONS=2
+  )
 fi
+
+# ES6 module exports for browser compatibility
+# This generates proper ES module exports that work with dynamic import()
+em_link_cmd+=(
+  -sEXPORT_ES6=1
+)
 
 # Experimental: Incremental linking support (not compatible with libgc)
 # Set INCREMENTAL_LINK=1 to try Emscripten's experimental incremental linker
@@ -674,8 +800,21 @@ if [[ -f "${shell_file}" ]]; then
     -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8
     -sENVIRONMENT=web,node
     -sABORTING_MALLOC=0
+    -sEXPORT_ES6=1
     --shell-file "${shell_file}"
   )
+
+  # Add debug/optimization flags to HTML build (same as JS build)
+  if [[ "${RELEASE:-}" == "1" ]]; then
+    em_html_cmd+=(-O2)
+  else
+    em_html_cmd+=(
+      -O0
+      -g3
+      --minify 0
+      -sASSERTIONS=2
+    )
+  fi
 fi
 
 # Check if we need to relink (link caching)
@@ -699,21 +838,30 @@ else
     fi
   done
 
-  # Check entrypoint
-  if [[ "${need_relink}" == "false" && -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
-    if [[ "${entrypoint_cpp}" -nt "${output_wasm}" ]]; then
+  # Check entrypoint object file
+  if [[ "${need_relink}" == "false" && -n "${entrypoint_obj}" && -f "${entrypoint_obj}" ]]; then
+    if [[ "${entrypoint_obj}" -nt "${output_wasm}" ]]; then
       need_relink=true
-      echo "[emscripten-bundle] Entrypoint changed, need to relink..."
+      echo "[emscripten-bundle] Entrypoint object changed, need to relink..."
     fi
   fi
 
-  # Check static libraries (less likely to change, but check anyway)
-  if [[ "${need_relink}" == "false" ]]; then
+  # Check static libraries (only if not using prelinked runtime)
+  # If using prelinked runtime, these are already checked in the prelink step
+  if [[ "${need_relink}" == "false" && "${PRELINK_RUNTIME:-1}" != "1" ]]; then
     if [[ "${libjank}" -nt "${output_wasm}" ]] || \
        [[ "${libjankzip}" -nt "${output_wasm}" ]] || \
        [[ "${libgc}" -nt "${output_wasm}" ]]; then
       need_relink=true
       echo "[emscripten-bundle] Static library changed, need to relink..."
+    fi
+  fi
+
+  # Check prelinked runtime if we're using it
+  if [[ "${need_relink}" == "false" && "${PRELINK_RUNTIME:-1}" == "1" && -f "${prelinked_runtime}" ]]; then
+    if [[ "${prelinked_runtime}" -nt "${output_wasm}" ]]; then
+      need_relink=true
+      echo "[emscripten-bundle] Prelinked runtime changed, need to relink..."
     fi
   fi
 
@@ -736,38 +884,233 @@ fi
 echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.js"
 echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.wasm"
 
+# --- Generate simple HTML wrapper for browser testing ---
+html_file="${output_dir}/${output_name}.html"
+cat > "${html_file}" <<'HTML_EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jank WASM - OUTPUT_NAME_PLACEHOLDER</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 {
+            color: #4fc3f7;
+            border-bottom: 2px solid #4fc3f7;
+            padding-bottom: 10px;
+        }
+        #status {
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+            background: #2d2d2d;
+            border-left: 4px solid #4fc3f7;
+        }
+        #output {
+            background: #0d0d0d;
+            border: 1px solid #3d3d3d;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            min-height: 200px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .success { color: #4caf50; }
+        .error { color: #f44336; }
+        .info { color: #2196f3; }
+        #controls {
+            margin: 20px 0;
+        }
+        button {
+            background: #4fc3f7;
+            color: #1e1e1e;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #29b6f6;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 Jank WASM Runtime</h1>
+    <div id="status">
+        <strong>Status:</strong> <span id="status-text">Initializing...</span>
+    </div>
+
+    <div id="controls">
+        <button id="run-btn" disabled>Run Program</button>
+        <button id="clear-btn">Clear Output</button>
+    </div>
+
+    <h2>Output</h2>
+    <div id="output"></div>
+
+    <script>
+        const statusText = document.getElementById('status-text');
+        const outputDiv = document.getElementById('output');
+        const runBtn = document.getElementById('run-btn');
+        const clearBtn = document.getElementById('clear-btn');
+
+        let moduleInstance = null;
+        let hasRun = false;
+
+        // Capture console output
+        const originalLog = console.log;
+        const originalError = console.error;
+
+        function appendOutput(text, type = 'info') {
+            const line = document.createElement('div');
+            line.className = type;
+            line.textContent = text;
+            outputDiv.appendChild(line);
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        }
+
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            appendOutput(args.join(' '), 'info');
+        };
+
+        console.error = function(...args) {
+            originalError.apply(console, args);
+            appendOutput('ERROR: ' + args.join(' '), 'error');
+        };
+
+        // Load the WASM module
+        statusText.textContent = 'Loading WASM module...';
+        appendOutput('Loading Jank WASM module...', 'info');
+
+        // Import the generated JS file (which loads the WASM)
+        import('./OUTPUT_NAME_PLACEHOLDER.js')
+            .then(Module => {
+                statusText.textContent = 'Initializing module...';
+                appendOutput('Module loaded, initializing...', 'success');
+
+                // Initialize the module (Module.default for ES modules, Module for direct export)
+                const initFn = Module.default || Module;
+                return initFn({
+                    print: (text) => {
+                        originalLog(text);
+                        appendOutput(text, 'info');
+                    },
+                    printErr: (text) => {
+                        originalError(text);
+                        appendOutput('ERROR: ' + text, 'error');
+                    }
+                });
+            })
+            .then(instance => {
+                moduleInstance = instance;
+                statusText.textContent = 'Ready! Click "Run Program" to execute.';
+                appendOutput('Module initialized successfully!', 'success');
+                appendOutput('Click "Run Program" to execute the jank code.', 'info');
+                runBtn.disabled = false;
+            })
+            .catch(err => {
+                statusText.textContent = 'Error loading module';
+                appendOutput('Failed to load module: ' + err.message, 'error');
+                console.error('Module loading error:', err);
+            });
+
+        runBtn.addEventListener('click', () => {
+            if (!moduleInstance) return;
+
+            if (hasRun) {
+                appendOutput('\n--- Running again ---\n', 'info');
+            }
+
+            statusText.textContent = 'Running...';
+            runBtn.disabled = true;
+
+            try {
+                // Call the main function (if it exists and hasn't run yet)
+                if (moduleInstance._main && typeof moduleInstance._main === 'function') {
+                    appendOutput('Calling main()...', 'info');
+                    const result = moduleInstance._main();
+                    appendOutput(`Program exited with code: ${result}`, result === 0 ? 'success' : 'error');
+                } else {
+                    appendOutput('No main() function found in module', 'error');
+                }
+
+                statusText.textContent = 'Execution complete';
+                hasRun = true;
+            } catch (err) {
+                statusText.textContent = 'Execution error';
+                appendOutput('Runtime error: ' + err.message, 'error');
+                console.error('Runtime error:', err);
+            } finally {
+                runBtn.disabled = false;
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            outputDiv.innerHTML = '';
+            appendOutput('Output cleared', 'info');
+        });
+    </script>
+</body>
+</html>
+HTML_EOF
+
+# Replace placeholders with actual output name
+sed -i.bak "s/OUTPUT_NAME_PLACEHOLDER/${output_name}/g" "${html_file}"
+rm -f "${html_file}.bak"
+
+echo "[emscripten-bundle] Generated: ${html_file}"
+echo "[emscripten-bundle] → Open in browser: file://${html_file}"
+
 # --- Run step (optional) ---
 if [[ "${run_after}" == "true" ]]; then
   echo "[emscripten-bundle] Running with Node.js..."
   
-  # The generated .js file uses UMD format, which works better with CommonJS require
-  # Rename to .cjs to avoid ES module conflicts with package.json "type": "module"
-  js_as_cjs="${output_dir}/${output_name}.cjs"
-  if [[ -f "${output_dir}/${output_name}.js" ]]; then
-    cp "${output_dir}/${output_name}.js" "${js_as_cjs}"
-  fi
-  
-  # Create a simple runner script using CommonJS
-  runner_script=$(mktemp -t jank-runner.XXXXXXXXXX.cjs)
-  cat > "${runner_script}" <<EOF
-const moduleFactory = require('${js_as_cjs}');
+  # The generated .js file uses ES6 module format (EXPORT_ES6=1)
+  # Copy it to .mjs so Node.js treats it as an ES module
+  js_as_mjs="${output_dir}/${output_name}.mjs"
+  cp "${output_dir}/${output_name}.js" "${js_as_mjs}"
 
-console.log('[jank-runner] Loading WASM module...');
-moduleFactory().then(() => {
+  # Use dynamic import() which works in both CommonJS and ES modules
+  runner_code=$(cat <<EOF
+import('${js_as_mjs}').then(module => {
+  console.log('[jank-runner] Loading WASM module...');
+  const moduleFactory = module.default;
+  return moduleFactory();
+}).then(() => {
   console.log('[jank-runner] Module executed successfully');
 }).catch(e => {
   console.error('[jank-runner] Error:', e);
   process.exit(1);
 });
 EOF
+)
 
-  node_cmd=(node)
+  node_cmd=(node --input-type=module --eval "${runner_code}")
   if [[ ${#node_args[@]} -gt 0 ]]; then
-    node_cmd+=("${node_args[@]}")
+    # Insert node args before --eval
+    node_cmd=(node "${node_args[@]}" --input-type=module --eval "${runner_code}")
   fi
-  node_cmd+=("${runner_script}")
   run "${node_cmd[@]}"
-  rm -f "${runner_script}"
 fi
 
 cat <<EOF

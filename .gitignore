@@ -24,6 +24,7 @@ pom.xml.asc
 .hg/
 .clj-kondo
 .nrepl-port
+.calva
 
 # C++
 .ccls-cache
@@ -65,3 +66,4 @@ node_modules
 
 # Nix (outcome of `nix build`)
 /result
+

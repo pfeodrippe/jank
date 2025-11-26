@@ -2363,8 +2363,6 @@ namespace jank::codegen
         loc = source_manager.getSpellingLoc(loc);
         auto const file_name(source_manager.getFilename(loc));
         auto const in_main_file(source_manager.isWrittenInMainFile(loc));
-        llvm::errs() << "record " << record->getQualifiedNameAsString() << " in main? "
-                     << (in_main_file ? "yes" : "no") << " file " << file_name.str() << '\n';
         // For cpp/raw expressions, code is parsed inline and may not be considered "main file"
         // by Clang's source manager. We include records with empty filenames (inline code)
         // and those in the main file, but exclude standard library and external headers.

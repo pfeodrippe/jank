@@ -7,6 +7,7 @@
 
 # Cache
 .cache/
+.ccache
 
 # REPL history
 .jank-repl-history
