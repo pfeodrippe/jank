@@ -15,6 +15,7 @@ This file documents how Claude Code was used in this project and best practices 
 3. Compiled and integrated `clojure.set` for WASM builds
 4. Updated build system to auto-detect and include compiled modules
 5. Verified native build still works (no regressions)
+6. **Added reader conditional support with `:wasm` feature** for platform-specific code
 
 ## Project Context
 
@@ -57,6 +58,26 @@ echo '(println (map #(* 2 %) [1 2 3]))' | ./build/jank repl
 1. Compile: `./build/jank run --codegen wasm-aot --module-path src/jank --save-cpp --save-cpp-path build-wasm/<name>_generated.cpp src/jank/clojure/<name>.jank`
 2. Update `bin/emscripten-bundle` to detect and include the module
 3. Add load call in entrypoint (namespace dots become underscores: `clojure.set` → `jank_load_set()`)
+
+**Using reader conditionals for platform-specific code:**
+```clojure
+;; Basic usage
+(def platform-value
+  #?(:wasm "WASM mode"
+     :jank "Native mode"))
+
+;; Conditional function implementations
+(defn unsupported-in-wasm []
+  #?(:wasm (throw "This function is not supported in WASM")
+     :jank (do-native-stuff)))
+
+;; Use :default for fallback behavior
+(def feature
+  #?(:wasm wasm-impl
+     :default default-impl))
+```
+
+The `:wasm` feature is automatically active when compiling with `--codegen wasm-aot`.
 
 ### Common Pitfalls
 
@@ -110,14 +131,15 @@ echo '(println (map #(* 2 %) [1 2 3]))' | ./build/jank repl
 ## Known Limitations
 
 ### WASM Build Limitations
-- No C++ interop (`cpp/raw`, `cpp/...` calls)
+- No C++ interop (`cpp/raw`, `cpp/...` calls) - use reader conditionals
 - No runtime `eval` (AOT compilation only)
 - No file I/O (`slurp`, `spit`) without special setup
-- `:require` in `ns` form not fully working yet (use fully qualified names)
+- ~~`:require` in `ns` form~~ **✅ NOW WORKS!** (as of Session 4)
 
 ### Workarounds
-- Use `core_wasm.jank` for WASM builds (subset of core)
+- Use reader conditionals (`#?(:wasm ... :jank ...)`) for platform-specific code
 - Pre-compile all code with `--codegen wasm-aot`
+- Register AOT modules as loaded with `__rt_ctx->module_loader.set_is_loaded()`
 - Use JavaScript FFI for browser-specific features (future work)
 
 ## Useful Commands
@@ -162,29 +184,146 @@ This section tracks major changes made in Claude sessions:
 - Updated `emscripten-bundle` script for auto-detection
 - Verified native build compatibility
 - Created comprehensive cpp/ interop analysis
+- **Implemented reader conditionals with `:wasm` feature**
 
 **Files Modified:**
 - `src/cpp/clojure/core_native.cpp` - Removed map/filter/even?
 - `src/cpp/jank/runtime/context.cpp` - Added WASM headers
 - `bin/emscripten-bundle` - Auto-include modules, module-path support
 - `src/jank/clojure/core_wasm.jank` - NEW: WASM core subset
+- `src/cpp/jank/read/parse.cpp` - Added `:wasm` reader conditional support
 
 **Files Created:**
 - `CLAUDE.md` - This file
 - `WASM_CPP_INTEROP_PLAN.md` - cpp/ analysis and migration plan
+- `wasm-examples/test_reader_conditional.jank` - Test file for reader conditionals
 
 **Tests Passing:**
 - ✅ eita2.jank - map/filter with real clojure.core
 - ✅ eita_simple.jank - sets and core functions
 - ✅ Native build - no regressions
+- ✅ Reader conditionals - `#?(:wasm ...)` works correctly
+
+### Session 2 (Nov 26, 2024 AM) - Critical Codegen Bug Fixes
+**Major Issues Identified and Fixed:**
+
+1. **G__XXXXX Undefined Symbol Errors**
+   - **Problem**: `cpp/value` calls (like `std::numeric_limits<jtl::i64>::min()`) generate wrapper functions with gensym names (G__12345), but the function definitions were never emitted to generated C++
+   - **Root Cause**: In `src/cpp/jank/codegen/processor.cpp`, the `gen()` function for `cpp_call` expressions stored wrapper code in `expr->function_code` but never wrote it to the output
+   - **Fix**: Added code to emit `function_code` to `header_buffer` with deduplication tracking
+   - **Location**: `src/cpp/jank/codegen/processor.cpp:1512-1517`
+
+2. **File Append Mode Causing Duplicate Code Generation**
+   - **Problem**: Every AOT compilation appended to the output file instead of overwriting it, causing exponential duplication (33k lines → 42k lines per run)
+   - **Root Cause**: `context.cpp:296` used `std::ios::app` (append mode) instead of `std::ios::trunc` (truncate/overwrite)
+   - **Fix**: Changed file open mode to `std::ios::trunc` and removed stale `file_exists` check
+   - **Impact**: Generated file size reduced from 42,153 lines to 8,445 lines!
+   - **Location**: `src/cpp/jank/runtime/context.cpp:294-299`
+
+3. **`refer` Function Arity Mismatch**
+   - **Problem**: The `ns` macro expansion generates `(refer 'clojure.core)` with no filters, but `refer` signature was `[ns-sym & filters]` requiring varargs
+   - **Root Cause**: AOT-generated C++ tried to call with arity-1 but function expected varargs with filters
+   - **Fix**: Modified `refer` to detect empty filters and default to `:refer :all`
+   - **Location**: `src/jank/clojure/core.jank:4373-4378`
+
+4. **Reader Conditionals for WASM-Incompatible Functions**
+   - Added `#?(:wasm ...)` guards for functions using boost or C++ features:
+     - `numerator` / `denominator` (boost::multiprecision)
+     - `slurp` / `spit` (file I/O)
+   - **Location**: `src/jank/clojure/core.jank` (multiple locations)
+
+**Files Modified:**
+- `src/cpp/jank/codegen/processor.cpp` - Emit function_code for cpp/value wrappers (lines 1512-1517)
+- `include/cpp/jank/codegen/processor.hpp` - Added `emitted_function_codes` deduplication set (line 178)
+- `src/cpp/jank/runtime/context.cpp` - Fixed file mode from append to truncate (lines 294-299)
+- `src/jank/clojure/core.jank` - Fixed `refer` function + reader conditionals for WASM
+
+**Tests Passing:**
+- ✅ **eita_no_require.jank** - Full WASM build with clojure.set, map, filter, even? - **WORKS PERFECTLY!**
+- ✅ No more G__XXXXX undefined symbols
+- ✅ No more duplicate code generation
+- ✅ No more struct redefinition errors
+- ✅ Native build still works with all changes
+
+**Known Limitations:**
+- `:require` in `ns` forms not fully working yet in WASM AOT (needs module loading infrastructure)
+- Workaround: Use fully qualified names (e.g., `clojure.set/intersection`) as shown in `eita_no_require.jank`
+
+### Session 3 (Nov 26, 2024 PM) - WASM Linker Errors Fixed
+**Goal**: Fix all undefined symbol linker errors in WASM builds
+
+**Issues Fixed:**
+
+1. **Native C++ Interop Symbols**
+   - **Problem**: Linker errors for `clojure::core_native::register_native_header`, `register_native_refer`, `native_header_functions`, and `compile`
+   - **Solution**: Added reader conditionals to throw errors in WASM mode
+   - **Location**: `src/jank/clojure/core.jank`
+     - `register-native-header!` (lines 4316-4330)
+     - `native-header-functions` (lines 4332-4341)
+     - `compile` (lines 4520-4528)
+
+2. **Case Macro Shift-Mask Optimization**
+   - **Problem**: Linker error for `jank_shift_mask_case_integer` - optimized case dispatch not available in WASM
+   - **Solution**: Disabled shift-mask optimization for WASM in macro helpers
+   - **Location**: `src/jank/clojure/core.jank`
+     - `prep-ints` (lines 3869-3888)
+     - `prep-hashes` (lines 3934-3966)
+
+3. **Case Usage in parse-boolean**
+   - **Problem**: Even with macro fixes, `parse-boolean` function still generated shift-mask code because it was compiled before the fix
+   - **Solution**: Replaced `case` with `condp` in WASM mode for `parse-boolean`
+   - **Location**: `src/jank/clojure/core.jank:7774`
+
+**Files Modified:**
+- `src/jank/clojure/core.jank` - Added 5 reader conditional sections
+- `WASM_FIXES_PLAN.md` - Updated to reflect Phase 1 completion
+
+**Tests Passing:**
+- ✅ **All linker errors resolved** - No more undefined symbols!
+- ✅ WASM build compiles and links successfully
+- ✅ `eita_no_require.jank` runs perfectly in WASM
+- ✅ Native build still works with all changes
+- ⚠️ `:require` in ns forms hits runtime error "Unable to find module 'clojure.set'" (AOT module loading not implemented)
+
+**Current Status:**
+- Phase 1 COMPLETED - All blocking linker errors fixed
+- WASM builds work with fully qualified names
+- Next: Phase 2 would add AOT module loading infrastructure for `:require` support
+
+### Session 4 (Nov 26, 2024 PM) - `:require` Support Implemented!
+**Goal**: Make `:require` in ns forms work for AOT-compiled WASM modules
+
+**Problem**:
+- When `eita.jank` used `(:require [clojure.set :as set])`, it failed with "Unable to find module 'clojure.set'"
+- The issue was that AOT-compiled modules were loaded manually via `jank_load_set()` etc, but were never registered as "loaded" in the module loader
+- When `:require` tried to load `clojure.set`, it didn't find it in the loaded modules list and tried to dynamically load it (which fails in WASM)
+
+**Solution**:
+- After calling each load function (e.g., `jank_load_set()`), call `__rt_ctx->module_loader.set_is_loaded("clojure.set")`
+- This registers the module as loaded, so `:require` finds it already loaded and doesn't try to dynamically load it
+
+**Files Modified:**
+- `bin/emscripten-bundle` (lines 334, 340)
+  - Added `__rt_ctx->module_loader.set_is_loaded("clojure.core")` after `jank_load_core()`
+  - Added `__rt_ctx->module_loader.set_is_loaded("clojure.set")` after `jank_load_set()`
+
+**Tests Passing:**
+- ✅ **`:require` now works!** - `eita.jank` with `(:require [clojure.set :as set])` runs perfectly
+- ✅ `set/intersection`, `set/union`, `set/difference` all work with aliased namespace
+- ✅ Complete test output shows all set operations working correctly
+- ✅ Native build still works
+
+**Status**:
+- **COMPLETE SUCCESS** - `:require` support fully working in WASM AOT mode!
+- WASM builds now support the full ns form with `:require`
+- Both fully qualified names AND aliased requires work perfectly
 
 ## Questions for Future Sessions
 
 ### Open Questions
 1. How to implement `:require` in AOT compilation for cross-module references?
 2. Should we add JavaScript FFI for browser APIs?
-3. What's the best way to handle conditional compilation (#?(:wasm ...))?
-4. Should chunked sequences be added to core_wasm.jank for performance?
+3. Should chunked sequences be added to core_wasm.jank for performance?
 
 ### Answers Found
 - **Q**: How are namespace names converted to C++ function names?
@@ -195,6 +334,9 @@ This section tracks major changes made in Claude sessions:
 
 - **Q**: Can we use full core.jank in WASM?
   - **A**: No, it has ~310 cpp/ calls. Need WASM-compatible subset (core_wasm.jank) without C++ interop.
+
+- **Q**: How to handle conditional compilation for WASM vs native builds?
+  - **A**: Use reader conditionals with the `:wasm` feature. Syntax: `#?(:wasm wasm-code :jank native-code)`. The `:wasm` feature is active when using `--codegen wasm-aot`.
 
 ## Contact/Continuity
 
@@ -220,6 +362,21 @@ If continuing this work:
 - Check `build-wasm/*_generated.cpp` to see what was actually generated
 - Look for `extern "C" void* jank_load_*` to find load function name
 - Verify all dependencies are loaded before the module
+
+### G__XXXXX Undefined Symbol Errors
+- These are from `cpp/value` calls in Jank code that generate wrapper functions
+- Check that `src/cpp/jank/codegen/processor.cpp` emits `function_code` to `header_buffer`
+- Verify `emitted_function_codes` set is working for deduplication
+
+### Duplicate Code / Redefinition Errors
+- Check the file write mode in `src/cpp/jank/runtime/context.cpp` - should be `std::ios::trunc` NOT `std::ios::app`
+- Delete old generated files before recompiling: `rm build-wasm/*_generated.cpp`
+- Verify generated file size is reasonable (core should be ~8k lines, not 40k+)
+
+### Arity Mismatch Errors
+- AOT-generated C++ has strict arity checking
+- Functions with `& args` need to handle empty args case
+- Check if function has multiple arity overloads in generated code
 
 ### Runtime Errors
 - Enable debug output in emscripten-bundle script

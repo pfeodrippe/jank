@@ -175,5 +175,6 @@ namespace jank::codegen
     jtl::immutable_string expression_fn_name;
     bool generated_declaration{};
     bool generated_expression{};
+    native_set<jtl::immutable_string> emitted_function_codes;
   };
 }

@@ -16,6 +16,7 @@ skip_build=false
 run_after=false
 jank_source=""
 node_args=()
+verbose=false
 
 usage() {
   cat <<'USAGE'
@@ -36,6 +37,7 @@ Options:
   --skip-build            Skip cmake build, only run em++ linking step
   --run                   Run the generated .js file with Node.js after building
   --node-args ARGS        Extra arguments to pass to Node.js (implies --run)
+  -v, --verbose           Enable verbose output (shows compilation commands)
 
 Any arguments after -- are forwarded directly to the emcmake configure invocation.
 
@@ -94,6 +96,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --run)
       run_after=true
+      shift
+      ;;
+    -v|--verbose)
+      verbose=true
       shift
       ;;
     --node-args)
@@ -207,15 +213,23 @@ if [[ -n "${jank_source}" ]]; then
   rm -f "${cpp_output}"
   
   echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm-aot..."
-  
-  # Try to compile module with wasm-aot codegen using 'run' command
-  # The 'run' command evaluates the file and generates AOT code
-  if "${native_jank}" run \
+
+  # Build the jank command
+  jank_cmd=("${native_jank}" run \
     --codegen wasm-aot \
     --module-path src/jank \
     --save-cpp \
     --save-cpp-path "${cpp_output}" \
-    "${jank_source}" 2>&1; then
+    "${jank_source}")
+
+  if [[ "${verbose}" == "true" ]]; then
+    echo "[emscripten-bundle] Running AOT compile command:"
+    echo "[emscripten-bundle]   ${jank_cmd[@]}"
+  fi
+
+  # Try to compile module with wasm-aot codegen using 'run' command
+  # The 'run' command evaluates the file and generates AOT code
+  if "${jank_cmd[@]}" 2>&1; then
     echo "[emscripten-bundle] AOT compilation successful!"
     aot_mode=true
   else
@@ -267,7 +281,7 @@ if [[ -n "${jank_source}" ]]; then
 extern "C" {
   int jank_init(int argc, char const** argv, bool init_ctx, int (*fn)(int, char const**));
   void* jank_load_clojure_core_native();
-  void* jank_load_core_wasm();
+  void* jank_load_core();
   void* jank_load_set();
   void* jank_setup_clojure_core_for_wasm();
 
@@ -316,12 +330,14 @@ static int jank_main(int argc, char const** argv) {
 
     // Load full clojure.core from AOT-compiled jank code
     printf("[jank-wasm] Loading clojure.core (WASM-compatible subset)...\\n");
-    jank_load_core_wasm();
+    jank_load_core();
+    __rt_ctx->module_loader.set_is_loaded("clojure.core");
     printf("[jank-wasm] clojure.core loaded!\\n");
 
     // Load clojure.set if available
     printf("[jank-wasm] Loading clojure.set...\\n");
     jank_load_set();
+    __rt_ctx->module_loader.set_is_loaded("clojure.set");
     printf("[jank-wasm] clojure.set loaded!\\n");
     printf("\\n");
 

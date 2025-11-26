@@ -1509,6 +1509,13 @@ namespace jank::codegen
       auto const source{ static_cast<expr::cpp_value *>(expr->source_expr.data) };
       auto ret_tmp(runtime::munge(__rt_ctx->unique_namespaced_string("cpp_call")));
 
+      /* Emit the function code for cpp/value literals during AOT compilation */
+      if(!expr->function_code.empty() && !emitted_function_codes.contains(expr->function_code))
+      {
+        util::format_to(header_buffer, "{}\n", expr->function_code);
+        emitted_function_codes.insert(expr->function_code);
+      }
+
       native_vector<handle> arg_tmps;
       arg_tmps.reserve(expr->arg_exprs.size());
       for(auto const &arg_expr : expr->arg_exprs)

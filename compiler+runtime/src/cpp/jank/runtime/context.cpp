@@ -288,16 +288,15 @@ namespace jank::runtime
             std::filesystem::create_directories(parent_path);
           }
 
-          /* For WASM AOT, we need to add includes at the top of the file.
-           * Check if file exists - if not, we'll write the includes first. */
-          bool const file_exists = std::filesystem::exists(cpp_path.c_str());
+          /* For WASM AOT, we need to add includes at the top of the file. */
           bool const is_wasm_aot = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
 
-          std::ofstream cpp_out(cpp_path.c_str(), std::ios::app);
+          /* Use truncate mode to overwrite the file each time, not append */
+          std::ofstream cpp_out(cpp_path.c_str(), std::ios::trunc);
           if(cpp_out.is_open())
           {
-            /* Write WASM AOT includes at the start of a new file */
-            if(is_wasm_aot && !file_exists)
+            /* Write WASM AOT includes at the start of file */
+            if(is_wasm_aot)
             {
               cpp_out << "// WASM AOT generated code - requires jank runtime headers\n";
               cpp_out << "#include <jank/runtime/context.hpp>\n";
@@ -317,7 +316,9 @@ namespace jank::runtime
               cpp_out << "#include <jank/runtime/obj/symbol.hpp>\n";
               /* Include convert for type conversions (bool, int, etc.) */
               cpp_out << "#include <jank/runtime/convert/builtin.hpp>\n";
-              cpp_out << "#include <boost/multiprecision/cpp_int.hpp>\n\n";
+              cpp_out << "#include <boost/multiprecision/cpp_int.hpp>\n";
+              /* Include scope_exit for finally blocks */
+              cpp_out << "#include <jank/util/scope_exit.hpp>\n\n";
             }
 
             cpp_out << code << "\n\n";

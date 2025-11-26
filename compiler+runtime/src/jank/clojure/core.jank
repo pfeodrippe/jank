@@ -3871,17 +3871,21 @@
    then expressions. Returns a tuple of [shift mask case-map] where
    case-map is a map of int case values to [test then] tuples"
   [expr-sym default tests thens]
-  (if (fits-table? tests)
-    ; compact case ints, no shift-mask
-    [0 0 (case-map expr-sym default int int tests thens #{})]
-    (let [[shift mask] (or (maybe-min-hash (map int tests)) [0 0])]
-      (if (zero? mask)
-        ; sparse case ints, no shift-mask
-        [0 0 (case-map expr-sym default int int tests thens #{})]
-        ; compact case ints, with shift-mask
-        [shift
-         mask
-         (case-map expr-sym default #(shift-mask shift mask (int %)) int tests thens #{})]))))
+  #?(:wasm
+     ; WASM: Always use simple dispatch (no shift-mask optimization)
+     [0 0 (case-map expr-sym default int int tests thens #{})]
+     :jank
+     (if (fits-table? tests)
+       ; compact case ints, no shift-mask
+       [0 0 (case-map expr-sym default int int tests thens #{})]
+       (let [[shift mask] (or (maybe-min-hash (map int tests)) [0 0])]
+         (if (zero? mask)
+           ; sparse case ints, no shift-mask
+           [0 0 (case-map expr-sym default int int tests thens #{})]
+           ; compact case ints, with shift-mask
+           [shift
+            mask
+            (case-map expr-sym default #(shift-mask shift mask (int %)) int tests thens #{})])))))
 
 (defn- merge-hash-collisions
   "Takes a case expression, default expression, and a sequence of test constants
@@ -3932,30 +3936,34 @@
    expressions. Returns a tuple of [shift mask case-map]
    where case-map is a map of int case values to [test then] tuples."
   [expr-sym default tests thens skip-check]
-  (let [hashes (into #{} (map case-hash tests))]
-    (if (== (count tests) (count hashes))
-      (if (fits-table? hashes)
-        ; compact case ints, no shift-mask
-        [0 0
-         (case-map expr-sym default case-hash identity tests thens skip-check)]
-        (let [[shift mask] (or (maybe-min-hash hashes) [0 0])]
-          (if (zero? mask)
-            ; sparse case ints, no shift-mask
-            [0 0
-             (case-map expr-sym default case-hash identity tests thens skip-check)]
-            ; compact case ints, with shift-mask
-            [shift mask
-             (case-map expr-sym default #(shift-mask shift mask (case-hash %)) identity tests thens skip-check)])))
-      ; resolve hash collisions and try again
-      (let [[tests thens skip-check]
-            (merge-hash-collisions expr-sym default tests thens)
-            [shift mask case-map]
-            (prep-hashes expr-sym default tests thens skip-check)
-            skip-check
-            (if (zero? mask)
-              skip-check
-              (into #{} (map #(shift-mask shift mask %) skip-check)))]
-        [shift mask case-map]))))
+  #?(:wasm
+     ; WASM: Always use simple dispatch (no shift-mask optimization)
+     [0 0 (case-map expr-sym default case-hash identity tests thens skip-check)]
+     :jank
+     (let [hashes (into #{} (map case-hash tests))]
+       (if (== (count tests) (count hashes))
+         (if (fits-table? hashes)
+           ; compact case ints, no shift-mask
+           [0 0
+            (case-map expr-sym default case-hash identity tests thens skip-check)]
+           (let [[shift mask] (or (maybe-min-hash hashes) [0 0])]
+             (if (zero? mask)
+               ; sparse case ints, no shift-mask
+               [0 0
+                (case-map expr-sym default case-hash identity tests thens skip-check)]
+               ; compact case ints, with shift-mask
+               [shift mask
+                (case-map expr-sym default #(shift-mask shift mask (case-hash %)) identity tests thens skip-check)])))
+         ; resolve hash collisions and try again
+         (let [[tests thens skip-check]
+               (merge-hash-collisions expr-sym default tests thens)
+               [shift mask case-map]
+               (prep-hashes expr-sym default tests thens skip-check)
+               skip-check
+               (if (zero? mask)
+                 skip-check
+                 (into #{} (map #(shift-mask shift mask %) skip-check)))]
+           [shift mask case-map])))))
 
 (defmacro case
   "Takes an expression, and a set of clauses.
@@ -4314,19 +4322,20 @@
      :refers refers}))
 
 (defn- register-native-header! [spec]
-  (let [{:keys [alias header scope include refers]} (normalize-native-libspec spec)]
-    (cpp/clojure.core_native.register_native_header
-      *ns*
-      alias
-      header
-      scope
-      include)
-    (doseq [{:keys [local member]} refers]
-      (cpp/clojure.core_native.register_native_refer
-        *ns*
-        alias
-        local
-        member))))
+  #?(:wasm (throw "Native C++ headers are not supported in WASM")
+     :jank (let [{:keys [alias header scope include refers]} (normalize-native-libspec spec)]
+             (cpp/clojure.core_native.register_native_header
+               *ns*
+               alias
+               header
+               scope
+               include)
+             (doseq [{:keys [local member]} refers]
+               (cpp/clojure.core_native.register_native_refer
+                 *ns*
+                 alias
+                 local
+                 member)))))
 
 (defn native-header-functions
   "Returns the native function names that back a :native-header alias in the
@@ -4336,7 +4345,8 @@
   ([alias prefix]
    (throw-if (not (symbol? alias)) (str "Native alias must be a symbol: " alias))
    (throw-if (not (string? prefix)) (str "Prefix must be a string: " prefix))
-  (cpp/clojure.core_native.native_header_functions *ns* alias prefix)))
+   #?(:wasm (throw "Native C++ headers are not supported in WASM")
+      :jank (cpp/clojure.core_native.native_header_functions *ns* alias prefix))))
 
 (defn- prependss [x coll]
   (if (symbol? x)
@@ -4370,27 +4380,33 @@
    select a subset, via inclusion or exclusion, or to provide a mapping
    to a symbol different from the var's name, in order to prevent
    clashes. Use :use in the ns macro in preference to calling this directly."
-  [ns-sym & filters]
-  (let [ns (find-ns ns-sym)
-        _ (when (nil? ns)
-            (throw (ex-info :unknown-namespace {:value ns-sym})))
-        filters (apply hash-map filters)
-        rename (or (:rename filters) {})
-        exclude? (set (:exclude filters))
-        sym->var (ns-publics ns)
-        to-refer (if (= :all (get filters :refer))
-                   (keys sym->var)
-                   (or (get filters :refer) (get filters :only) (keys sym->var)))]
-    ; TODO: Loop
-    (reduce (fn [acc sym]
-              (when (not (exclude? sym))
-                (let [v (get sym->var sym)
-                      sym (rename sym sym)]
-                  (when (nil? v)
-                    (throw (ex-info :var-does-not-exist {:value sym})))
-                  (cpp/clojure.core_native.refer *ns* sym v))))
-            nil
-            to-refer)))
+  ; Arity-1 overload for AOT compilation (no filters = refer all)
+  ([ns-sym]
+   (refer ns-sym :refer :all))
+  ; Variadic overload with filters
+  ([ns-sym & filters]
+   (let [ns (find-ns ns-sym)
+         _ (when (nil? ns)
+             (throw (ex-info :unknown-namespace {:value ns-sym})))
+         ; If no filters provided, default to referring all
+         filters (if (empty? filters) [:refer :all] filters)
+         filters (apply hash-map filters)
+         rename (or (:rename filters) {})
+         exclude? (set (:exclude filters))
+         sym->var (ns-publics ns)
+         to-refer (if (= :all (get filters :refer))
+                    (keys sym->var)
+                    (or (get filters :refer) (get filters :only) (keys sym->var)))]
+     ; TODO: Loop
+     (reduce (fn [acc sym]
+               (when (not (exclude? sym))
+                 (let [v (get sym->var sym)
+                       sym (rename sym sym)]
+                   (when (nil? v)
+                     (throw (ex-info :var-does-not-exist {:value sym})))
+                   (cpp/clojure.core_native.refer *ns* sym v))))
+             nil
+             to-refer))))
 
 ;; TODO: Should be a ref instead of atom
 (defonce
@@ -4516,7 +4532,8 @@
    directory specified by *compile-path*, and that directory too must
    be in the module path."
   [path]
-  (cpp/clojure.core_native.compile path))
+  #?(:wasm (throw "JIT compilation is not supported in WASM AOT mode")
+     :jank (cpp/clojure.core_native.compile path)))
 
 (defn require
   "Loads libs, skipping any that are already loaded. Each argument is
@@ -5674,12 +5691,14 @@
 (defn numerator
   "Returns the numerator part of a Ratio."
   [r]
-  (cpp/jank.runtime.numerator r))
+  #?(:wasm (throw "numerator is not supported in WASM")
+     :jank (cpp/jank.runtime.numerator r)))
 
 (defn denominator
   "Returns the denominator part of a Ratio."
   [r]
-  (cpp/jank.runtime.denominator r))
+  #?(:wasm (throw "denominator is not supported in WASM")
+     :jank (cpp/jank.runtime.denominator r)))
 
 (defn decimal?
   "Returns true if n is a BigDecimal"
@@ -7164,25 +7183,27 @@ fails, attempts to require sym's namespace and retries."
   "Opens a reader on f and reads all its contents, returning a string.
   See clojure.java.io/reader for a complete list of supported arguments."
   ([f & opts]
-   (let [opts (normalize-slurp-opts opts)
-         fname (cpp/cast (cpp/type "char const*") f)
-         file (cpp/std.ifstream. fname)]
-     (if-not (cpp/.is_open file)
-       (throw (str f " (No such file or directory)"))
-       (let [size (cpp/std.filesystem.file_size fname)
-             out (cpp/std.string. size (cpp/char 0))]
-         (cpp/.read file (cpp/& (cpp/.front out)) size)
-         out)))))
+   #?(:wasm (throw "slurp is not supported in WASM")
+      :jank (let [opts (normalize-slurp-opts opts)
+                  fname (cpp/cast (cpp/type "char const*") f)
+                  file (cpp/std.ifstream. fname)]
+              (if-not (cpp/.is_open file)
+                (throw (str f " (No such file or directory)"))
+                (let [size (cpp/std.filesystem.file_size fname)
+                      out (cpp/std.string. size (cpp/char 0))]
+                  (cpp/.read file (cpp/& (cpp/.front out)) size)
+                  out))))))
 
 (defn spit
   "Opposite of slurp.  Opens f with writer, writes content, then
   closes f. Options passed to clojure.java.io/writer."
   [f content & options]
-  (let [file (cpp/std.ofstream.)]
-    (cpp/.open file (cpp/cast (cpp/type "char const*") f))
-    (cpp/<< file (cpp/cast (cpp/type "char const*") content))
-    (cpp/.close file)
-    nil))
+  #?(:wasm (throw "spit is not supported in WASM")
+     :jank (let [file (cpp/std.ofstream.)]
+             (cpp/.open file (cpp/cast (cpp/type "char const*") f))
+             (cpp/<< file (cpp/cast (cpp/type "char const*") content))
+             (cpp/.close file)
+             nil)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; futures (needs proxy);;;;;;;;;;;;;;;;;;
 (defn future-call
@@ -7750,10 +7771,14 @@ fails, attempts to require sym's namespace and retries."
   "Parse strings \"true\" or \"false\" and return a boolean, or nil if invalid"
   [s]
   (if (string? s)
-    (case s
-        "true" true
-        "false" false
-        nil)
+    #?(:wasm (condp = s
+               "true" true
+               "false" false
+               nil)
+       :jank (case s
+               "true" true
+               "false" false
+               nil))
     (throw (parsing-err s))))
 
 (defn NaN?
