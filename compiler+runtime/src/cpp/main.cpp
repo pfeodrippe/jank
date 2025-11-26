@@ -60,7 +60,7 @@ namespace jank
          || util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
       {
         /* Derive module name from file path (e.g., "wasm-examples/eita.jank" -> "eita") */
-        std::filesystem::path file_path{ util::cli::opts.target_file.c_str() };
+        std::filesystem::path const file_path{ util::cli::opts.target_file.c_str() };
         auto const module_name{ file_path.stem().string() };
 
         context::binding_scope const compile_scope{ obj::persistent_hash_map::create_unique(

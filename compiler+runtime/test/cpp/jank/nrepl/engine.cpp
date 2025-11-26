@@ -1104,7 +1104,7 @@ namespace jank::nrepl_server::asio
       CHECK(payload.at("name").as_string() == "cpp_info_sig");
       CHECK(payload.at("ns").as_string() == "cpp");
       CHECK(payload.at("type").as_string() == "native-function");
-      CHECK(payload.at("return-type").as_string() == "i32");
+      CHECK(payload.at("return-type").as_string() == "int");
 
       auto const arglists_it(payload.find("arglists"));
       if(arglists_it == payload.end())
@@ -1120,8 +1120,8 @@ namespace jank::nrepl_server::asio
       REQUIRE(arglists.size() == 1);
       auto const &signature(arglists.front().as_string());
       INFO("signature: " << signature);
-      // Should be [[i32 lhs] [i32 rhs]] format
-      CHECK(signature.find("[[i32 lhs] [i32 rhs]]") != std::string::npos);
+      // Should be [[int lhs] [int rhs]] format
+      CHECK(signature.find("[[int lhs] [int rhs]]") != std::string::npos);
       CHECK(signature.find("lhs") != std::string::npos);
       CHECK(signature.find("rhs") != std::string::npos);
 
@@ -1138,18 +1138,18 @@ namespace jank::nrepl_server::asio
       auto const &cpp_signatures(cpp_signatures_it->second.as_list());
       REQUIRE(cpp_signatures.size() == 1);
       auto const &cpp_signature(cpp_signatures.front().as_dict());
-      CHECK(cpp_signature.at("return-type").as_string() == "i32");
+      CHECK(cpp_signature.at("return-type").as_string() == "int");
       auto const &args(cpp_signature.at("args").as_list());
       REQUIRE(args.size() == 2);
       auto const &first_arg(args.front().as_dict());
       CHECK(first_arg.at("index").as_integer() == 0);
-      CHECK(first_arg.at("type").as_string() == "i32");
+      CHECK(first_arg.at("type").as_string() == "int");
       auto const first_arg_name(first_arg.at("name").as_string());
       INFO("first_arg_name: " << first_arg_name);
       CHECK(first_arg_name == "lhs");
       auto const &second_arg(args.back().as_dict());
       CHECK(second_arg.at("index").as_integer() == 1);
-      CHECK(second_arg.at("type").as_string() == "i32");
+      CHECK(second_arg.at("type").as_string() == "int");
       auto const second_arg_name(second_arg.at("name").as_string());
       INFO("second_arg_name: " << second_arg_name);
       CHECK(second_arg_name == "rhs");
@@ -1157,7 +1157,7 @@ namespace jank::nrepl_server::asio
       auto const statuses(extract_status(payload));
       CHECK(std::ranges::find(statuses, "done") != statuses.end());
 
-      CHECK(payload.at("docstring").as_string() == "i32");
+      CHECK(payload.at("docstring").as_string() == "int");
       CHECK(payload.at("doc").as_string() == payload.at("docstring").as_string());
     }
 

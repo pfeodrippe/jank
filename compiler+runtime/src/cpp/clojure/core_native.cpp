@@ -1001,20 +1001,20 @@ extern "C" jank_object_ref jank_setup_clojure_core_for_wasm()
   using namespace jank;
   using namespace jank::runtime;
 
-  printf("[jank_setup_clojure_core_for_wasm] Starting setup...\n");
+  std::cout << "[jank_setup_clojure_core_for_wasm] Starting setup...\n";
 
   auto const core_native_ns(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core-native")));
   if(core_native_ns.is_nil())
   {
-    printf("[jank_setup_clojure_core_for_wasm] clojure.core-native not found!\n");
+    std::cout << "[jank_setup_clojure_core_for_wasm] clojure.core-native not found!\n";
     return jank_nil.erase();
   }
 
-  printf("[jank_setup_clojure_core_for_wasm] Found clojure.core-native\n");
+  std::cout << "[jank_setup_clojure_core_for_wasm] Found clojure.core-native\n";
 
   auto const core_ns(__rt_ctx->intern_ns("clojure.core"));
 
-  printf("[jank_setup_clojure_core_for_wasm] Interned clojure.core\n");
+  std::cout << "[jank_setup_clojure_core_for_wasm] Interned clojure.core\n";
 
   /* Get all vars from clojure.core-native and refer them to clojure.core */
   auto const native_map = core_native_ns->get_mappings();
@@ -1033,7 +1033,7 @@ extern "C" jank_object_ref jank_setup_clojure_core_for_wasm()
     }
   }
 
-  printf("[jank_setup_clojure_core_for_wasm] Referred %d vars\n", count);
+  std::cout << "[jank_setup_clojure_core_for_wasm] Referred " << count << " vars\n";
 
   return jank_nil.erase();
 }

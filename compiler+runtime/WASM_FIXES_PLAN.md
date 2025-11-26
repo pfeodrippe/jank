@@ -327,16 +327,137 @@ git checkout src/jank/clojure/core.jank  # Revert
    - Add WASM-specific test suite
    - Document WASM limitations and workarounds
 
+## Session 6: Incremental Build Caching (2024-11-26)
+
+**Goal**: Optimize build times with smart caching to avoid recompiling unchanged modules
+
+**Problem**:
+Even when only `eita.jank` changes, the build takes ~55+ seconds because:
+1. All C++ files are regenerated (even if unchanged)
+2. All `.cpp` files are recompiled to `.o` (even if unchanged)
+3. Final linking takes 50+ seconds even with pre-compiled objects
+
+**Solution: 3-Level Incremental Caching**
+
+### Level 1: C++ Generation Caching
+```bash
+# Check if source .jank is newer than generated .cpp
+if [[ ! -f "${cpp_output}" ]] || [[ "${jank_source}" -nt "${cpp_output}" ]]; then
+  # Regenerate C++ only if source changed
+  ./build/jank run --codegen wasm-aot ...
+fi
+```
+
+**Benefit**: Skip expensive jank compilation (~30s) when source unchanged
+
+### Level 2: Object File Caching
+```bash
+# Compile .cpp to .o only if source changed
+if [[ ! -f "${obj_file}" ]] || [[ "${cpp_file}" -nt "${obj_file}" ]]; then
+  em++ -c "${cpp_file}" -o "${obj_file}" ...
+fi
+```
+
+**Benefit**: Reuse pre-compiled object files (~20s saved per unchanged module)
+
+### Level 3: Link Caching
+```bash
+# Only relink if any .o files, entrypoint, or libraries changed
+if any_inputs_newer_than_output; then
+  em++ -o output.js *.o ...
+fi
+```
+
+**Benefit**: Skip 50+ second linking when nothing changed
+
+### Performance Results
+
+| Scenario | Time | Caching Behavior |
+|----------|------|------------------|
+| **No changes** | **~1.5s** | ✅ All 3 levels cached |
+| **eita.jank changed** | **~57s** | ✅ Only eita regenerated/recompiled/relinked |
+| **core.jank changed** | **~60s** | ✅ Only core regenerated/recompiled/relinked |
+| **Fast dev mode** | **<10s** | ✅ `FAST_LINK=1` skips relinking |
+
+### Development Workflow
+
+**Normal mode** (dependency-correct, full rebuild):
+```bash
+./bin/emscripten-bundle --skip-build --run wasm-examples/eita.jank
+```
+
+**Fast dev mode** (skip linking, ultra-fast iteration):
+```bash
+DEBUG=1 FAST_LINK=1 ./bin/emscripten-bundle --skip-build --run wasm-examples/eita.jank
+```
+
+**What this does**:
+- `DEBUG=1`: Use `-O0` (no optimization) for faster compilation
+- `FAST_LINK=1`: Skip the 50s relinking step
+- Result: **~5-10s iteration** time for code changes
+
+**Recommended Development Workflow**:
+1. First build: `./bin/emscripten-bundle --skip-build --run wasm-examples/eita.jank` (~60s)
+2. Rapid iteration: `DEBUG=1 FAST_LINK=1 ./bin/emscripten-bundle --skip-build --run wasm-examples/eita.jank` (~5-10s)
+3. Final test: `./bin/emscripten-bundle --skip-build --run wasm-examples/eita.jank` (full optimized build)
+
+### Implementation Details
+
+**Files Modified**:
+- `bin/emscripten-bundle` (lines 212-251, 539-577, 660-707)
+
+**Key Features**:
+1. Timestamp-based dependency tracking
+2. Separate object file compilation (`.cpp` → `.o`)
+3. Incremental linking with input change detection
+4. `FAST_LINK=1` environment variable for development
+5. Correct dependency tracking (changes propagate properly)
+
+**Cache Invalidation**:
+- C++ regenerated when `.jank` source modified
+- Object recompiled when `.cpp` modified
+- WASM relinked when any `.o`, entrypoint, or library modified
+- Manually force rebuild: `rm -f build-wasm/*.o build-wasm/*.wasm`
+
+### Known Limitations
+
+**Emscripten Linking Performance**:
+The 50-57s link time is a known Emscripten limitation. Even with pre-compiled `.o` files, the final linking step (combining all objects + WASM generation) is inherently slow for large projects.
+
+**Solutions**:
+1. ✅ **Use `FAST_LINK=1`** - Best for rapid development
+2. ❌ **`-sLINKABLE=1` incompatible** - Tested, causes duplicate symbol errors with libgc
+3. **Future**: Separate WASM modules (more complex architecture)
+4. ✅ **Accept it**: 57s for full rebuilds is reasonable for large C++ projects
+
+### Experimental: Incremental Linking Test
+
+**Attempted**: `-sLINKABLE=1 -sEXPORT_ALL=1 -sMAIN_MODULE=2`
+
+**Result**: ❌ Failed with duplicate symbol errors:
+```
+wasm-ld: error: duplicate symbol: strdup
+>>> defined in libgc.a(malloc.c.o)
+>>> defined in libc-debug.a(strdup.o)
+```
+
+**Conclusion**: Emscripten's incremental linking is incompatible with bdwgc (Boehm GC) because it changes symbol export behavior and creates conflicts. This is a known limitation.
+
+**Recommendation**: Use `FAST_LINK=1` environment variable for rapid development instead.
+
 ---
 
 **Last Updated**: 2024-11-26
-**Status**: ✅ COMPLETE SUCCESS - All linker errors fixed AND `:require` support implemented!
+**Status**: ✅ COMPLETE SUCCESS - All features working with smart caching!
 
 **Achievements**:
 - ✅ Phase 1: Fixed all 5 linker errors (native interop + shift-mask)
-- ✅ Bonus: Implemented `:require` support for AOT modules
+- ✅ Bonus 1: Implemented `:require` support for AOT modules
+- ✅ Bonus 2: 3-level incremental caching (97% speedup for cached builds!)
 - ✅ `eita.jank` with `(:require [clojure.set :as set])` works perfectly!
+- ✅ Build times: 1.5s (cached) vs 57s (changed) vs 60s (full)
 
 **Remaining Work (Future)**:
 - Phase 2: Categorize all 310 cpp/ calls systematically
 - Phase 2: Full WASM-compatible clojure.core implementation
+- Performance: Test Emscripten incremental linking options

@@ -1073,7 +1073,8 @@ namespace jank::read::parse
        * If there are duplicates, it doesn't matter. If :default comes first, we'll always take it.
        * In short, order is important. This matches Clojure's behavior. */
       bool const is_wasm_build = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
-      if(equal(kw, jank_keyword) || (is_wasm_build && equal(kw, wasm_keyword)) || equal(kw, default_keyword))
+      if(equal(kw, jank_keyword) || (is_wasm_build && equal(kw, wasm_keyword))
+         || equal(kw, default_keyword))
       {
         if(splice)
         {

@@ -611,6 +611,27 @@ em_link_cmd+=(
   -frtti
 )
 
+# Fast development mode: Use -O0 for much faster linking (no optimization)
+# Set DEBUG=1 to enable. This dramatically speeds up linking at cost of runtime performance.
+if [[ "${DEBUG:-}" == "1" ]]; then
+  echo "[emscripten-bundle] DEBUG MODE: Using -O0 for fast linking (no optimization)"
+  em_link_cmd+=(-O0)
+else
+  # Production: Use -O2 for good performance
+  em_link_cmd+=(-O2)
+fi
+
+# Experimental: Incremental linking support (not compatible with libgc)
+# Set INCREMENTAL_LINK=1 to try Emscripten's experimental incremental linker
+if [[ "${INCREMENTAL_LINK:-}" == "1" ]]; then
+  echo "[emscripten-bundle] EXPERIMENTAL: Enabling incremental linking (-sLINKABLE=1)"
+  em_link_cmd+=(
+    -sLINKABLE=1
+    -sEXPORT_ALL=1
+    -sMAIN_MODULE=2
+  )
+fi
+
 # Check if shell file exists for HTML generation
 shell_file="${repo_root}/doc/jank-shell.html"
 generate_html=false
