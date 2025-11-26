@@ -208,33 +208,46 @@ if [[ -n "${jank_source}" ]]; then
   # Use C++ codegen so we can compile with emscripten
   # The native jank compiler generates C++ code that em++ can compile to WASM
   cpp_output="${output_dir}/${module_name}_generated.cpp"
-  
-  # Remove old generated file to start fresh (jank appends to file)
-  rm -f "${cpp_output}"
-  
-  echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm-aot..."
 
-  # Build the jank command
-  jank_cmd=("${native_jank}" run \
-    --codegen wasm-aot \
-    --module-path src/jank \
-    --save-cpp \
-    --save-cpp-path "${cpp_output}" \
-    "${jank_source}")
-
-  if [[ "${verbose}" == "true" ]]; then
-    echo "[emscripten-bundle] Running AOT compile command:"
-    echo "[emscripten-bundle]   ${jank_cmd[@]}"
+  # Check if we need to regenerate C++ (source newer than generated, or generated doesn't exist)
+  need_regenerate=false
+  if [[ ! -f "${cpp_output}" ]] || [[ "${jank_source}" -nt "${cpp_output}" ]]; then
+    need_regenerate=true
+    echo "[emscripten-bundle] Source changed, regenerating C++ from ${jank_source}..."
+    # Remove old generated file to start fresh (jank appends to file)
+    rm -f "${cpp_output}"
+  else
+    echo "[emscripten-bundle] Using cached C++ generation for ${jank_source}"
   fi
 
-  # Try to compile module with wasm-aot codegen using 'run' command
-  # The 'run' command evaluates the file and generates AOT code
-  if "${jank_cmd[@]}" 2>&1; then
-    echo "[emscripten-bundle] AOT compilation successful!"
-    aot_mode=true
+  if [[ "${need_regenerate}" == "true" ]]; then
+    echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm-aot..."
+
+    # Build the jank command
+    jank_cmd=("${native_jank}" run \
+      --codegen wasm-aot \
+      --module-path src/jank \
+      --save-cpp \
+      --save-cpp-path "${cpp_output}" \
+      "${jank_source}")
+
+    if [[ "${verbose}" == "true" ]]; then
+      echo "[emscripten-bundle] Running AOT compile command:"
+      echo "[emscripten-bundle]   ${jank_cmd[@]}"
+    fi
+
+    # Try to compile module with wasm-aot codegen using 'run' command
+    # The 'run' command evaluates the file and generates AOT code
+    if "${jank_cmd[@]}" 2>&1; then
+      echo "[emscripten-bundle] AOT compilation successful!"
+      aot_mode=true
+    else
+      echo "[emscripten-bundle] AOT compilation failed, falling back to runtime eval mode"
+      aot_mode=false
+    fi
   else
-    echo "[emscripten-bundle] AOT compilation failed, falling back to runtime eval mode"
-    aot_mode=false
+    # Using cached C++ generation, assume AOT mode
+    aot_mode=true
   fi
   
   if [[ "${aot_mode}" == "true" && -f "${cpp_output}" ]]; then
@@ -536,8 +549,28 @@ em_link_cmd=(
   "${jank_compile_flags[@]}"
 )
 
-# Add compiled objects if any
-for obj in "${compiled_objects[@]}"; do
+# Compile CPP files to object files first for caching
+compiled_object_files=()
+for cpp_file in "${compiled_objects[@]}"; do
+  if [[ -f "${cpp_file}" ]]; then
+    obj_file="${cpp_file%.cpp}.o"
+
+    # Check if we need to recompile (source newer than object, or object doesn't exist)
+    if [[ ! -f "${obj_file}" ]] || [[ "${cpp_file}" -nt "${obj_file}" ]]; then
+      echo "[emscripten-bundle] Compiling ${cpp_file} to ${obj_file}..."
+      em++ -c "${cpp_file}" -o "${obj_file}" \
+        "${jank_include_flags[@]}" \
+        "${jank_compile_flags[@]}"
+    else
+      echo "[emscripten-bundle] Using cached object file: ${obj_file}"
+    fi
+
+    compiled_object_files+=("${obj_file}")
+  fi
+done
+
+# Add compiled object files to link command
+for obj in "${compiled_object_files[@]}"; do
   if [[ -f "${obj}" ]]; then
     em_link_cmd+=("${obj}")
   fi
@@ -595,8 +628,8 @@ if [[ -f "${shell_file}" ]]; then
     "${jank_compile_flags[@]}"
   )
   
-  # Add compiled objects if any
-  for obj in "${compiled_objects[@]}"; do
+  # Add compiled object files (already compiled above)
+  for obj in "${compiled_object_files[@]}"; do
     if [[ -f "${obj}" ]]; then
       em_html_cmd+=("${obj}")
     fi
@@ -624,8 +657,54 @@ if [[ -f "${shell_file}" ]]; then
   )
 fi
 
-# Run the JS/WASM generation
-run "${em_link_cmd[@]}"
+# Check if we need to relink (link caching)
+need_relink=false
+output_wasm="${output_dir}/${output_name}.wasm"
+
+# Check if FAST_LINK environment variable is set for development mode
+if [[ "${FAST_LINK:-}" == "1" ]]; then
+  echo "[emscripten-bundle] FAST_LINK mode: Skipping link (using existing WASM)"
+  need_relink=false
+elif [[ ! -f "${output_wasm}" ]]; then
+  need_relink=true
+  echo "[emscripten-bundle] Output WASM doesn't exist, need to link..."
+else
+  # Check if any input files are newer than output
+  for obj in "${compiled_object_files[@]}"; do
+    if [[ -f "${obj}" && "${obj}" -nt "${output_wasm}" ]]; then
+      need_relink=true
+      echo "[emscripten-bundle] Object file ${obj} changed, need to relink..."
+      break
+    fi
+  done
+
+  # Check entrypoint
+  if [[ "${need_relink}" == "false" && -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
+    if [[ "${entrypoint_cpp}" -nt "${output_wasm}" ]]; then
+      need_relink=true
+      echo "[emscripten-bundle] Entrypoint changed, need to relink..."
+    fi
+  fi
+
+  # Check static libraries (less likely to change, but check anyway)
+  if [[ "${need_relink}" == "false" ]]; then
+    if [[ "${libjank}" -nt "${output_wasm}" ]] || \
+       [[ "${libjankzip}" -nt "${output_wasm}" ]] || \
+       [[ "${libgc}" -nt "${output_wasm}" ]]; then
+      need_relink=true
+      echo "[emscripten-bundle] Static library changed, need to relink..."
+    fi
+  fi
+
+  if [[ "${need_relink}" == "false" ]]; then
+    echo "[emscripten-bundle] Using cached link (no changes detected)"
+  fi
+fi
+
+# Run the JS/WASM generation only if needed
+if [[ "${need_relink}" == "true" ]]; then
+  run "${em_link_cmd[@]}"
+fi
 
 # Optionally generate HTML too (separate file for browser testing)
 if [[ "${generate_html}" == "true" ]]; then

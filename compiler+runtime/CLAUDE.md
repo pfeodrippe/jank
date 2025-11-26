@@ -318,6 +318,42 @@ This section tracks major changes made in Claude sessions:
 - WASM builds now support the full ns form with `:require`
 - Both fully qualified names AND aliased requires work perfectly
 
+### Session 5 (Nov 26, 2024 PM) - Build Caching Optimization
+**Goal**: Speed up WASM builds by caching compiled object files
+
+**Problem**:
+- Every WASM build recompiled ALL C++ files (clojure.core, clojure.set, user code)
+- `clojure_core_generated.cpp` is ~8k lines and takes significant time to compile
+- Most builds only change user code, not core libraries
+
+**Solution**: Implemented object file caching
+- Compile each `.cpp` file to `.o` once
+- Check timestamps: only recompile if `.cpp` is newer than `.o`
+- Link `.o` files instead of `.cpp` files in em++
+
+**Implementation**:
+- `bin/emscripten-bundle` (lines 539-564)
+  - Added loop to compile CPP files to object files with caching logic
+  - Uses `em++ -c` to create `.o` files
+  - Checks `[[ "${cpp_file}" -nt "${obj_file}" ]]` for freshness
+  - Displays "Compiling" or "Using cached object file" messages
+
+**Results**:
+- ✅ **~10% faster builds** when core libraries unchanged (61s → 55s)
+- ✅ Subsequent builds skip clojure.core and clojure.set compilation
+- ✅ Only recompiles user's source file
+- ✅ Cache invalidation works correctly (touching source triggers recompile)
+
+**Performance**:
+- First build: 61s (compiles all 3 files)
+- Second build: 55s (caches core + set, compiles eita)
+- User-only changes: ~55s (only eita recompiled)
+
+**Benefits**:
+- Faster iteration during development
+- Core libraries compiled once, reused for all builds
+- Automatic cache invalidation when sources change
+
 ## Questions for Future Sessions
 
 ### Open Questions

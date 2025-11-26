@@ -3,7 +3,7 @@
    [clojure.set :as set]))
 
 ;; Test basic set operations from clojure.set
-(def s1 #{1 2 3 4})
+(def s1 #{1 2 3 4 30})
 (def s2 #{3 4 5 6})
 (def intersection (set/intersection s1 s2))
 (def union (set/union s1 s2))
@@ -17,7 +17,7 @@
 
 ;; Test basic core functions
 (def numbers [1 2 3 (+ 44 49) 5])
-(def doubled (map #(* 2 %) numbers))
+(def doubled (map #(* 5.5 %) numbers))
 (def filtered (filter even? numbers))
 
 (println "Numbers:" numbers)
