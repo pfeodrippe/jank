@@ -1663,7 +1663,17 @@ namespace jank::analyze
     }
 
     auto const qualified_sym(__rt_ctx->qualify_symbol(sym));
-    auto const var(__rt_ctx->find_var(qualified_sym));
+    auto var(__rt_ctx->find_var(qualified_sym));
+
+    /* If the var isn't found in the current namespace and the symbol is unqualified,
+     * try to find it in clojure.core as a fallback. This is especially important for
+     * AOT/WASM mode where namespace referring doesn't happen until runtime. */
+    if(var.is_nil() && sym->ns.empty())
+    {
+      auto const core_sym(runtime::make_box<runtime::obj::symbol>("clojure.core", sym->name));
+      var = __rt_ctx->find_var(core_sym);
+    }
+
     if(var.is_nil())
     {
       return error::analyze_unresolved_symbol(
@@ -1675,7 +1685,8 @@ namespace jank::analyze
     /* Use the var's actual namespace for the qualified symbol, not the current namespace.
      * This is important for referred vars - e.g. when clojure.set uses 'reduce', we want
      * to generate code that looks up clojure.core/reduce, not clojure.set/reduce. */
-    auto const var_qualified_sym(make_box<runtime::obj::symbol>(var->n->name->name, var->name->name));
+    auto const var_qualified_sym(
+      make_box<runtime::obj::symbol>(var->n->name->name, var->name->name));
 
     /* Macros aren't lifted, since they're not used during runtime. */
     auto const macro_kw(__rt_ctx->intern_keyword("", "macro", true).expect_ok());

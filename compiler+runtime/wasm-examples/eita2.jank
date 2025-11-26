@@ -5,5 +5,5 @@
 (def doubled (map #(* 2 %) numbers))
 (def filtered (filter even? numbers))
 
-(println "Numbers:" numbers)
+(println "Numbers:" doubled)
 (println "WASM build test completed successfully!")

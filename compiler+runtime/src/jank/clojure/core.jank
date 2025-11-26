@@ -4622,7 +4622,7 @@
          ~@(map process-reference references))
        (if (= '~name '~'clojure.core)
           nil
-          (do (swap! @#'*loaded-libs* conj '~name) nil)))))
+          (do (swap! *loaded-libs* conj '~name) nil)))))
 
 (defmacro refer-clojure
   "Same as (refer 'clojure.core <filters>)"

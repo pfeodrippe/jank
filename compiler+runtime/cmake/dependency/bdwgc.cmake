@@ -15,7 +15,12 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   set(enable_cplusplus ON CACHE BOOL "Enable C++")
   set(build_cord OFF CACHE BOOL "Build cord")
   set(enable_docs OFF CACHE BOOL "Enable docs")
-  set(enable_threads ON CACHE BOOL "Enable multi-threading support")
+  if(jank_target_wasm)
+    # Disable threads for WASM - emscripten doesn't support bdwgc's threading model
+    set(enable_threads OFF CACHE BOOL "Enable multi-threading support")
+  else()
+    set(enable_threads ON CACHE BOOL "Enable multi-threading support")
+  endif()
   set(enable_large_config ON CACHE BOOL "Optimize for large heap or root set")
   if(jank_target_wasm)
     # Skip gctba for wasm to avoid C++ header issues with emscripten

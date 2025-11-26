@@ -159,6 +159,23 @@ compiled_objects=()
 entrypoint_cpp=""
 aot_mode=false  # Whether we're using true AOT compilation
 
+# Always include clojure.core if it exists
+clojure_core_cpp="${output_dir}/clojure_core_generated.cpp"
+if [[ -f "${clojure_core_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.core: ${clojure_core_cpp}"
+  compiled_objects+=("${clojure_core_cpp}")
+else
+  echo "[emscripten-bundle] WARNING: clojure.core not pre-compiled, some functions may not be available"
+  echo "[emscripten-bundle]          Run: ./build/jank run --codegen wasm-aot --save-cpp --save-cpp-path build-wasm/clojure_core_generated.cpp src/jank/clojure/core_wasm.jank"
+fi
+
+# Include clojure.set if it exists
+clojure_set_cpp="${output_dir}/clojure_set_generated.cpp"
+if [[ -f "${clojure_set_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.set: ${clojure_set_cpp}"
+  compiled_objects+=("${clojure_set_cpp}")
+fi
+
 if [[ -n "${jank_source}" ]]; then
   if [[ ! -f "${jank_source}" ]]; then
     echo "error: jank source file not found: ${jank_source}" >&2
@@ -189,12 +206,13 @@ if [[ -n "${jank_source}" ]]; then
   # Remove old generated file to start fresh (jank appends to file)
   rm -f "${cpp_output}"
   
-  echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm_aot..."
+  echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm-aot..."
   
-  # Try to compile module with wasm_aot codegen using 'run' command
+  # Try to compile module with wasm-aot codegen using 'run' command
   # The 'run' command evaluates the file and generates AOT code
   if "${native_jank}" run \
-    --codegen wasm_aot \
+    --codegen wasm-aot \
+    --module-path src/jank \
     --save-cpp \
     --save-cpp-path "${cpp_output}" \
     "${jank_source}" 2>&1; then
@@ -249,8 +267,10 @@ if [[ -n "${jank_source}" ]]; then
 extern "C" {
   int jank_init(int argc, char const** argv, bool init_ctx, int (*fn)(int, char const**));
   void* jank_load_clojure_core_native();
+  void* jank_load_core_wasm();
+  void* jank_load_set();
   void* jank_setup_clojure_core_for_wasm();
-  
+
   // Dependency module init functions
 $(echo -e "${deps_extern}")
   // Main module init function (returns void* which is an erased object_ref)
@@ -283,18 +303,28 @@ static int jank_main(int argc, char const** argv) {
   using namespace jank::runtime;
   try {
     printf("[jank-wasm] AOT mode: using pre-compiled code\\n");
-    
+
     // Load core native functions
     printf("[jank-wasm] Loading clojure.core-native...\\n");
     jank_load_clojure_core_native();
     printf("[jank-wasm] Core native loaded!\\n");
-    
+
     // Set up clojure.core namespace by referring all vars from clojure.core-native
     printf("[jank-wasm] Setting up clojure.core namespace...\\n");
     jank_setup_clojure_core_for_wasm();
     printf("[jank-wasm] clojure.core ready!\\n");
+
+    // Load full clojure.core from AOT-compiled jank code
+    printf("[jank-wasm] Loading clojure.core (WASM-compatible subset)...\\n");
+    jank_load_core_wasm();
+    printf("[jank-wasm] clojure.core loaded!\\n");
+
+    // Load clojure.set if available
+    printf("[jank-wasm] Loading clojure.set...\\n");
+    jank_load_set();
+    printf("[jank-wasm] clojure.set loaded!\\n");
     printf("\\n");
-    
+
     // Load dependencies
 $(echo -e "${deps_load}")
     // Call the pre-compiled module
@@ -305,7 +335,7 @@ $(echo -e "${deps_load}")
       return 1;
     }
     printf("[jank-wasm] Result: %p\\n", result);
-    
+
     printf("\\n[jank-wasm] Done (AOT mode)!\\n");
     return 0;
   } catch(error_ref const& e) {
@@ -594,19 +624,25 @@ echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.wasm"
 if [[ "${run_after}" == "true" ]]; then
   echo "[emscripten-bundle] Running with Node.js..."
   
-  # Create a simple runner script if using MODULARIZE
-  runner_script=$(mktemp /tmp/jank-runner-XXXXXX.mjs)
+  # The generated .js file uses UMD format, which works better with CommonJS require
+  # Rename to .cjs to avoid ES module conflicts with package.json "type": "module"
+  js_as_cjs="${output_dir}/${output_name}.cjs"
+  if [[ -f "${output_dir}/${output_name}.js" ]]; then
+    cp "${output_dir}/${output_name}.js" "${js_as_cjs}"
+  fi
+  
+  # Create a simple runner script using CommonJS
+  runner_script=$(mktemp -t jank-runner.XXXXXXXXXX.cjs)
   cat > "${runner_script}" <<EOF
-import createModule from '${output_dir}/${output_name}.js';
+const moduleFactory = require('${js_as_cjs}');
 
-try {
-  const Module = await createModule();
-  // The module should auto-run main() if it exists
-  console.log('[jank-runner] Module initialized successfully');
-} catch (e) {
+console.log('[jank-runner] Loading WASM module...');
+moduleFactory().then(() => {
+  console.log('[jank-runner] Module executed successfully');
+}).catch(e => {
   console.error('[jank-runner] Error:', e);
   process.exit(1);
-}
+});
 EOF
 
   node_cmd=(node)

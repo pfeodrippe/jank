@@ -1,7 +1,6 @@
 (ns eita
   (:require
-   [clojure.set :as set]
-   [clojure.core :as core]))
+   [clojure.set :as set]))
 
 ;; Test basic set operations from clojure.set
 (def s1 #{1 2 3 4})
@@ -18,10 +17,10 @@
 
 ;; Test basic core functions
 (def numbers [1 2 3 (+ 44 49) 5])
-(def doubled (core/map #(* 2 %) numbers))
-(def filtered (core/filter even? numbers))
+(def doubled (map #(* 2 %) numbers))
+(def filtered (filter even? numbers))
 
 (println "Numbers:" numbers)
-(println "Doubled:" (core/vec doubled))
-(println "Even numbers:" (core/vec filtered))
+(println "Doubled:" (vec doubled))
+(println "Even numbers:" (vec filtered))
 (println "WASM build test completed successfully!")

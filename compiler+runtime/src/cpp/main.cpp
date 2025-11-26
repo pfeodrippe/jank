@@ -62,7 +62,7 @@ namespace jank
         /* Derive module name from file path (e.g., "wasm-examples/eita.jank" -> "eita") */
         std::filesystem::path file_path{ util::cli::opts.target_file.c_str() };
         auto const module_name{ file_path.stem().string() };
-        
+
         context::binding_scope const compile_scope{ obj::persistent_hash_map::create_unique(
           std::make_pair(__rt_ctx->compile_files_var, jank_true),
           std::make_pair(__rt_ctx->current_module_var, make_box(module_name))) };

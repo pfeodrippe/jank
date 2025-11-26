@@ -192,7 +192,33 @@ namespace clojure::core_native
 
   object_ref in_ns(object_ref const sym)
   {
-    __rt_ctx->current_ns_var->set(__rt_ctx->intern_ns(try_object<obj::symbol>(sym))).expect_ok();
+    auto const ns(__rt_ctx->intern_ns(try_object<obj::symbol>(sym)));
+    __rt_ctx->current_ns_var->set(ns).expect_ok();
+
+    /* Automatically refer all clojure.core vars into new namespaces.
+     * This matches Clojure's behavior and is essential for AOT/WASM compilation. */
+    auto const sym_obj(try_object<obj::symbol>(sym));
+    auto const core_ns(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core")));
+
+    if(!core_ns.is_nil() && sym_obj->name != "clojure.core")
+    {
+      auto const core_map = core_ns->get_mappings();
+      auto const target_ns(expect_object<runtime::ns>(ns));
+
+      for(auto it = core_map->fresh_seq(); !it.is_nil(); it = it->next_in_place())
+      {
+        auto const entry = it->first();
+        auto const entry_sym = expect_object<obj::symbol>(runtime::first(entry));
+        auto const val = runtime::second(entry);
+
+        if(!val.is_nil() && val->type == object_type::var)
+        {
+          /* Silently skip any errors during referring - some vars might already exist */
+          (void)target_ns->refer(entry_sym, expect_object<runtime::var>(val));
+        }
+      }
+    }
+
     return jank_nil;
   }
 
@@ -976,7 +1002,7 @@ extern "C" jank_object_ref jank_setup_clojure_core_for_wasm()
   using namespace jank::runtime;
 
   printf("[jank_setup_clojure_core_for_wasm] Starting setup...\n");
-  
+
   auto const core_native_ns(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core-native")));
   if(core_native_ns.is_nil())
   {
@@ -985,11 +1011,11 @@ extern "C" jank_object_ref jank_setup_clojure_core_for_wasm()
   }
 
   printf("[jank_setup_clojure_core_for_wasm] Found clojure.core-native\n");
-  
+
   auto const core_ns(__rt_ctx->intern_ns("clojure.core"));
-  
+
   printf("[jank_setup_clojure_core_for_wasm] Interned clojure.core\n");
-  
+
   /* Get all vars from clojure.core-native and refer them to clojure.core */
   auto const native_map = core_native_ns->get_mappings();
   int count = 0;
@@ -998,7 +1024,7 @@ extern "C" jank_object_ref jank_setup_clojure_core_for_wasm()
     auto const entry = it->first();
     auto const sym = expect_object<obj::symbol>(runtime::first(entry));
     auto const val = runtime::second(entry);
-    
+
     /* Only refer vars, not other types of entries */
     if(!val.is_nil() && val->type == object_type::var)
     {
@@ -1006,8 +1032,8 @@ extern "C" jank_object_ref jank_setup_clojure_core_for_wasm()
       count++;
     }
   }
-  
+
   printf("[jank_setup_clojure_core_for_wasm] Referred %d vars\n", count);
-  
+
   return jank_nil.erase();
 }

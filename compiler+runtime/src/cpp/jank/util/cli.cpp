@@ -54,6 +54,18 @@ namespace jank::util::cli
     cli.add_option("--codegen", opts.codegen, "The type of code generation to use.")
       ->transform(CLI::CheckedTransformer(codegen_types).description("{llvm-ir,cpp,wasm-aot}"))
       ->default_str(make_default(codegen_type_str(opts.codegen)));
+    cli.add_flag("--save-cpp",
+                 opts.save_cpp,
+                 "Save generated C++ code to a file (useful for AOT/WASM compilation).");
+    cli.add_option("--save-cpp-path",
+                   opts.save_cpp_path,
+                   "Path to save generated C++ code (requires --save-cpp or --codegen wasm-aot).");
+    cli.add_flag("--save-llvm-ir",
+                 opts.save_llvm_ir,
+                 "Save generated LLVM IR to a file (useful for WASM/cross-compilation).");
+    cli.add_option("--save-llvm-ir-path",
+                   opts.save_llvm_ir_path,
+                   "Path to save generated LLVM IR code.");
 
     /* Native dependencies. */
     cli.add_option("-I,--include-dir",

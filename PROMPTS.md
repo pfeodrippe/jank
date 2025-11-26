@@ -29,3 +29,19 @@ Also now, run the real eita2.jank, we have a `refer` inside clojure/core.jank, s
 ## Prompt 4 (November 25, 2025)
 
 No, don't modify core_native to add refer!! The WASM should use the clojure/core.jank one!! Check how the native one is using and replicate so we can use it from the WASM side!!
+
+----
+
+## Prompt 5 (November 25, 2025)
+
+Ok, merge the branch from https://github.com/jank-lang/jank/pull/598 so we can have C++ codegen working!!
+
+----
+
+## Prompt 6 (November 25, 2025)
+
+Ok, fix this error!! 
+
+But don't worry, these errors happen in the PR build \o So leave them! Also don't forget to update PROMPTS and AGENTS_CONTEXT
+
+Also, see if you can now use the c++ code gen for wasm!! It should be working

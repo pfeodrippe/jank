@@ -133,3 +133,38 @@ Added to `c_api_wasm.cpp`:
 - `jank_function_set_arity0` through `jank_function_set_arity10`
 - `jank_set_meta`
 
+
+## November 25, 2025 Update - Merged PR #598
+
+### What Was Merged
+Successfully merged C++ codegen improvements from https://github.com/jank-lang/jank/pull/598
+
+### Key Changes from PR #598
+- **Fixed void return handling in codegen** - Properly handles void-returning C++ functions
+- **Improved type handling with cpp_util** - Uses `Cpp::IsVoid()` and `cpp_util::get_qualified_type_name()`
+- **Added better error handling in JIT evaluation** - JIT processor throws on C++ eval failures
+- **Fixed let binding codegen for arrays** - Handles C++ array types properly in let bindings
+- **Added JANK_PRINT_IR environment variable** - Set to "1" to print generated C++ during codegen
+
+### Merge Conflicts Resolved
+1. **CMakeLists.txt** - Combined WASM support (`jank_target_wasm`) with debug GC (`jank_debug_gc`)
+2. **bdwgc.cmake** - Combined WASM gctba skip with debug GC assertions
+3. **builtin.hpp** - Kept `t.erase()` version for `from_object`
+4. **processor.cpp** - Accepted PR version with improved void/type handling
+5. **evaluate.cpp** - Accepted PR version with `JANK_PRINT_IR`
+6. **jit/processor.cpp** - Kept our branch's detailed error handling for `load_dynamic_library`
+7. **cli.cpp** - Added `wasm-aot` to codegen types alongside PR's naming
+
+### Codegen Options After Merge
+```
+--codegen ENUM:{llvm-ir,cpp,wasm-aot} [default: cpp]
+```
+- `llvm-ir` - Generates LLVM IR (original path)
+- `cpp` - Generates C++ (fixed in PR #598)
+- `wasm-aot` - Generates standalone C++ for WASM AOT compilation
+
+### Build Notes After Merge
+- jank binary compiles successfully
+- Core library compilation has a runtime error (unrelated to merge)
+- Error: `invalid object type: unknown raw value 96`
+- This appears to be a pre-existing issue in the nrepl branch

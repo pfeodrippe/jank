@@ -340,22 +340,24 @@ extern "C"
     return make_box<obj::jit_function>(arity_flags).erase();
   }
 
-  void jank_function_set_arity0(jank_object_ref const fn, jank_object_ref (*const f)(jank_object_ref))
+  void
+  jank_function_set_arity0(jank_object_ref const fn, jank_object_ref (* const f)(jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_0 = reinterpret_cast<function_arity<0>>(f);
   }
 
   void jank_function_set_arity1(jank_object_ref const fn,
-                                jank_object_ref (*const f)(jank_object_ref, jank_object_ref))
+                                jank_object_ref (* const f)(jank_object_ref, jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_1 = reinterpret_cast<function_arity<1>>(f);
   }
 
-  void jank_function_set_arity2(
-    jank_object_ref const fn,
-    jank_object_ref (*const f)(jank_object_ref, jank_object_ref, jank_object_ref))
+  void jank_function_set_arity2(jank_object_ref const fn,
+                                jank_object_ref (* const f)(jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_2 = reinterpret_cast<function_arity<2>>(f);
@@ -363,96 +365,79 @@ extern "C"
 
   void jank_function_set_arity3(
     jank_object_ref const fn,
-    jank_object_ref (*const f)(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref))
+    jank_object_ref (* const f)(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_3 = reinterpret_cast<function_arity<3>>(f);
   }
 
   void jank_function_set_arity4(jank_object_ref const fn,
-                                jank_object_ref (*const f)(jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref))
+                                jank_object_ref (* const f)(jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_4 = reinterpret_cast<function_arity<4>>(f);
   }
 
   void jank_function_set_arity5(jank_object_ref const fn,
-                                jank_object_ref (*const f)(jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref))
+                                jank_object_ref (* const f)(jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_5 = reinterpret_cast<function_arity<5>>(f);
   }
 
   void jank_function_set_arity6(jank_object_ref const fn,
-                                jank_object_ref (*const f)(jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref))
+                                jank_object_ref (* const f)(jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_6 = reinterpret_cast<function_arity<6>>(f);
   }
 
   void jank_function_set_arity7(jank_object_ref const fn,
-                                jank_object_ref (*const f)(jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref))
+                                jank_object_ref (* const f)(jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_7 = reinterpret_cast<function_arity<7>>(f);
   }
 
   void jank_function_set_arity8(jank_object_ref const fn,
-                                jank_object_ref (*const f)(jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref))
+                                jank_object_ref (* const f)(jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref,
+                                                            jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_8 = reinterpret_cast<function_arity<8>>(f);
   }
 
   void jank_function_set_arity9(jank_object_ref const fn,
-                                jank_object_ref (*const f)(jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref,
-                                                           jank_object_ref))
-  {
-    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
-    fn_obj->arity_9 = reinterpret_cast<function_arity<9>>(f);
-  }
-
-  void jank_function_set_arity10(jank_object_ref const fn,
-                                 jank_object_ref (*const f)(jank_object_ref,
-                                                            jank_object_ref,
+                                jank_object_ref (* const f)(jank_object_ref,
                                                             jank_object_ref,
                                                             jank_object_ref,
                                                             jank_object_ref,
@@ -462,6 +447,23 @@ extern "C"
                                                             jank_object_ref,
                                                             jank_object_ref,
                                                             jank_object_ref))
+  {
+    auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
+    fn_obj->arity_9 = reinterpret_cast<function_arity<9>>(f);
+  }
+
+  void jank_function_set_arity10(jank_object_ref const fn,
+                                 jank_object_ref (* const f)(jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref,
+                                                             jank_object_ref))
   {
     auto const fn_obj(try_object<obj::jit_function>(reinterpret_cast<object *>(fn)));
     fn_obj->arity_10 = reinterpret_cast<function_arity<10>>(f);
@@ -526,7 +528,8 @@ extern "C"
 
   void jank_throw(jank_object_ref const o)
   {
-    util::println("jank_throw called with object: {}", runtime::to_code_string(reinterpret_cast<object *>(o)));
+    util::println("jank_throw called with object: {}",
+                  runtime::to_code_string(reinterpret_cast<object *>(o)));
     throw runtime::object_ref{ reinterpret_cast<object *>(o) };
   }
 

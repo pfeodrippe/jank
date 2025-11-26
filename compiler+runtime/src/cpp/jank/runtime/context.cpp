@@ -225,7 +225,7 @@ namespace jank::runtime
         codegen::llvm_processor const cg_prc{ fn, module, codegen::compilation_target::module };
         cg_prc.gen().expect_ok();
         cg_prc.optimize();
-        
+
         /* Save LLVM IR to a file if requested */
         if(util::cli::opts.save_llvm_ir || !util::cli::opts.save_llvm_ir_path.empty())
         {
@@ -243,7 +243,7 @@ namespace jank::runtime
           {
             std::filesystem::create_directories(parent_path);
           }
-          
+
           std::error_code ec;
           llvm::raw_fd_ostream ll_out(ll_path.c_str(), ec, llvm::sys::fs::OF_Text);
           if(!ec)
@@ -253,10 +253,11 @@ namespace jank::runtime
           }
           else
           {
-            std::cerr << "[jank] Failed to save LLVM IR to: " << ll_path << ": " << ec.message() << "\n";
+            std::cerr << "[jank] Failed to save LLVM IR to: " << ll_path << ": " << ec.message()
+                      << "\n";
           }
         }
-        
+
         write_module(cg_prc.get_module_name(), cg_prc.get_module().getModuleUnlocked()).expect_ok();
       }
       else
@@ -286,12 +287,12 @@ namespace jank::runtime
           {
             std::filesystem::create_directories(parent_path);
           }
-          
+
           /* For WASM AOT, we need to add includes at the top of the file.
            * Check if file exists - if not, we'll write the includes first. */
           bool const file_exists = std::filesystem::exists(cpp_path.c_str());
           bool const is_wasm_aot = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
-          
+
           std::ofstream cpp_out(cpp_path.c_str(), std::ios::app);
           if(cpp_out.is_open())
           {
@@ -305,13 +306,20 @@ namespace jank::runtime
               cpp_out << "#include <jank/runtime/obj/persistent_hash_set.hpp>\n";
               cpp_out << "#include <jank/runtime/obj/persistent_array_map.hpp>\n";
               cpp_out << "#include <jank/runtime/obj/persistent_hash_map.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_sorted_map.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_sorted_set.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_vector.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/range.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/integer_range.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/ratio.hpp>\n";
               /* Include keyword and symbol for static_cast conversions in vectors */
               cpp_out << "#include <jank/runtime/obj/keyword.hpp>\n";
               cpp_out << "#include <jank/runtime/obj/symbol.hpp>\n";
               /* Include convert for type conversions (bool, int, etc.) */
-              cpp_out << "#include <jank/runtime/convert/builtin.hpp>\n\n";
+              cpp_out << "#include <jank/runtime/convert/builtin.hpp>\n";
+              cpp_out << "#include <boost/multiprecision/cpp_int.hpp>\n\n";
             }
-            
+
             cpp_out << code << "\n\n";
             cpp_out.close();
             std::cerr << "[jank] Saved generated C++ to: " << cpp_path << "\n";
@@ -688,10 +696,14 @@ namespace jank::runtime
 
     auto locked_namespaces(namespaces.wlock());
     obj::symbol const ns_sym{ qualified_sym->ns };
-    auto const found_ns(locked_namespaces->find(&ns_sym));
+    auto found_ns(locked_namespaces->find(&ns_sym));
     if(found_ns == locked_namespaces->end())
     {
-      return err(util::format("Can't intern var. Namespace doesn't exist: {}", qualified_sym->ns));
+      /* Auto-create namespace if it doesn't exist - needed for AOT/WASM mode
+       * where vars may be interned in constructors before in-ns is called */
+      auto const ns_sym_boxed(make_box<obj::symbol>(qualified_sym->ns));
+      auto const result(locked_namespaces->emplace(ns_sym_boxed, make_box<ns>(ns_sym_boxed)));
+      found_ns = result.first;
     }
 
     return ok(found_ns->second->intern_var(qualified_sym));

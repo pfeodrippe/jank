@@ -2262,12 +2262,15 @@ namespace jank::codegen
       util::format_to(footer_buffer, "}");
     }
 
-    if(target == compilation_target::module)
+    if(target == compilation_target::module || target == compilation_target::wasm_aot)
     {
       util::format_to(footer_buffer,
                       "extern \"C\" void* {}(){",
                       runtime::module::module_to_load_function(module));
-      util::format_to(footer_buffer, "jank_ns_intern_c(\"{}\");", module);
+      if(target == compilation_target::module)
+      {
+        util::format_to(footer_buffer, "jank_ns_intern_c(\"{}\");", module);
+      }
       util::format_to(footer_buffer,
                       "return {}::{}{ }.call().erase();",
                       runtime::module::module_to_native_ns(module),
