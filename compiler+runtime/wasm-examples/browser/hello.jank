@@ -1,0 +1,23 @@
+;; Hello World for the browser!
+;; This demonstrates jank running in WebAssembly
+
+(println "Hello from jank in the browser!")
+
+;; Basic arithmetic
+(def answer (* 6 7))
+(println "The answer to life, the universe, and everything:" answer)
+
+;; A simple function
+(defn greet [name]
+  (str "Hello, " name "!"))
+
+(println (greet "WebAssembly"))
+
+;; Working with collections
+(def numbers [1 2 3 4 5])
+(def doubled (map #(* 2 %) numbers))
+(println "Numbers:" numbers)
+(println "Doubled:" (vec doubled))
+
+;; Return a final value
+"jank WASM demo complete!"

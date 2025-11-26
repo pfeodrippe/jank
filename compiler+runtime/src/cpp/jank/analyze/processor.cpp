@@ -1714,7 +1714,7 @@ namespace jank::analyze
 
     native_vector<runtime::obj::symbol_ref> param_symbols;
     param_symbols.reserve(params->data.size());
-    std::set<runtime::obj::symbol> unique_param_symbols;
+    native_set<runtime::obj::symbol> unique_param_symbols;
 
     bool is_variadic{};
     for(auto it(params->data.begin()); it != params->data.end(); ++it)
@@ -2341,7 +2341,7 @@ namespace jank::analyze
 
     /* All bindings in a letfn appear simultaneously and may be mutually recursive.
      * This makes creating a letfn locals frame a bit more involved than let, where locals
-     * are introduced left-to-right. For example, each binding in (letfn [(a [] b) (b [] a)]) 
+     * are introduced left-to-right. For example, each binding in (letfn [(a [] b) (b [] a)])
      * requires the other to be in scope in order to be analyzed.
      *
      * We tackle this in two steps. First, we create empty local bindings for all names.
@@ -2390,7 +2390,7 @@ namespace jank::analyze
 
       /* Populate the local frame we prepared for sym in the previous loop with its binding. */
       auto it(ret->pairs.emplace_back(sym, fexpr));
-      auto local(ret->frame->locals.find(sym)->second);
+      auto &local(ret->frame->locals.find(sym)->second);
       local.value_expr = some(it.second);
       local.needs_box = it.second->needs_box;
     }
@@ -2966,27 +2966,12 @@ namespace jank::analyze
     /* TODO: Detect literal and act accordingly. */
     return visit_map_like(
       [&](auto const typed_o) -> processor::expression_result {
-        using T = typename decltype(typed_o)::value_type;
-
         native_vector<std::pair<expression_ref, expression_ref>> exprs;
         exprs.reserve(typed_o->data.size());
 
         for(auto const &kv : typed_o->data)
         {
-          /* The two maps (hash and sorted) have slightly different iterators, so we need to
-           * pull out the entries differently. */
-          object_ref first{}, second{};
-          if constexpr(std::same_as<T, obj::persistent_sorted_map>)
-          {
-            auto const &entry(kv.get());
-            first = entry.first;
-            second = entry.second;
-          }
-          else
-          {
-            first = kv.first;
-            second = kv.second;
-          }
+          object_ref const first{ kv.first }, second{ kv.second };
 
           auto k_expr(analyze(first, current_frame, expression_position::value, fn_ctx, true));
           if(k_expr.is_err())
@@ -3442,17 +3427,9 @@ namespace jank::analyze
     if(Cpp::IsVariable(scope))
     {
       vk = expr::cpp_value::value_kind::variable;
-      /* TODO: A Clang bug prevents us from supporting references to static members.
-       * https://github.com/llvm/llvm-project/issues/146956
-       */
-      if(!Cpp::IsStaticDatamember(scope) && !Cpp::IsPointerType(type))
+      if(!Cpp::IsPointerType(type))
       {
-        /* TODO: Error if it's static and non-primitive. */
         type = Cpp::GetLValueReferenceType(type);
-      }
-      if(Cpp::IsArrayType(Cpp::GetNonReferenceType(type)))
-      {
-        type = Cpp::GetPointerType(Cpp::GetArrayElementType(Cpp::GetNonReferenceType(type)));
       }
     }
     else if(Cpp::IsEnumConstant(scope))
@@ -3679,7 +3656,7 @@ namespace jank::analyze
     for(usize i{}; i < arg_count; ++i, it = it.rest())
     {
       auto arg_expr{
-        analyze(it.first().unwrap(), current_frame, expression_position::value, fn_ctx, needs_box)
+        analyze(it.first().unwrap(), current_frame, expression_position::value, fn_ctx, true)
       };
       if(arg_expr.is_err())
       {
@@ -4469,8 +4446,18 @@ namespace jank::analyze
           ->add_usage(read::parse::reparse_nth(l, 0));
       }
 
+      if(Cpp::IsStaticDatamember(member_scope))
+      {
+        return error::analyze_known_issue(
+                 "A blocking Clang bug prevents access to static members in some scenarios. See "
+                 "https://github.com/llvm/llvm-project/issues/146956 for details.",
+                 object_source(member),
+                 latest_expansion(macro_expansions))
+          ->add_usage(read::parse::reparse_nth(l, 0));
+      }
+
       val->val_kind = expr::cpp_value::value_kind::variable;
-      val->type = Cpp::GetTypeFromScope(member_scope);
+      val->type = Cpp::GetLValueReferenceType(Cpp::GetTypeFromScope(member_scope));
       val->scope = member_scope;
       return val;
     }

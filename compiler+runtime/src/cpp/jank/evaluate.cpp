@@ -1,19 +1,12 @@
-#ifndef JANK_TARGET_EMSCRIPTEN
-  #include <Interpreter/Compatibility.h>
-  #include <Interpreter/CppInterOpInterpreter.h>
-  #include <clang/Interpreter/CppInterOp.h>
-  #include <llvm/ExecutionEngine/Orc/LLJIT.h>
-#endif
-
-#include <fstream>
-#include <filesystem>
+#include <Interpreter/Compatibility.h>
+#include <Interpreter/CppInterOpInterpreter.h>
+#include <clang/Interpreter/CppInterOp.h>
+#include <llvm/ExecutionEngine/Orc/LLJIT.h>
 
 #include <jank/runtime/context.hpp>
-#include <jank/util/cli.hpp>
 #include <jank/runtime/ns.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core.hpp>
-#include <jank/runtime/core/to_string.hpp>
 #include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/behavior/callable.hpp>
 #include <jank/codegen/llvm_processor.hpp>
@@ -587,38 +580,13 @@ namespace jank::evaluate
 
   object_ref eval(expr::function_ref const expr)
   {
-#ifdef JANK_TARGET_EMSCRIPTEN
-    throw make_box("unsupported eval: function (emscripten)").erase();
-#else
     auto const &module(
       module::nest_module(expect_object<ns>(__rt_ctx->current_ns_var->deref())->to_string(),
                           munge(expr->unique_name)));
 
     if(util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
     {
-      auto const wrapped_expr(wrap_expression(expr, "repl_fn", {}));
-
-      codegen::llvm_processor const cg_prc{ wrapped_expr,
-                                            module,
-                                            codegen::compilation_target::eval };
-      cg_prc.gen().expect_ok();
-      cg_prc.optimize();
-
-      __rt_ctx->jit_prc.load_ir_module(jtl::move(cg_prc.get_module()));
-
-      auto const fn(
-        __rt_ctx->jit_prc.find_symbol(util::format("{}_0", munge(cg_prc.get_root_fn_name())))
-          .expect_ok());
-      return reinterpret_cast<object *(*)()>(fn)();
-    }
-    else if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
-    {
-      /* WASM AOT mode: For per-function evaluation, we use LLVM IR codegen 
-       * (which is more robust) for JIT on the host. The final module compilation
-       * will use C++ codegen with wasm_aot target.
-       *
-       * Using LLVM IR for eval avoids edge cases in C++ codegen that can cause
-       * JIT failures during clojure.core loading. */
+      /* TODO: Remove extra wrapper, if possible. Just create function object directly? */
       auto const wrapped_expr(wrap_expression(expr, "repl_fn", {}));
 
       codegen::llvm_processor const cg_prc{ wrapped_expr,
@@ -636,41 +604,29 @@ namespace jank::evaluate
     }
     else
     {
-      runtime::scoped_stderr_redirect const stderr_redirect{};
-
       codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
-      auto const formatted_code{ util::format_cpp_source(cg_prc.declaration_str()).expect_ok() };
-      util::println("{}\n", formatted_code);
 
-      /* Save generated C++ to a file if --save-cpp is set */
-      if(util::cli::opts.save_cpp || !util::cli::opts.save_cpp_path.empty())
+      /* TODO: Rename to something generic which makes sense for IR and C++ gen? */
+      jtl::immutable_string_view const print_settings{ getenv("JANK_PRINT_IR") ?: "" };
+      if(print_settings == "1")
       {
-        auto const &cpp_path = util::cli::opts.save_cpp_path;
-        if(!cpp_path.empty())
-        {
-          std::ofstream cpp_out(cpp_path, std::ios::app);
-          if(cpp_out.is_open())
-          {
-            cpp_out << formatted_code << "\n\n";
-            cpp_out.close();
-          }
-        }
+        util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
       }
 
       __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
-      auto const expr_str{ cg_prc.expression_str(true) + ".erase()" };
+      auto const expr_str{ cg_prc.expression_str() + ".erase()" };
       clang::Value v;
       auto res(
         __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
       if(res)
       {
+        /* TODO: Helper to turn an llvm::Error into a string. */
         jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
         llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
         throw error::internal_codegen_failure(msg);
       }
       return try_object<obj::jit_function>(v.convertTo<runtime::object *>());
     }
-#endif
   }
 
   object_ref eval(expr::recur_ref const)
@@ -767,7 +723,8 @@ namespace jank::evaluate
 
   object_ref eval(expr::cpp_raw_ref const expr)
   {
-    return dynamic_call(eval(wrap_expression(expr, "cpp_raw", {})));
+    __rt_ctx->jit_prc.eval_string(expr->code);
+    return runtime::jank_nil;
   }
 
   object_ref eval(expr::cpp_type_ref const)
@@ -779,18 +736,6 @@ namespace jank::evaluate
   {
     /* TODO: How do we get source info here? Or can we detect this earlier? */
     cpp_util::ensure_convertible(expr).expect_ok();
-    auto const expr_type{ cpp_util::expression_type(expr) };
-    if(!cpp_util::is_untyped_object(expr_type) && !cpp_util::is_trait_convertible(expr_type))
-    {
-      auto const form(expr->form);
-      auto const sym_str = runtime::is_nil(form) ? jtl::immutable_string{ "<native symbol>" }
-                                                 : runtime::to_code_string(form);
-      throw std::runtime_error(util::format(
-        "Unable to treat '{}' as a value because '{}' cannot be boxed into a jank object. "
-        "Require the header with :refer to create a callable var or wrap the usage with cpp/raw.",
-        sym_str,
-        Cpp::GetTypeAsString(expr_type)));
-    }
     return dynamic_call(eval(wrap_expression(expr, "cpp_value", {})));
   }
 

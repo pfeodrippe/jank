@@ -52,6 +52,7 @@ option(jank_analyze "Enable static analysis" OFF)
 option(jank_test "Enable jank's test suite" OFF)
 option(jank_unity_build "Optimize translation unit compilation for the number of cores" OFF)
 option(jank_target_wasm "Experimental wasm32-unknown-emscripten build" OFF)
+option(jank_debug_gc "Enable GC debug assertions" OFF)
 set(jank_sanitize "none" CACHE STRING "The type of Clang sanitization to use (or none)")
 set(jank_resource_dir
   "../lib/jank/${CMAKE_PROJECT_VERSION}"

@@ -39,18 +39,6 @@ namespace jank::util::cli
     cli.add_flag("--direct-call",
                  opts.direct_call,
                  "Elides the dereferencing of vars for improved performance.");
-    cli.add_flag("--save-cpp",
-                 opts.save_cpp,
-                 "Save generated C++ code to a file (useful for AOT/WASM compilation).");
-    cli.add_option("--save-cpp-path",
-                   opts.save_cpp_path,
-                   "Path to save generated C++ code (requires --save-cpp or --codegen cpp).");
-    cli.add_flag("--save-llvm-ir",
-                 opts.save_llvm_ir,
-                 "Save generated LLVM IR to a file (useful for WASM/cross-compilation).");
-    cli.add_option("--save-llvm-ir-path",
-                   opts.save_llvm_ir_path,
-                   "Path to save generated LLVM IR code.");
     cli
       .add_option("-O,--optimization",
                   opts.optimization_level,
@@ -59,13 +47,13 @@ namespace jank::util::cli
       ->check(CLI::Range(0, 3));
 
     std::map<std::string, codegen_type> const codegen_types{
-      {  "llvm_ir",  codegen_type::llvm_ir },
+      {  "llvm-ir",  codegen_type::llvm_ir },
       {      "cpp",      codegen_type::cpp },
-      { "wasm_aot", codegen_type::wasm_aot }
+      { "wasm-aot", codegen_type::wasm_aot }
     };
     cli.add_option("--codegen", opts.codegen, "The type of code generation to use.")
-      ->transform(CLI::CheckedTransformer(codegen_types).description("{llvm_ir,cpp,wasm_aot}"))
-      ->default_str(make_default("llvm_ir"));
+      ->transform(CLI::CheckedTransformer(codegen_types).description("{llvm-ir,cpp,wasm-aot}"))
+      ->default_str(make_default(codegen_type_str(opts.codegen)));
 
     /* Native dependencies. */
     cli.add_option("-I,--include-dir",
@@ -134,10 +122,6 @@ namespace jank::util::cli
       ->default_str(make_default(opts.target_runtime));
     cli_compile.add_option("-o", opts.output_filename, "Output executable name.")
       ->default_str(make_default(opts.output_filename));
-    cli_compile.add_flag(
-      "--shared",
-      opts.output_shared_library,
-      "Emit a dynamic library instead of an executable (exports jank_entrypoint).");
     cli_compile.add_option("module", opts.target_module, "The entrypoint module.")->required();
 
     /* Health check subcommand. */

@@ -4,11 +4,8 @@
 #include <clang/Frontend/FrontendDiagnostic.h>
 #include <Interpreter/Compatibility.h>
 #include <clang/Interpreter/CppInterOp.h>
-#include <filesystem>
-#include <optional>
 #include <llvm/ExecutionEngine/Orc/Core.h>
 #include <llvm/IR/Verifier.h>
-#include <llvm/Support/Error.h>
 #include <llvm/Support/Signals.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/Debugging/PerfSupportPlugin.h>
@@ -16,37 +13,21 @@
 #include <llvm/ExecutionEngine/Orc/TargetProcess/JITLoaderPerf.h>
 #include <llvm/ExecutionEngine/JITEventListener.h>
 #include <llvm/IRReader/IRReader.h>
-#include <llvm/Object/Archive.h>
-#include <llvm/Object/MachOUniversal.h>
-#include <llvm/Config/llvm-config.h>
 
-#include <jank/util/cpptrace.hpp>
+#include <cpptrace/gdb_jit.hpp>
 
 #include <jank/jit/processor.hpp>
 #include <jank/util/make_array.hpp>
 #include <jank/util/environment.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/clang.hpp>
+#include <jank/util/clang_format.hpp>
 #include <jank/runtime/context.hpp>
-#include <jank/runtime/core.hpp>
 #include <jank/profile/time.hpp>
 #include <jank/error/system.hpp>
 
 namespace jank::jit
 {
-  namespace
-  {
-#if defined(__APPLE__)
-    std::string llvm_error_to_string(llvm::Error err)
-    {
-      std::string message;
-      llvm::handleAllErrors(std::move(err),
-                            [&](llvm::ErrorInfoBase &info) { message = info.message(); });
-      return message;
-    }
-#endif
-  }
-
   static jtl::immutable_string default_shared_lib_name(jtl::immutable_string const &lib)
 #if defined(__APPLE__)
   {
@@ -96,105 +77,9 @@ namespace jank::jit
     }
   }
 
-#if defined(__APPLE__)
-  static void
-  load_clang_runtime_archive(clang::Interpreter &interpreter, std::string const &archive_path)
-  {
-    auto archive_buffer = llvm::MemoryBuffer::getFile(archive_path);
-    if(!archive_buffer)
-    {
-      throw error::system_failure(
-        util::format("Failed to open '{}': {}", archive_path, archive_buffer.getError().message()));
-    }
-
-    auto load_archive_children = [&](llvm::object::Archive &archive) {
-      auto &ee{ *interpreter.getExecutionEngine() };
-      llvm::Error child_err{ llvm::Error::success() };
-      for(auto const &child : archive.children(child_err))
-      {
-        auto child_buffer_ref = child.getMemoryBufferRef();
-        if(!child_buffer_ref)
-        {
-          llvm::consumeError(child_buffer_ref.takeError());
-          continue;
-        }
-
-        auto child_buffer{ llvm::MemoryBuffer::getMemBufferCopy(
-          child_buffer_ref->getBuffer(),
-          child_buffer_ref->getBufferIdentifier()) };
-        llvm::cantFail(ee.addObjectFile(std::move(child_buffer)));
-      }
-
-      if(child_err)
-      {
-        throw error::system_failure(util::format("Failed to load LLVM archive '{}': {}",
-                                                 archive_path,
-                                                 llvm_error_to_string(std::move(child_err))));
-      }
-    };
-
-    auto const buffer_ref{ (*archive_buffer)->getMemBufferRef() };
-    auto universal_or_err{ llvm::object::MachOUniversalBinary::create(buffer_ref) };
-    if(universal_or_err)
-    {
-      auto universal{ std::move(*universal_or_err) };
-      auto const host_arch{ llvm::Triple{ LLVM_DEFAULT_TARGET_TRIPLE }.getArch() };
-      bool loaded_slice{};
-      for(auto const &obj : universal->objects())
-      {
-        if(obj.getTriple().getArch() != host_arch)
-        {
-          continue;
-        }
-
-        auto archive_or_err = obj.getAsArchive();
-        if(!archive_or_err)
-        {
-          throw error::system_failure(
-            util::format("Failed to parse '{}' slice '{}': {}",
-                         archive_path,
-                         obj.getArchFlagName(),
-                         llvm_error_to_string(archive_or_err.takeError())));
-        }
-
-        load_archive_children(**archive_or_err);
-        loaded_slice = true;
-        break;
-      }
-
-      if(!loaded_slice)
-      {
-        throw error::system_failure(
-          util::format("Unable to find architecture '{}' in '{}'.",
-                       std::string{ llvm::Triple::getArchTypeName(host_arch) },
-                       archive_path));
-      }
-
-      return;
-    }
-    auto const universal_err{ llvm_error_to_string(universal_or_err.takeError()) };
-
-    auto archive_or_err{ llvm::object::Archive::create(buffer_ref) };
-    if(archive_or_err)
-    {
-      load_archive_children(**archive_or_err);
-      return;
-    }
-
-    throw error::system_failure(util::format("Failed to parse '{}': {} | {}",
-                                             archive_path,
-                                             universal_err,
-                                             llvm_error_to_string(archive_or_err.takeError())));
-  }
-#endif
-
   processor::processor(jtl::immutable_string const &binary_version)
   {
     profile::timer const timer{ "jit ctor" };
-
-#if defined(__APPLE__)
-    std::optional<std::string> clang_runtime_archive_path;
-#endif
 
     for(auto const &library_dir : util::cli::opts.library_dirs)
     {
@@ -237,36 +122,14 @@ namespace jank::jit
     args.emplace_back("-I");
     args.emplace_back(strdup((clang_dir / "../include").c_str()));
 
-    auto const clang_resource_dir_opt{ util::find_clang_resource_dir() };
-    if(clang_resource_dir_opt.is_none())
+    auto const clang_resource_dir{ util::find_clang_resource_dir() };
+    if(clang_resource_dir.is_none())
     {
       throw error::system_failure(
         util::format("Unable to find Clang {} resource dir.", JANK_CLANG_MAJOR_VERSION));
     }
     args.emplace_back("-resource-dir");
-    auto const &clang_resource_dir{ clang_resource_dir_opt.unwrap() };
-    args.emplace_back(clang_resource_dir.c_str());
-
-#if defined(__APPLE__)
-    {
-      std::filesystem::path clang_rt_dir{ clang_resource_dir.c_str() };
-      clang_rt_dir /= "lib";
-      clang_rt_dir /= "darwin";
-      if(std::filesystem::exists(clang_rt_dir))
-      {
-        auto const clang_rt_dir_str{ clang_rt_dir.string() };
-        args.emplace_back("-L");
-        args.emplace_back(strdup(clang_rt_dir_str.c_str()));
-        args.emplace_back("-lclang_rt.osx");
-
-        auto const clang_rt_archive{ clang_rt_dir / "libclang_rt.osx.a" };
-        if(std::filesystem::exists(clang_rt_archive))
-        {
-          clang_runtime_archive_path = clang_rt_archive.string();
-        }
-      }
-    }
-#endif
+    args.emplace_back(clang_resource_dir.unwrap().c_str());
 
     auto const jank_resource_dir{ util::resource_dir() };
     args.emplace_back("-I");
@@ -289,6 +152,9 @@ namespace jank::jit
     auto const &pch_path_str{ pch_path.unwrap() };
     args.emplace_back("-include-pch");
     args.emplace_back(strdup(pch_path_str.c_str()));
+
+    args.emplace_back("-w");
+    args.emplace_back("-Wno-c++11-narrowing");
 
     util::add_system_flags(args);
 
@@ -313,13 +179,6 @@ namespace jank::jit
 
     interpreter.reset(static_cast<Cpp::Interpreter *>(
       Cpp::CreateInterpreter(args, {}, vfs, static_cast<int>(llvm::CodeModel::Large))));
-
-#if defined(__APPLE__)
-    if(clang_runtime_archive_path)
-    {
-      load_clang_runtime_archive(*interpreter, *clang_runtime_archive_path);
-    }
-#endif
 
     /* Enabling perf support requires registering a couple of plugins with LLVM. These
      * plugins will generate files which perf can then use to inject additional info
@@ -373,15 +232,15 @@ namespace jank::jit
   void processor::eval_string(jtl::immutable_string const &s) const
   {
     profile::timer const timer{ "jit eval_string" };
-    //util::println("// eval_string:\n{}\n", s);
-
-    /* Capture stderr output (C++ compilation errors) and forward them through
-     * the output redirection system so they appear in the IDE REPL. */
-    runtime::scoped_stderr_redirect const stderr_redirect{};
-
-    auto err(interpreter->ParseAndExecute({ s.data(), s.size() }));
-    /* TODO: Throw on errors. */
-    llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");
+    auto const &formatted{ s };
+    //auto const &formatted{ util::format_cpp_source(s).expect_ok() };
+    //util::println("// eval_string:\n{}\n", formatted);
+    auto err(interpreter->ParseAndExecute({ formatted.data(), formatted.size() }));
+    if(err)
+    {
+      llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");
+      throw std::runtime_error{ "Failed to evaluate C++ code." };
+    }
     register_jit_stack_frames();
   }
 

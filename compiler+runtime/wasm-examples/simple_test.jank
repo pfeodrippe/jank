@@ -1,0 +1,11 @@
+(ns simple-test)
+
+;; Very simple test - just arithmetic
+(def x 10)
+(def y 20)
+(def result (+ x y))
+
+(println "x:" x)
+(println "y:" y)
+(println "Result:" result)
+(println "Done!")
