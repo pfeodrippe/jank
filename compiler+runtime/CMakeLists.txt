@@ -605,6 +605,8 @@ if(jank_target_wasm)
     src/cpp/jank/c_api_wasm.cpp
     # Core native functions (original file with WASM guards)
     src/cpp/clojure/core_native.cpp
+    # String native functions for clojure.string
+    src/cpp/clojure/string_native.cpp
     # GC stub for missing gc_badalc.cc
     src/cpp/jank/gc_wasm_stub.cpp
     # Stubs for native-only functionality

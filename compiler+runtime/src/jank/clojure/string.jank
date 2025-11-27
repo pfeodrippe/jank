@@ -52,19 +52,12 @@
 
   Example:
   (clojure.string/replace \"Almost Pig Latin\" #\"\\b(\\w)(\\w+)\\b\" \"$2$1ay\")
-  -> \"lmostAay igPay atinLay\""
+  -> \"lmostAay igPay atinLay\"
+
+  NOTE: WASM version only supports string/string replacement (no regex)."
   [s match replacement]
-  #_
-  (let [s (.toString s)]
-    (cond
-      (instance? Character match) (.replace s match replacement)
-      (instance? CharSequence match) (.replace s match replacement)
-      (instance? Pattern match) (if (instance? CharSequence replacement)
-                                  (.replaceAll (re-matcher match s)
-                                               (.toString replacement))
-                                  (replace-by s match replacement))
-      :else (throw (IllegalArgumentException. (str "Invalid match arg: " match)))))
-  (throw "TODO: port clojure.string/replace"))
+  #?(:wasm (cpp/clojure.string_native.replace_all s match replacement)
+     :jank (throw "TODO: port clojure.string/replace")))
 
 ;(defn- replace-first-by
 ;  [s re f]
@@ -159,16 +152,21 @@
 (defn split
   "Splits string on a regular expression.  Optional argument limit is
   the maximum number of parts. Not lazy. Returns vector of the parts.
-  Trailing empty strings are not returned - pass limit of -1 to return all."
+  Trailing empty strings are not returned - pass limit of -1 to return all.
+
+  NOTE: WASM version uses string delimiter instead of regex."
   ([s re]
-   (cpp/clojure.string_native.split s re))
+   #?(:wasm (cpp/clojure.string_native.split_by_string s re)
+      :jank (cpp/clojure.string_native.split s re)))
   ([s re limit]
-   (cpp/clojure.string_native.split s re limit)))
+   #?(:wasm (cpp/clojure.string_native.split_by_string s re limit)
+      :jank (cpp/clojure.string_native.split s re limit))))
 
 (defn split-lines
   "Splits s on \\n or \\r\\n. Trailing empty lines are not returned."
   [s]
-  (cpp/clojure.string_native.split s #"\r?\n"))
+  #?(:wasm (cpp/clojure.string_native.split_lines s)
+     :jank (cpp/clojure.string_native.split s #"\r?\n")))
 
 (defn trim
   "Removes whitespace from both ends of string."

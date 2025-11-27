@@ -26,4 +26,10 @@ namespace clojure::string_native
 
   object_ref split(object_ref s, object_ref re);
   object_ref split(object_ref s, object_ref re, object_ref limit);
+
+  // WASM-specific functions (no regex required)
+  object_ref split_lines(object_ref s);
+  object_ref split_by_string(object_ref s, object_ref delimiter);
+  object_ref split_by_string(object_ref s, object_ref delimiter, object_ref limit);
+  object_ref replace_all(object_ref s, object_ref match, object_ref replacement);
 }

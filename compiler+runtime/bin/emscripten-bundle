@@ -246,6 +246,42 @@ if [[ -f "${clojure_set_cpp}" ]]; then
   compiled_objects+=("${clojure_set_cpp}")
 fi
 
+# Regenerate clojure.string if needed
+clojure_string_cpp="${output_dir}/clojure_string_generated.cpp"
+clojure_string_jank="${repo_root}/src/jank/clojure/string.jank"
+if [[ -f "${clojure_string_jank}" ]]; then
+  regenerate_core_lib "clojure.string" "${clojure_string_cpp}" "${clojure_string_jank}"
+fi
+
+if [[ -f "${clojure_string_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.string: ${clojure_string_cpp}"
+  compiled_objects+=("${clojure_string_cpp}")
+fi
+
+# Regenerate clojure.walk if needed
+clojure_walk_cpp="${output_dir}/clojure_walk_generated.cpp"
+clojure_walk_jank="${repo_root}/src/jank/clojure/walk.jank"
+if [[ -f "${clojure_walk_jank}" ]]; then
+  regenerate_core_lib "clojure.walk" "${clojure_walk_cpp}" "${clojure_walk_jank}"
+fi
+
+if [[ -f "${clojure_walk_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.walk: ${clojure_walk_cpp}"
+  compiled_objects+=("${clojure_walk_cpp}")
+fi
+
+# Regenerate clojure.template if needed
+clojure_template_cpp="${output_dir}/clojure_template_generated.cpp"
+clojure_template_jank="${repo_root}/src/jank/clojure/template.jank"
+if [[ -f "${clojure_template_jank}" ]]; then
+  regenerate_core_lib "clojure.template" "${clojure_template_cpp}" "${clojure_template_jank}"
+fi
+
+if [[ -f "${clojure_template_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.template: ${clojure_template_cpp}"
+  compiled_objects+=("${clojure_template_cpp}")
+fi
+
 if [[ -n "${jank_source}" ]]; then
   if [[ ! -f "${jank_source}" ]]; then
     echo "error: jank source file not found: ${jank_source}" >&2
@@ -383,6 +419,9 @@ extern "C" {
   void* jank_load_clojure_core_native();
   void* jank_load_core();
   void* jank_load_set();
+  void* jank_load_string();
+  void* jank_load_walk();
+  void* jank_load_template__();  // 'template' is C++ keyword, gets munged
   void* jank_setup_clojure_core_for_wasm();
 
   // Dependency module init functions
@@ -439,6 +478,24 @@ static int jank_main(int argc, char const** argv) {
     jank_load_set();
     __rt_ctx->module_loader.set_is_loaded("clojure.set");
     printf("[jank-wasm] clojure.set loaded!\\n");
+
+    // Load clojure.string if available
+    printf("[jank-wasm] Loading clojure.string...\\n");
+    jank_load_string();
+    __rt_ctx->module_loader.set_is_loaded("clojure.string");
+    printf("[jank-wasm] clojure.string loaded!\\n");
+
+    // Load clojure.walk if available
+    printf("[jank-wasm] Loading clojure.walk...\\n");
+    jank_load_walk();
+    __rt_ctx->module_loader.set_is_loaded("clojure.walk");
+    printf("[jank-wasm] clojure.walk loaded!\\n");
+
+    // Load clojure.template if available
+    printf("[jank-wasm] Loading clojure.template...\\n");
+    jank_load_template__();  // 'template' is C++ keyword, gets munged
+    __rt_ctx->module_loader.set_is_loaded("clojure.template");
+    printf("[jank-wasm] clojure.template loaded!\\n");
     printf("\\n");
 
     // Load dependencies
@@ -680,9 +737,12 @@ for cpp_file in "${compiled_objects[@]}"; do
 
     compiled_object_files+=("${obj_file}")
 
-    # Categorize: core libs (clojure.core, clojure.set) vs user code
+    # Categorize: core libs (clojure.core, clojure.set, clojure.string, clojure.walk, clojure.template) vs user code
     if [[ "${cpp_file}" == *"clojure_core_generated.cpp" ]] || \
-       [[ "${cpp_file}" == *"clojure_set_generated.cpp" ]]; then
+       [[ "${cpp_file}" == *"clojure_set_generated.cpp" ]] || \
+       [[ "${cpp_file}" == *"clojure_string_generated.cpp" ]] || \
+       [[ "${cpp_file}" == *"clojure_walk_generated.cpp" ]] || \
+       [[ "${cpp_file}" == *"clojure_template_generated.cpp" ]]; then
       core_object_files+=("${obj_file}")
     else
       user_object_files+=("${obj_file}")

@@ -1,6 +1,7 @@
 (ns eita
   (:require
-   [clojure.set :as set]))
+   [clojure.set :as set]
+   [clojure.string :as str]))
 
 ;; Test basic set operations from clojure.set
 (def s1 #{1 2 3 4 30})
@@ -27,6 +28,10 @@
 (println "Doubled:" (vec doubled))
 (println "Even numbers:" (vec filtered))
 (println "Even numbers (fn):" (aaa numbers))
+(println "String" [{:reverse (str/reverse "abc")
+                    :split-lines (str/split-lines "a\nb\nc")
+                    :starts-with (str/starts-with? "ABC" "A")
+                    :index-of (str/index-of "ABCDE" "D")}])
 (println "WASM build test completed successfully!")
 
 (defn ^:export ggg
@@ -43,7 +48,7 @@
 
   ;; Repeatedly create and discard large collections
   (dotimes [round n]
-    
+
     ;; Create chain of maps pointing to vectors
     (loop [i 0
            data nil]
