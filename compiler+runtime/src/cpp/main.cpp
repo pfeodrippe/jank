@@ -112,7 +112,7 @@ namespace jank
 
                   auto const var_name(sym->name);
                   auto const munged_name(munge(var_name));
-                  auto const ns_name(module_name);
+                  auto const &ns_name(module_name);
 
                   /* Generate an extern "C" wrapper that takes a double argument
                    * and boxes it as a jank integer before calling the function.
