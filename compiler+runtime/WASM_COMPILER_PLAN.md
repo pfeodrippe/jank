@@ -106,67 +106,108 @@ emcmake cmake -DClang_DIR=$LLVM_BUILD_DIR/lib/cmake/clang ...
 
 ## Implementation Phases
 
-### Phase 0: Prerequisites & Dependencies (Foundation)
+### Phase 0: Prerequisites & Dependencies (Foundation) ✅ COMPLETED
 
 **Goal:** Get LLVM + CppInterOp compiled to WASM
 
-#### Step 0.1: Update Emscripten Version
+**Status:** ✅ **COMPLETED** (Nov 27, 2025)
+
+#### Key Findings
+
+1. **LLVM 22 has native WASM interpreter support!** No need for LLVM 19 patches.
+   - `clang/lib/Interpreter/Wasm.cpp` - Native `WasmIncrementalExecutor` class
+   - `#ifdef __EMSCRIPTEN__` conditionals built into LLVM 22
+   - Uses `wasm-ld` and `dlopen()` internally for incremental compilation
+
+2. **Emscripten 4.0.20 works** (Homebrew version) - no need for emsdk 3.1.73
+
+3. **CppInterOp version bounds updated** to support LLVM 22 (was limited to 19.1.x)
+
+#### Completed Steps
+
+##### Step 0.1: Emscripten Version ✅
 ```bash
-# Current: 3.1.67 (assumed)
-# Required: 3.1.73 (per CppInterOp docs)
-emsdk install 3.1.73
-emsdk activate 3.1.73
+# Using Homebrew emscripten 4.0.20 (works fine!)
+emcc --version
+# emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 4.0.20
 ```
 
-#### Step 0.2: Build LLVM for WASM
+##### Step 0.2: Build LLVM 22 for WASM ✅
 
-This is the largest dependency. Options:
+Built in `/Users/pfeodrippe/dev/jank/wasm-llvm-build/llvm-build/`
 
-**Option A: Build from source (recommended for full control)**
+**Patches Applied:**
+1. `CrossCompile.cmake` - Fixed native tools build to use `clang`/`clang++` directly
+2. `Wasm.cpp` - Added `/tmp/` prefix for temp files
+
+**Build Command:**
 ```bash
-git clone --depth=1 --branch release/19.x https://github.com/llvm/llvm-project.git
-cd llvm-project
-git apply ../third-party/cppinterop/patches/llvm/emscripten-clang19-*.patch
+mkdir -p /Users/pfeodrippe/dev/jank/wasm-llvm-build/llvm-build
+cd /Users/pfeodrippe/dev/jank/wasm-llvm-build/llvm-build
 
-mkdir build && cd build
+emcmake cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_HOST_TRIPLE=wasm32-unknown-emscripten \
+  -DLLVM_TARGETS_TO_BUILD="WebAssembly" \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DLLVM_ENABLE_THREADS=OFF \
+  -DLLVM_ENABLE_ZSTD=OFF \
+  -DLLVM_ENABLE_LIBXML2=OFF \
+  -DLLVM_ENABLE_LIBEDIT=OFF \
+  -DLLVM_INCLUDE_BENCHMARKS=OFF \
+  -DLLVM_INCLUDE_TESTS=OFF \
+  -DLLVM_BUILD_TOOLS=OFF \
+  -DCLANG_BUILD_TOOLS=OFF \
+  -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+  -DCLANG_ENABLE_ARCMT=OFF \
+  /Users/pfeodrippe/dev/llvm-project/llvm
+
+emmake make clangInterpreter lldWasm lldCommon -j8
+```
+
+**Libraries Built:**
+- `libclangInterpreter.a` (513KB) - Clang REPL/interpreter
+- `liblldWasm.a` (1.1MB) - WebAssembly linker
+- `liblldCommon.a` (245KB) - LLD common code
+- Plus all LLVM/Clang dependencies (~100+ libraries)
+
+##### Step 0.3: Build CppInterOp for WASM ✅
+
+Built in `/Users/pfeodrippe/dev/jank/wasm-llvm-build/cppinterop-build/`
+
+**Version Bounds Updated:**
+- `CMakeLists.txt` modified to accept LLVM 13.0 - 22.x (was 13.0 - 19.1.x)
+
+**Build Command:**
+```bash
+cd /Users/pfeodrippe/dev/jank/wasm-llvm-build/cppinterop-build
+
 emcmake cmake -DCMAKE_BUILD_TYPE=Release \
-              -DLLVM_HOST_TRIPLE=wasm32-unknown-emscripten \
-              -DLLVM_ENABLE_ASSERTIONS=ON \
-              -DLLVM_TARGETS_TO_BUILD="WebAssembly" \
-              -DLLVM_ENABLE_PROJECTS="clang;lld" \
-              -DLLVM_ENABLE_THREADS=OFF \
-              -DLLVM_ENABLE_ZSTD=OFF \
-              -DLLVM_ENABLE_LIBXML2=OFF \
-              -DLLVM_ENABLE_LIBEDIT=OFF \
-              -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
-              -DCLANG_ENABLE_ARCMT=OFF \
-              -DCLANG_BUILD_TOOLS=OFF \
-              -DLLVM_BUILD_TOOLS=OFF \
-              ../llvm
+  -DLLVM_DIR=/Users/pfeodrippe/dev/jank/wasm-llvm-build/llvm-build/lib/cmake/llvm \
+  -DLLD_DIR=/Users/pfeodrippe/dev/jank/wasm-llvm-build/llvm-build/lib/cmake/lld \
+  -DClang_DIR=/Users/pfeodrippe/dev/jank/wasm-llvm-build/llvm-build/lib/cmake/clang \
+  -DBUILD_SHARED_LIBS=ON \
+  -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ON \
+  -DSYSROOT_PATH=/opt/homebrew/Cellar/emscripten/4.0.20/libexec/cache/sysroot \
+  /Users/pfeodrippe/dev/jank/compiler+runtime/third-party/cppinterop
 
-emmake make clangInterpreter -j$(nproc)
-emmake make lldWasm -j$(nproc)
+emmake make -j8
 ```
 
-**Option B: Use emscripten-forge (faster, pre-built)**
-```bash
-micromamba install llvm -c https://repo.mamba.pm/emscripten-forge
+**Libraries Built:**
+- `libclangCppInterOp.so` (86.5MB WASM module!) - Full CppInterOp for WASM
+
+#### Test Verification ✅
+
+Test file compiled successfully to WASM:
+```cpp
+// test_interpreter.cpp - compiles to WASM object file
+#include <clang/Frontend/CompilerInstance.h>
+#include <clang/Interpreter/Interpreter.h>
+// ... uses LLVM 22 API
 ```
 
-#### Step 0.3: Build CppInterOp for WASM
-```bash
-cd third-party/cppinterop
-mkdir build-wasm && cd build-wasm
-emcmake cmake -DCMAKE_BUILD_TYPE=Release \
-              -DLLVM_DIR=$LLVM_BUILD_DIR/lib/cmake/llvm \
-              -DClang_DIR=$LLVM_BUILD_DIR/lib/cmake/clang \
-              -DLLD_DIR=$LLVM_BUILD_DIR/lib/cmake/lld \
-              -DSYSROOT_PATH=$EMSDK/upstream/emscripten/cache/sysroot \
-              ../
-emmake make -j$(nproc)
-```
-
-**Estimated Size:** ~50-100MB WASM bundle (LLVM is large)
+**Estimated Size:** ~100MB WASM bundle (CppInterOp alone is 86MB)
 
 ---
 
@@ -717,5 +758,45 @@ The **fastest path to eval** may be the interpreter approach using existing `eva
 
 ---
 
-**Last Updated:** Nov 27, 2024
+**Last Updated:** Nov 27, 2025
 **Author:** Claude (with jank architecture context)
+
+---
+
+## Phase 0 Completion Summary
+
+**Date:** Nov 27, 2025
+
+### Artifacts Created
+
+| Artifact | Location | Size |
+|----------|----------|------|
+| LLVM 22 WASM build | `/Users/pfeodrippe/dev/jank/wasm-llvm-build/llvm-build/` | ~500MB |
+| CppInterOp WASM build | `/Users/pfeodrippe/dev/jank/wasm-llvm-build/cppinterop-build/` | ~100MB |
+| libclangCppInterOp.so | `.../cppinterop-build/lib/` | 86.5MB |
+
+### Files Modified
+
+1. **`llvm-project/llvm/cmake/modules/CrossCompile.cmake`**
+   - Fixed native tools build for cross-compilation
+   - Changed to use `clang`/`clang++` explicitly
+
+2. **`llvm-project/clang/lib/Interpreter/Wasm.cpp`**
+   - Added `/tmp/` prefix for temp object files
+
+3. **`compiler+runtime/third-party/cppinterop/CMakeLists.txt`**
+   - Updated version bounds: LLVM 13.0 - 22.x (was 19.1.x)
+
+### Key Learnings
+
+1. LLVM 22 has native WASM interpreter support - simpler than expected!
+2. Emscripten 4.0.20 works fine - no need for specific emsdk version
+3. CppInterOp builds successfully but tests need API updates for LLVM 22
+4. Bundle size is large (~100MB) but manageable with lazy loading
+
+### Next Steps (Phase 1+)
+
+1. Enable jank analyzer in WASM build
+2. Enable jank codegen in WASM build
+3. Integrate CppInterOp into jank's JIT processor
+4. Test end-to-end eval in browser
