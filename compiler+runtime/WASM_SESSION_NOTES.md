@@ -1,4 +1,4 @@
-# Claude Code Session Notes
+# WASM Code Session Notes
 
 This file documents how Claude Code was used in this project and best practices for future sessions.
 

@@ -5,11 +5,11 @@
 
 (defn start-server
   "Start an embedded nREPL server.
-  
+
   Options:
     :port - The port to bind to (default: 5555)
     :bind - The address to bind to (default: \"127.0.0.1\")
-    
+
   Returns a server instance that can be passed to stop-server."
   ([]
    (start-server {}))
