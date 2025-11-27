@@ -123,6 +123,7 @@ endif()
 
 if(jank_target_wasm)
   # Simpler flags for wasm to avoid conflicts with emscripten's toolchain
+  # -fPIC is required for MAIN_MODULE dynamic linking support
   set(
     jank_aot_compiler_flags
     -Wall
@@ -130,6 +131,7 @@ if(jank_target_wasm)
     -fno-common
     -frtti
     -fexceptions
+    -fPIC
   )
 else()
   set(
@@ -471,7 +473,35 @@ if(NOT jank_target_wasm)
   include(cmake/dependency/cppinterop.cmake)
   include(cmake/dependency/boost-multiprecision.cmake)
 else()
-  message(STATUS "Skipping ftxui/cpptrace/cppinterop/boost-multiprecision dependencies for wasm build")
+  message(STATUS "Skipping ftxui/cpptrace/boost-multiprecision dependencies for wasm build")
+
+  # ---- CppInterOp WASM build ----
+  # Use pre-built CppInterOp and LLVM WASM libraries (minimal build)
+  set(WASM_LLVM_BUILD_DIR "$ENV{HOME}/dev/jank/wasm-llvm-build/llvm-build-minimal")
+  set(WASM_CPPINTEROP_BUILD_DIR "$ENV{HOME}/dev/jank/wasm-llvm-build/cppinterop-build")
+
+  if(EXISTS "${WASM_CPPINTEROP_BUILD_DIR}/lib/libclangCppInterOp.a")
+    message(STATUS "Found CppInterOp WASM build at ${WASM_CPPINTEROP_BUILD_DIR}")
+    set(JANK_WASM_HAS_CPPINTEROP TRUE)
+
+    # Import CppInterOp as a static library
+    add_library(clangCppInterOp_wasm STATIC IMPORTED)
+    set_target_properties(clangCppInterOp_wasm PROPERTIES
+      IMPORTED_LOCATION "${WASM_CPPINTEROP_BUILD_DIR}/lib/libclangCppInterOp.a"
+    )
+
+    # LLVM/Clang include directories for WASM
+    set(WASM_LLVM_INCLUDE_DIRS
+      "${WASM_LLVM_BUILD_DIR}/include"
+      "$ENV{HOME}/dev/llvm-project/llvm/include"
+      "$ENV{HOME}/dev/llvm-project/clang/include"
+      "${WASM_LLVM_BUILD_DIR}/tools/clang/include"
+    )
+  else()
+    message(STATUS "CppInterOp WASM build not found - eval will not be available")
+    set(JANK_WASM_HAS_CPPINTEROP FALSE)
+  endif()
+  # ---- CppInterOp WASM build ----
 endif()
 
 if(NOT jank_target_wasm)
@@ -595,7 +625,7 @@ set(jank_lib_sources)
 
 # Add runtime sources for both WASM and native
 if(jank_target_wasm)
-  # WASM build: full runtime but no AOT/codegen/nREPL
+  # WASM build: full runtime
   list(APPEND jank_lib_sources ${jank_runtime_common_sources})
   list(APPEND jank_lib_sources
     src/cpp/jank/util/environment_wasm.cpp
@@ -612,6 +642,66 @@ if(jank_target_wasm)
     # Stubs for native-only functionality
     src/cpp/jank/wasm_native_stubs.cpp
   )
+
+  # If CppInterOp WASM build is available, enable analyzer, codegen, and eval
+  if(JANK_WASM_HAS_CPPINTEROP)
+    message(STATUS "Enabling analyzer and eval for WASM build (CppInterOp available)")
+    list(APPEND jank_lib_sources
+      # Analyze files
+      src/cpp/jank/analyze/processor.cpp
+      src/cpp/jank/analyze/expression.cpp
+      src/cpp/jank/analyze/expr/vector.cpp
+      src/cpp/jank/analyze/expr/recursion_reference.cpp
+      src/cpp/jank/analyze/expr/map.cpp
+      src/cpp/jank/analyze/expr/do.cpp
+      src/cpp/jank/analyze/expr/var_deref.cpp
+      src/cpp/jank/analyze/expr/recur.cpp
+      src/cpp/jank/analyze/expr/named_recursion.cpp
+      src/cpp/jank/analyze/expr/local_reference.cpp
+      src/cpp/jank/analyze/expr/def.cpp
+      src/cpp/jank/analyze/expr/let.cpp
+      src/cpp/jank/analyze/expr/letfn.cpp
+      src/cpp/jank/analyze/expr/throw.cpp
+      src/cpp/jank/analyze/expr/if.cpp
+      src/cpp/jank/analyze/expr/list.cpp
+      src/cpp/jank/analyze/expr/primitive_literal.cpp
+      src/cpp/jank/analyze/expr/call.cpp
+      src/cpp/jank/analyze/expr/set.cpp
+      src/cpp/jank/analyze/expr/var_ref.cpp
+      src/cpp/jank/analyze/expr/function.cpp
+      src/cpp/jank/analyze/expr/try.cpp
+      src/cpp/jank/analyze/expr/case.cpp
+      src/cpp/jank/analyze/expr/cpp_raw.cpp
+      src/cpp/jank/analyze/expr/cpp_type.cpp
+      src/cpp/jank/analyze/expr/cpp_value.cpp
+      src/cpp/jank/analyze/expr/cpp_cast.cpp
+      src/cpp/jank/analyze/expr/cpp_call.cpp
+      src/cpp/jank/analyze/expr/cpp_constructor_call.cpp
+      src/cpp/jank/analyze/expr/cpp_member_call.cpp
+      src/cpp/jank/analyze/expr/cpp_member_access.cpp
+      src/cpp/jank/analyze/expr/cpp_builtin_operator_call.cpp
+      src/cpp/jank/analyze/expr/cpp_box.cpp
+      src/cpp/jank/analyze/expr/cpp_unbox.cpp
+      src/cpp/jank/analyze/expr/cpp_new.cpp
+      src/cpp/jank/analyze/expr/cpp_delete.cpp
+      src/cpp/jank/analyze/local_frame.cpp
+      src/cpp/jank/analyze/step/force_boxed.cpp
+      src/cpp/jank/analyze/cpp_util.cpp
+      src/cpp/jank/analyze/pass/walk.cpp
+      src/cpp/jank/analyze/pass/optimize.cpp
+      src/cpp/jank/analyze/pass/strip_source_meta.cpp
+      # Codegen files
+      src/cpp/jank/codegen/processor.cpp
+      # Evaluate
+      src/cpp/jank/evaluate.cpp
+      # Error handling for codegen
+      src/cpp/jank/error/codegen.cpp
+      # Clang format utility (needed by evaluate.cpp)
+      src/cpp/jank/util/clang_format.cpp
+    )
+  else()
+    message(STATUS "WASM build without CppInterOp - eval not available")
+  endif()
 else()
   # Native build: full runtime + AOT/codegen/nREPL
   list(APPEND jank_lib_sources ${jank_runtime_common_sources})
@@ -687,9 +777,16 @@ else()
 endif()
 
 if(jank_target_wasm)
+  # WASM always uses the stub JIT processor - no native execution possible
+  # CppInterOp in WASM is used for type resolution and analysis, not JIT
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor_stub_wasm.cpp)
+  if(JANK_WASM_HAS_CPPINTEROP)
+    # Add interpreter accessor for WASM with CppInterOp
+    list(APPEND jank_lib_sources src/cpp/jank/jit/interpreter.cpp)
+  endif()
 else()
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor.cpp)
+  list(APPEND jank_lib_sources src/cpp/jank/jit/interpreter.cpp)
 endif()
 
 add_library(
@@ -714,6 +811,11 @@ if(jank_target_wasm)
   
   # Define JANK_TARGET_WASM for conditional compilation
   target_compile_definitions(jank_lib PUBLIC JANK_TARGET_WASM=1)
+
+  # If CppInterOp is available, define JANK_HAS_CPPINTEROP to include real headers
+  if(JANK_WASM_HAS_CPPINTEROP)
+    target_compile_definitions(jank_lib PUBLIC JANK_HAS_CPPINTEROP=1)
+  endif()
   
   # For WASM, only our project include is non-system
   target_include_directories(
@@ -733,7 +835,18 @@ if(jank_target_wasm)
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bpptree/include>"
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-preprocessor/include>"
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/stduuid/include/>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cppinterop/include>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cppinterop/lib>"
   )
+  # Add LLVM/Clang includes when CppInterOp is available
+  if(JANK_WASM_HAS_CPPINTEROP)
+    target_include_directories(
+      jank_lib
+      SYSTEM
+      PUBLIC
+      ${WASM_LLVM_INCLUDE_DIRS}
+    )
+  endif()
 else()
   # Use normal implementations with cpptrace for non-wasm
   target_sources(jank_lib PRIVATE 
@@ -785,6 +898,14 @@ if(NOT jank_target_wasm)
     cpptrace::cpptrace
     ftxui::screen ftxui::dom
   )
+else()
+  # WASM builds with CppInterOp support
+  if(JANK_WASM_HAS_CPPINTEROP)
+    target_link_libraries(
+      jank_lib PRIVATE
+      clangCppInterOp_wasm
+    )
+  endif()
 endif()
 
 if(APPLE)

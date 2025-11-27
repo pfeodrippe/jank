@@ -1,6 +1,9 @@
 #include <algorithm>
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+// Include real CppInterOp when:
+// 1. Not on emscripten (native build), OR
+// 2. On emscripten but with CppInterOp available (WASM with eval support)
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
   #include <Interpreter/Compatibility.h>
   #include <Interpreter/CppInterOpInterpreter.h>
   #include <clang/Interpreter/CppInterOp.h>
@@ -11,8 +14,10 @@
 
 #include <jank/analyze/cpp_util.hpp>
 #include <jank/analyze/visit.hpp>
+#include <jank/analyze/local_frame.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core/munge.hpp>
+#include <jank/jit/interpreter.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/scope_exit.hpp>
 #include <jank/error/analyze.hpp>
@@ -21,7 +26,7 @@
 
 namespace jank::analyze::cpp_util
 {
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
   /* Even with a SFINAE trap, Clang can get into a bad state when failing to instantiate
    * templates. In that bad state, whatever the next thing is that we parse fails. So, we
    * hack around this by trying to detect that state and them just giving Clang something
@@ -30,7 +35,7 @@ namespace jank::analyze::cpp_util
    * After that failure, Clang gets back into a good state. */
   static void reset_sfinae_state()
   {
-    static_cast<void>(runtime::__rt_ctx->jit_prc.interpreter->Parse("1"));
+    static_cast<void>(jit::get_interpreter()->Parse("1"));
   }
 
   jtl::string_result<void> instantiate_if_needed(jtl::ptr<void> const scope)
@@ -163,13 +168,13 @@ namespace jank::analyze::cpp_util
 
   jtl::string_result<jtl::ptr<void>> resolve_literal_type(jtl::immutable_string const &literal)
   {
-    auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
+    auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
     clang::DiagnosticErrorTrap const trap{ diag };
 
     auto const alias{ runtime::__rt_ctx->unique_namespaced_string() };
     /* We add a new line so that a trailing // comment won't interfere with our code. */
     auto const code{ util::format("using {} = {}\n;", runtime::munge(alias), literal) };
-    auto parse_res{ runtime::__rt_ctx->jit_prc.interpreter->Parse(code.c_str()) };
+    auto parse_res{ jit::get_interpreter()->Parse(code.c_str()) };
     if(!parse_res || trap.hasErrorOccurred())
     {
       reset_sfinae_state();
@@ -217,7 +222,7 @@ namespace jank::analyze::cpp_util
   jtl::string_result<literal_value_result>
   resolve_literal_value(jtl::immutable_string const &literal)
   {
-    auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
+    auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
     clang::DiagnosticErrorTrap const trap{ diag };
 
     auto const alias{ runtime::__rt_ctx->unique_namespaced_string() };
@@ -227,7 +232,7 @@ namespace jank::analyze::cpp_util
       runtime::munge(alias),
       literal) };
     //util::println("cpp/value code: {}", code);
-    auto parse_res{ runtime::__rt_ctx->jit_prc.interpreter->Parse(code.c_str()) };
+    auto parse_res{ jit::get_interpreter()->Parse(code.c_str()) };
     if(!parse_res || trap.hasErrorOccurred())
     {
       return err("Unable to parse C++ literal.");
@@ -242,7 +247,7 @@ namespace jank::analyze::cpp_util
       return err("Invalid C++ literal.");
     }
 
-    auto exec_res{ runtime::__rt_ctx->jit_prc.interpreter->Execute(*parse_res) };
+    auto exec_res{ jit::get_interpreter()->Execute(*parse_res) };
     if(exec_res)
     {
       return err("Unable to load C++ literal.");
@@ -343,19 +348,19 @@ namespace jank::analyze::cpp_util
    * this for exception catching. */
   void register_rtti(jtl::ptr<void> const type)
   {
-    auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
+    auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
     clang::DiagnosticErrorTrap const trap{ diag };
     auto const alias{ runtime::__rt_ctx->unique_namespaced_string() };
     auto const code{ util::format("&typeid({})", Cpp::GetTypeAsString(type)) };
     clang::Value value;
-    auto exec_res{ runtime::__rt_ctx->jit_prc.interpreter->ParseAndExecute(code.c_str(), &value) };
+    auto exec_res{ jit::get_interpreter()->ParseAndExecute(code.c_str(), &value) };
     if(exec_res || trap.hasErrorOccurred())
     {
       throw error::internal_codegen_failure(
         util::format("Unable to get RTTI for '{}'.", Cpp::GetTypeAsString(type)));
     }
 
-    auto const lljit{ runtime::__rt_ctx->jit_prc.interpreter->getExecutionEngine() };
+    auto const lljit{ jit::get_interpreter()->getExecutionEngine() };
     llvm::orc::SymbolMap symbols;
     llvm::orc::MangleAndInterner interner{ lljit->getExecutionSession(), lljit->getDataLayout() };
     auto const &symbol{ Cpp::MangleRTTI(type) };
@@ -672,10 +677,10 @@ namespace jank::analyze::cpp_util
     static auto const convert_template{ Cpp::GetScopeFromCompleteName("jank::runtime::convert") };
     Cpp::TemplateArgInfo const arg{ Cpp::GetCanonicalType(
       Cpp::GetTypeWithoutCv(Cpp::GetNonReferenceType(type))) };
-    clang::Sema::SFINAETrap const trap{ runtime::__rt_ctx->jit_prc.interpreter->getSema(), true };
+    clang::Sema::SFINAETrap const trap{ jit::get_interpreter()->getSema(), true };
     Cpp::TCppScope_t instantiation{};
     {
-      auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
+      auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
       auto old_client{ diag.takeClient() };
       diag.setClient(new clang::IgnoringDiagConsumer{}, true);
       util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };

@@ -1,8 +1,12 @@
 #pragma once
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+// Include real CppInterOp when:
+// 1. Not on emscripten (native build), OR
+// 2. On emscripten but with CppInterOp available (WASM with eval support)
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
   #include <clang/Interpreter/CppInterOp.h>
 #else
+// Stub definitions for WASM without CppInterOp
 namespace Cpp
 {
   struct TemplateArgInfo

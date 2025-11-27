@@ -3,8 +3,9 @@
 #include <cstdlib>
 #include <stdexcept>
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
   #include <Interpreter/Compatibility.h>
+  #include <clang/Basic/Diagnostic.h>
 #endif
 
 #include <jank/util/cpptrace.hpp>
@@ -22,6 +23,7 @@
 #include <jank/runtime/core/seq.hpp>
 #include <jank/analyze/processor.hpp>
 #include <jank/analyze/step/force_boxed.hpp>
+#include <jank/jit/interpreter.hpp>
 #include <jank/evaluate.hpp>
 #include <jtl/result.hpp>
 #include <jank/util/scope_exit.hpp>
@@ -781,7 +783,7 @@ namespace jank::analyze
        * Nothing else could have an unresolved template up until now. */
       for(size_t i{}; i < arg_types.size(); ++i)
       {
-        if(auto const value = llvm::dyn_cast<expr::cpp_value>(arg_exprs[i].data))
+        if(auto const value = expr_dyn_cast<expr::cpp_value>(arg_exprs[i].data))
         {
           /* Just adding a reference to the same type is not worthy of change.
            * For some situations, this would fuck up codegen. For example, with enum constants. */
@@ -3167,7 +3169,7 @@ namespace jank::analyze
       }
 
       source = sym_result.expect_ok();
-      auto const var_deref(llvm::dyn_cast<expr::var_deref>(source.data));
+      auto const var_deref(expr_dyn_cast<expr::var_deref>(source.data));
 
       /* If this expression doesn't need to be boxed, based on where it's called, we can dig
        * into the call details itself to see if the function supports unboxed returns. Most don't. */
@@ -3298,7 +3300,7 @@ namespace jank::analyze
                                                        none));
     }
 
-    auto const recursion_ref(llvm::dyn_cast<expr::recursion_reference>(source.data));
+    auto const recursion_ref(expr_dyn_cast<expr::recursion_reference>(source.data));
     if(recursion_ref)
     {
       return jtl::make_ref<expr::named_recursion>(
@@ -3602,10 +3604,13 @@ namespace jank::analyze
        *
        * We silence the diagnostics for this because it'll likely fail for any invalid symbols
        * anyway. */
-      auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
-      auto old_client{ diag.takeClient() };
-      diag.setClient(new clang::IgnoringDiagConsumer{}, true);
-      util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
+      if(auto *interp = jit::get_interpreter())
+      {
+        auto &diag{ interp->getCompilerInstance()->getDiagnostics() };
+        auto old_client{ diag.takeClient() };
+        diag.setClient(new clang::IgnoringDiagConsumer{}, true);
+        util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
+      }
 
       /* So just wrap our cpp/foo into a (cpp/value "foo") and analyze that. */
       runtime::detail::native_persistent_list const cpp_value_form{ make_box<obj::symbol>("cpp",

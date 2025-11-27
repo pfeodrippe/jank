@@ -1,7 +1,12 @@
-#include <Interpreter/Compatibility.h>
-#include <Interpreter/CppInterOpInterpreter.h>
-#include <clang/Interpreter/CppInterOp.h>
-#include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <Interpreter/Compatibility.h>
+  #include <Interpreter/CppInterOpInterpreter.h>
+  #include <clang/Interpreter/CppInterOp.h>
+#endif
+
+#ifndef JANK_TARGET_WASM
+  #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#endif
 
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/ns.hpp>
@@ -9,7 +14,9 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/behavior/callable.hpp>
-#include <jank/codegen/llvm_processor.hpp>
+#ifndef JANK_TARGET_WASM
+  #include <jank/codegen/llvm_processor.hpp>
+#endif
 #include <jank/codegen/processor.hpp>
 #include <jank/jit/processor.hpp>
 #include <jank/evaluate.hpp>
@@ -514,7 +521,7 @@ namespace jank::evaluate
     auto const size(expr->data_exprs.size());
     if(size <= obj::persistent_array_map::max_size)
     {
-      auto const array_box(make_array_box<object_ref>(size * 2llu));
+      auto const array_box(make_array_box<object_ref>(static_cast<usize>(size * 2)));
       usize i{};
       for(auto const &e : expr->data_exprs)
       {
@@ -580,10 +587,13 @@ namespace jank::evaluate
 
   object_ref eval(expr::function_ref const expr)
   {
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     auto const &module(
       module::nest_module(expect_object<ns>(__rt_ctx->current_ns_var->deref())->to_string(),
                           munge(expr->unique_name)));
 
+  #ifndef JANK_TARGET_WASM
+    /* Native builds support both LLVM IR and C++ codegen */
     if(util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
     {
       /* TODO: Remove extra wrapper, if possible. Just create function object directly? */
@@ -602,31 +612,41 @@ namespace jank::evaluate
           .expect_ok());
       return reinterpret_cast<object *(*)()>(fn)();
     }
-    else
+  #else
+    /* WASM only supports C++ codegen, not LLVM IR */
+    if(util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
     {
-      codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
-
-      /* TODO: Rename to something generic which makes sense for IR and C++ gen? */
-      jtl::immutable_string_view const print_settings{ getenv("JANK_PRINT_IR") ?: "" };
-      if(print_settings == "1")
-      {
-        util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
-      }
-
-      __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
-      auto const expr_str{ cg_prc.expression_str() + ".erase()" };
-      clang::Value v;
-      auto res(
-        __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
-      if(res)
-      {
-        /* TODO: Helper to turn an llvm::Error into a string. */
-        jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
-        llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
-        throw error::internal_codegen_failure(msg);
-      }
-      return try_object<obj::jit_function>(v.convertTo<runtime::object *>());
+      throw make_box("LLVM IR codegen not supported in WASM - use C++ codegen").erase();
     }
+  #endif
+
+    /* C++ codegen path - works for both native and WASM */
+    codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
+
+    /* TODO: Rename to something generic which makes sense for IR and C++ gen? */
+    jtl::immutable_string_view const print_settings{ getenv("JANK_PRINT_IR") ?: "" };
+    if(print_settings == "1")
+    {
+      util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
+    }
+
+    __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
+    auto const expr_str{ cg_prc.expression_str() + ".erase()" };
+    clang::Value v;
+    auto res(
+      __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
+    if(res)
+    {
+      /* TODO: Helper to turn an llvm::Error into a string. */
+      jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
+      llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
+      throw error::internal_codegen_failure(msg);
+    }
+    return try_object<obj::jit_function>(v.convertTo<runtime::object *>());
+#else /* No CppInterOp */
+    (void)expr;
+    throw make_box("eval not supported in WASM without CppInterOp").erase();
+#endif /* CppInterOp available */
   }
 
   object_ref eval(expr::recur_ref const)
@@ -723,8 +743,13 @@ namespace jank::evaluate
 
   object_ref eval(expr::cpp_raw_ref const expr)
   {
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     __rt_ctx->jit_prc.eval_string(expr->code);
     return runtime::jank_nil;
+#else
+    (void)expr;
+    throw make_box("eval not supported in WASM without CppInterOp").erase();
+#endif
   }
 
   object_ref eval(expr::cpp_type_ref const)

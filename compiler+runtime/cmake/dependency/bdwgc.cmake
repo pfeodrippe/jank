@@ -5,6 +5,12 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
 
+  # Add -fPIC for WASM builds to support MAIN_MODULE dynamic linking
+  if(jank_target_wasm)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+  endif()
+
   if(NOT APPLE)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DREDIRECT_MALLOC=GC_malloc_uncollectable -DREDIR_MALLOC_AND_LINUX_THREADS")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DREDIRECT_MALLOC=GC_malloc_uncollectable -DREDIR_MALLOC_AND_LINUX_THREADS")

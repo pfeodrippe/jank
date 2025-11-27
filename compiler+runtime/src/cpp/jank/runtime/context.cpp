@@ -20,7 +20,7 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/munge.hpp>
 #include <jank/runtime/core/meta.hpp>
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   #include <jank/analyze/processor.hpp>
   #include <jank/analyze/expr/primitive_literal.hpp>
   #include <jank/analyze/pass/optimize.hpp>
@@ -52,7 +52,7 @@ namespace jank::runtime
     /* We want to initialize __rt_ctx ASAP so other code can start using it. */
     : binary_version{ (__rt_ctx = this, util::binary_version()) }
     , binary_cache_dir{ util::binary_cache_dir(binary_version) }
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     , jit_prc{ binary_version }
 #endif
   {
@@ -417,7 +417,7 @@ namespace jank::runtime
     return ret;
   }
 
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   native_vector<analyze::expression_ref>
   context::analyze_string(jtl::immutable_string_view const &code, bool const eval)
   {
@@ -503,7 +503,7 @@ namespace jank::runtime
     return load_module(util::format("/{}", module), ori);
   }
 
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   object_ref context::eval(object_ref const o)
   {
     auto const expr(

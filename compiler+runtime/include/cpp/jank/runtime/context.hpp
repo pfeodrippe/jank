@@ -6,7 +6,7 @@
 #include <jank/util/folly_shim.hpp>
 
 #include <jtl/result.hpp>
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   #include <jank/analyze/processor.hpp>
   #include <jank/jit/processor.hpp>
 #endif
@@ -90,7 +90,7 @@ namespace jank::runtime
     object_ref eval_string(jtl::immutable_string_view const &code);
     jtl::result<void, error_ref> eval_cpp_string(jtl::immutable_string_view const &code) const;
     object_ref read_string(jtl::immutable_string_view const &code);
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     native_vector<analyze::expression_ref>
     analyze_string(jtl::immutable_string_view const &code, bool const eval = true);
 #endif
@@ -184,7 +184,7 @@ namespace jank::runtime
     obj::persistent_hash_map_ref get_thread_bindings() const;
     jtl::option<thread_binding_frame> current_thread_binding_frame();
 
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     /* The analyze processor is reused across evaluations so we can keep the semantic information
      * of previous code. This is essential for REPL use.
      *
@@ -217,7 +217,7 @@ namespace jank::runtime
     static native_unordered_map<std::thread::id, native_list<thread_binding_frame>>
       thread_binding_frames;
 
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     /* This must go last, since it'll try to access other bits in the runtime context during
      * its initialization and we need them to be ready. */
     jit::processor jit_prc;

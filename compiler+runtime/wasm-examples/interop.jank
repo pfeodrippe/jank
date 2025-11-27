@@ -1,0 +1,36 @@
+;; Test file for WASM eval and interop functionality
+
+(println "=== WASM Interop Test ===")
+
+;; Test 1: Basic eval
+(println "\n1. Testing basic eval:")
+(def result (eval '(+ 1 2 3)))
+(println "  (eval '(+ 1 2 3)) =>" result)
+
+;; Test 2: Define function at runtime
+(println "\n2. Testing runtime function definition:")
+(eval '(defn square [x] (* x x)))
+(println "  Defined square function")
+(println "  (square 5) =>" (square 5))
+(println "  (square 10) =>" (square 10))
+
+;; Test 3: Eval with variables
+(println "\n3. Testing eval with context:")
+(def multiplier 7)
+(def formula '(* multiplier 6))
+(println "  multiplier =" multiplier)
+(println "  (eval '(* multiplier 6)) =>" (eval formula))
+
+;; Test 4: Higher-order functions
+(println "\n4. Testing higher-order functions:")
+(eval '(defn make-adder [n] (fn [x] (+ x n))))
+(def add-5 (make-adder 5))
+(println "  Created add-5 function")
+(println "  (add-5 10) =>" (add-5 10))
+
+;; Test 5: Data structures
+(println "\n5. Testing data structures in eval:")
+(def vec-result (eval '(vec (map inc [1 2 3 4 5]))))
+(println "  (eval '(vec (map inc [1 2 3 4 5]))) =>" vec-result)
+
+(println "\n=== All tests completed successfully! ===")

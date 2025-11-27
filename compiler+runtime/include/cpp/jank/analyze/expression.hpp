@@ -177,4 +177,27 @@ namespace jank::analyze
   /* Captures both expressions and things which inherit from expression. */
   template <typename T>
   concept expression_like = std::convertible_to<T *, expression *>;
+
+  /* Dynamic cast for expression types using kind field.
+   * Returns nullptr if the expression is not of the requested type.
+   * Use this instead of llvm::dyn_cast for jank expression types. */
+  template <expression_like T>
+  T *expr_dyn_cast(expression * const e)
+  {
+    if(e && e->kind == T::expr_kind)
+    {
+      return static_cast<T *>(e);
+    }
+    return nullptr;
+  }
+
+  template <expression_like T>
+  T const *expr_dyn_cast(expression const * const e)
+  {
+    if(e && e->kind == T::expr_kind)
+    {
+      return static_cast<T const *>(e);
+    }
+    return nullptr;
+  }
 }
