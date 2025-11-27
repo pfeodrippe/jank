@@ -14,6 +14,7 @@ output_dir=""
 output_name="jank"
 skip_build=false
 run_after=false
+force_regenerate=false
 jank_source=""
 node_args=()
 verbose=false
@@ -35,6 +36,7 @@ Options:
   --output-dir DIR        Output directory for .js/.wasm/.html (default: build-dir)
   --output-name NAME      Base name for output files (default: jank, or source basename)
   --skip-build            Skip cmake build, only run em++ linking step
+  --force-regenerate      Force regeneration of C++ from jank source (ignore cache)
   --run                   Run the generated .js file with Node.js after building
   --node-args ARGS        Extra arguments to pass to Node.js (implies --run)
   -v, --verbose           Enable verbose output (shows compilation commands)
@@ -92,6 +94,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-build)
       skip_build=true
+      shift
+      ;;
+    --force-regenerate)
+      force_regenerate=true
       shift
       ;;
     --run)
@@ -165,8 +171,61 @@ compiled_objects=()
 entrypoint_cpp=""
 aot_mode=false  # Whether we're using true AOT compilation
 
-# Always include clojure.core if it exists
+# Detect native jank compiler early for cache invalidation
+native_jank="${native_build_dir}/jank"
+
+# Helper function to regenerate a core library if needed
+regenerate_core_lib() {
+  local lib_name="$1"
+  local cpp_file="$2"
+  local jank_source_path="$3"
+
+  if [[ ! -x "${native_jank}" ]]; then
+    echo "[emscripten-bundle] WARNING: Native jank not found, cannot regenerate ${lib_name}"
+    return 1
+  fi
+
+  local need_regen=false
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_regen=true
+    echo "[emscripten-bundle] Forcing ${lib_name} regeneration (--force-regenerate)..."
+  elif [[ ! -f "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[emscripten-bundle] ${lib_name} C++ doesn't exist, generating..."
+  elif [[ "${native_jank}" -nt "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[emscripten-bundle] Native jank newer than ${lib_name}, regenerating..."
+  elif [[ -f "${jank_source_path}" && "${jank_source_path}" -nt "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[emscripten-bundle] ${lib_name} source changed, regenerating..."
+  fi
+
+  if [[ "${need_regen}" == "true" ]]; then
+    echo "[emscripten-bundle] Regenerating ${lib_name} from ${jank_source_path}..."
+    rm -f "${cpp_file}"
+    if "${native_jank}" run \
+      --codegen wasm-aot \
+      --module-path src/jank \
+      --save-cpp \
+      --save-cpp-path "${cpp_file}" \
+      "${jank_source_path}" 2>&1; then
+      echo "[emscripten-bundle] ${lib_name} regeneration successful!"
+      return 0
+    else
+      echo "[emscripten-bundle] WARNING: ${lib_name} regeneration failed!"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# Regenerate clojure.core if needed
 clojure_core_cpp="${output_dir}/clojure_core_generated.cpp"
+clojure_core_jank="${repo_root}/src/jank/clojure/core.jank"
+if [[ -f "${clojure_core_jank}" ]]; then
+  regenerate_core_lib "clojure.core" "${clojure_core_cpp}" "${clojure_core_jank}"
+fi
+
 if [[ -f "${clojure_core_cpp}" ]]; then
   echo "[emscripten-bundle] Found pre-compiled clojure.core: ${clojure_core_cpp}"
   compiled_objects+=("${clojure_core_cpp}")
@@ -175,8 +234,13 @@ else
   echo "[emscripten-bundle]          Run: ./build/jank run --codegen wasm-aot --save-cpp --save-cpp-path build-wasm/clojure_core_generated.cpp src/jank/clojure/core.jank"
 fi
 
-# Include clojure.set if it exists
+# Regenerate clojure.set if needed
 clojure_set_cpp="${output_dir}/clojure_set_generated.cpp"
+clojure_set_jank="${repo_root}/src/jank/clojure/set.jank"
+if [[ -f "${clojure_set_jank}" ]]; then
+  regenerate_core_lib "clojure.set" "${clojure_set_cpp}" "${clojure_set_jank}"
+fi
+
 if [[ -f "${clojure_set_cpp}" ]]; then
   echo "[emscripten-bundle] Found pre-compiled clojure.set: ${clojure_set_cpp}"
   compiled_objects+=("${clojure_set_cpp}")
@@ -188,7 +252,6 @@ if [[ -n "${jank_source}" ]]; then
     exit 1
   fi
 
-  native_jank="${native_build_dir}/jank"
   if [[ ! -x "${native_jank}" ]]; then
     echo "error: native jank compiler not found: ${native_jank}" >&2
     echo "       Build the native compiler first with ./bin/compile" >&2
@@ -209,11 +272,23 @@ if [[ -n "${jank_source}" ]]; then
   # The native jank compiler generates C++ code that em++ can compile to WASM
   cpp_output="${output_dir}/${module_name}_generated.cpp"
 
-  # Check if we need to regenerate C++ (source newer than generated, or generated doesn't exist)
+  # Check if we need to regenerate C++ (source newer than generated, generated doesn't exist, native jank changed, or forced)
   need_regenerate=false
-  if [[ ! -f "${cpp_output}" ]] || [[ "${jank_source}" -nt "${cpp_output}" ]]; then
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_regenerate=true
+    echo "[emscripten-bundle] Forcing C++ regeneration (--force-regenerate)..."
+  elif [[ ! -f "${cpp_output}" ]]; then
+    need_regenerate=true
+    echo "[emscripten-bundle] Generated C++ doesn't exist, need to generate..."
+  elif [[ "${jank_source}" -nt "${cpp_output}" ]]; then
     need_regenerate=true
     echo "[emscripten-bundle] Source changed, regenerating C++ from ${jank_source}..."
+  elif [[ "${native_jank}" -nt "${cpp_output}" ]]; then
+    need_regenerate=true
+    echo "[emscripten-bundle] Native jank compiler changed, regenerating C++ from ${jank_source}..."
+  fi
+
+  if [[ "${need_regenerate}" == "true" ]]; then
     # Remove old generated file to start fresh (jank appends to file)
     rm -f "${cpp_output}"
   else
@@ -569,12 +644,32 @@ compiled_object_files=()
 core_object_files=()  # Track core libs separately for prelinking
 user_object_files=()  # Track user code separately
 
+# Track native jank mtime for cache invalidation
+native_jank_mtime=""
+if [[ -n "${jank_source}" && -x "${native_jank}" ]]; then
+  native_jank_mtime=$(stat -f %m "${native_jank}" 2>/dev/null || stat -c %Y "${native_jank}" 2>/dev/null)
+fi
+
 for cpp_file in "${compiled_objects[@]}"; do
   if [[ -f "${cpp_file}" ]]; then
     obj_file="${cpp_file%.cpp}.o"
 
-    # Check if we need to recompile (source newer than object, or object doesn't exist)
-    if [[ ! -f "${obj_file}" ]] || [[ "${cpp_file}" -nt "${obj_file}" ]]; then
+    # Check if we need to recompile (source newer than object, object doesn't exist, or force regenerate)
+    need_recompile=false
+    if [[ "${force_regenerate}" == "true" ]]; then
+      need_recompile=true
+      echo "[emscripten-bundle] Forcing recompile of ${cpp_file} (--force-regenerate)..."
+    elif [[ ! -f "${obj_file}" ]]; then
+      need_recompile=true
+    elif [[ "${cpp_file}" -nt "${obj_file}" ]]; then
+      need_recompile=true
+      echo "[emscripten-bundle] C++ source changed, recompiling ${cpp_file}..."
+    elif [[ -n "${native_jank_mtime}" && -x "${native_jank}" && "${native_jank}" -nt "${obj_file}" ]]; then
+      need_recompile=true
+      echo "[emscripten-bundle] Native jank compiler changed, recompiling ${cpp_file}..."
+    fi
+
+    if [[ "${need_recompile}" == "true" ]]; then
       echo "[emscripten-bundle] Compiling ${cpp_file} to ${obj_file}..."
       em++ -c "${cpp_file}" -o "${obj_file}" \
         "${jank_include_flags[@]}" \
@@ -603,7 +698,10 @@ need_prelink=false
 
 if [[ "${PRELINK_RUNTIME:-1}" == "1" ]]; then
   # Check if prelinked runtime needs to be regenerated
-  if [[ ! -f "${prelinked_runtime}" ]]; then
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_prelink=true
+    echo "[emscripten-bundle] Forcing prelink regeneration (--force-regenerate)..."
+  elif [[ ! -f "${prelinked_runtime}" ]]; then
     need_prelink=true
     echo "[emscripten-bundle] Prelinked runtime doesn't exist, need to create..."
   else
@@ -613,6 +711,12 @@ if [[ "${PRELINK_RUNTIME:-1}" == "1" ]]; then
        [[ "${libgc}" -nt "${prelinked_runtime}" ]]; then
       need_prelink=true
       echo "[emscripten-bundle] Static libraries changed, need to relink runtime..."
+    fi
+
+    # Check if native jank changed (affects generated code)
+    if [[ -n "${native_jank_mtime}" && -x "${native_jank}" && "${native_jank}" -nt "${prelinked_runtime}" ]]; then
+      need_prelink=true
+      echo "[emscripten-bundle] Native jank compiler changed, need to relink runtime..."
     fi
 
     # Check core object files
@@ -683,7 +787,17 @@ if [[ -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
   entrypoint_obj="${entrypoint_cpp%.cpp}.o"
 
   # Check if we need to recompile entrypoint
-  if [[ ! -f "${entrypoint_obj}" ]] || [[ "${entrypoint_cpp}" -nt "${entrypoint_obj}" ]]; then
+  need_entrypoint_recompile=false
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_entrypoint_recompile=true
+    echo "[emscripten-bundle] Forcing entrypoint recompile (--force-regenerate)..."
+  elif [[ ! -f "${entrypoint_obj}" ]]; then
+    need_entrypoint_recompile=true
+  elif [[ "${entrypoint_cpp}" -nt "${entrypoint_obj}" ]]; then
+    need_entrypoint_recompile=true
+  fi
+
+  if [[ "${need_entrypoint_recompile}" == "true" ]]; then
     echo "[emscripten-bundle] Compiling entrypoint ${entrypoint_cpp} to ${entrypoint_obj}..."
     em++ -c "${entrypoint_cpp}" -o "${entrypoint_obj}" \
       "${jank_include_flags[@]}" \
@@ -844,6 +958,9 @@ output_wasm="${output_dir}/${output_name}.wasm"
 if [[ "${FAST_LINK:-}" == "1" ]]; then
   echo "[emscripten-bundle] FAST_LINK mode: Skipping link (using existing WASM)"
   need_relink=false
+elif [[ "${force_regenerate}" == "true" ]]; then
+  need_relink=true
+  echo "[emscripten-bundle] Forcing relink (--force-regenerate)..."
 elif [[ ! -f "${output_wasm}" ]]; then
   need_relink=true
   echo "[emscripten-bundle] Output WASM doesn't exist, need to link..."

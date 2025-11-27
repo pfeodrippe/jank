@@ -105,7 +105,8 @@ namespace jank
                   if(!has_exports)
                   {
                     cpp_out << "\n// WASM exports for ^:export vars\n";
-                    cpp_out << "// These functions can be called from JavaScript via ccall/cwrap\n\n";
+                    cpp_out
+                      << "// These functions can be called from JavaScript via ccall/cwrap\n\n";
                     has_exports = true;
                   }
 
@@ -118,16 +119,20 @@ namespace jank
                    * Uses double because JavaScript numbers are IEEE 754 doubles,
                    * and this avoids BigInt conversion issues with long long.
                    * Returns a double for the same reason. */
-                  cpp_out << "extern \"C\" double jank_export_" << munged_name << "(double arg) {\n";
+                  cpp_out << "extern \"C\" double jank_export_" << munged_name
+                          << "(double arg) {\n";
                   cpp_out << "  using namespace jank::runtime;\n";
-                  cpp_out << "  auto const var = __rt_ctx->find_var(\"" << ns_name << "\", \"" << var_name << "\");\n";
+                  cpp_out << "  auto const var = __rt_ctx->find_var(\"" << ns_name << "\", \""
+                          << var_name << "\");\n";
                   cpp_out << "  if(var.is_nil()) { return 0; }\n";
                   cpp_out << "  auto const fn = var->deref();\n";
-                  cpp_out << "  auto const boxed_arg = make_box<obj::integer>(static_cast<jank::i64>(arg));\n";
+                  cpp_out << "  auto const boxed_arg = "
+                             "make_box<obj::integer>(static_cast<jank::i64>(arg));\n";
                   cpp_out << "  auto const result = jank::runtime::dynamic_call(fn, boxed_arg);\n";
                   cpp_out << "  // Try to unbox the result as an integer\n";
                   cpp_out << "  auto const int_result = dyn_cast<obj::integer>(result);\n";
-                  cpp_out << "  if(!int_result.is_nil()) { return static_cast<double>(int_result->data); }\n";
+                  cpp_out << "  if(!int_result.is_nil()) { return "
+                             "static_cast<double>(int_result->data); }\n";
                   cpp_out << "  // Try to unbox as a real (double)\n";
                   cpp_out << "  auto const real_result = dyn_cast<obj::real>(result);\n";
                   cpp_out << "  if(!real_result.is_nil()) { return real_result->data; }\n";

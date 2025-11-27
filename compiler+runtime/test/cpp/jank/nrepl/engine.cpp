@@ -575,7 +575,8 @@ namespace jank::nrepl_server::asio
       /* cpp/raw function registration may not work in all environments */
       if(completions.empty())
       {
-        WARN("cpp/raw function completion not available (this may be expected in some environments)");
+        WARN(
+          "cpp/raw function completion not available (this may be expected in some environments)");
         return;
       }
 
@@ -645,9 +646,8 @@ namespace jank::nrepl_server::asio
       /* cpp/raw struct registration may not work in all environments */
       if(completions.empty())
       {
-        WARN(
-          "cpp/raw namespaced struct completion not available (this may be expected in some "
-          "environments)");
+        WARN("cpp/raw namespaced struct completion not available (this may be expected in some "
+             "environments)");
         return;
       }
 
