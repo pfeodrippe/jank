@@ -45,11 +45,17 @@ Currently, WASM jank has support for `clojure.core` and `clojure.set`. We need t
      - `index-of`, `last-index-of`
    - Note: Regex-based functions are not available in WASM (use string delimiters instead)
 
-### Need Support (Future)
-6. **clojure.test** (`test.jank`) - PRIORITY LOW/FUTURE
-   - Large library (28,995 bytes)
-   - Pure jank implementation
-   - Useful for running tests in WASM environment
+6. **clojure.test** (`test.jank`)
+   - Pure jank implementation (depends on clojure.template)
+   - Provides full testing framework in WASM
+   - ✅ WORKING
+   - Features available:
+     - `deftest`, `testing`, `is`, `are`
+     - `run-tests`, `run-test`, `run-all-tests`
+     - `thrown?` assertions
+     - Fixtures with `use-fixtures`
+     - Test reporting with `:pass`, `:fail`, `:error`
+   - Note: No regex-based `thrown-with-msg?` in WASM (regex not supported)
 
 ## Implementation Plan
 

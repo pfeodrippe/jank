@@ -1,0 +1,51 @@
+(ns test-clojure-test
+  (:require [clojure.test :refer [deftest is testing are run-tests]]))
+
+(println "Testing clojure.test in WASM")
+(println "================================")
+
+;; Basic tests
+(deftest test-basic-assertions
+  (testing "Basic equality"
+    (is (= 4 (+ 2 2)))
+    (is (= "hello" (str "hel" "lo")))
+
+    ;; Intentional failure.
+    (is (= 3 (+ 2 2))) )
+
+  (testing "Boolean assertions"
+    (is true)
+    (is (not false))
+    (is (> 5 3))))
+
+(deftest test-collections
+  (testing "Vector operations"
+    (is (= [1 2 3] (conj [1 2] 3)))
+    (is (= 3 (count [1 2 3]))))
+
+  (testing "Map operations"
+    (is (= {:a 1 :b 2} (assoc {:a 1} :b 2)))
+    (is (= 1 (:a {:a 1 :b 2})))))
+
+(deftest test-predicates
+  (testing "Type predicates"
+    (is (number? 42))
+    (is (string? "hello"))
+    (is (vector? [1 2 3]))
+    (is (map? {:a 1}))
+    (is (nil? nil))))
+
+(deftest test-are-macro
+  (testing "are macro for multiple assertions"
+    (are [x y] (= x y)
+      2 (+ 1 1)
+      4 (* 2 2)
+      6 (+ 1 2 3))))
+
+;; Run all tests
+(println "\nRunning tests...")
+(let [results (run-tests 'test-clojure-test)]
+  (println "\nResults:" results))
+
+(println "\n================================")
+(println "clojure.test works in WASM!")

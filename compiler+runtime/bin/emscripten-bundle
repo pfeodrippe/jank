@@ -282,6 +282,18 @@ if [[ -f "${clojure_template_cpp}" ]]; then
   compiled_objects+=("${clojure_template_cpp}")
 fi
 
+# Regenerate clojure.test if needed
+clojure_test_cpp="${output_dir}/clojure_test_generated.cpp"
+clojure_test_jank="${repo_root}/src/jank/clojure/test.jank"
+if [[ -f "${clojure_test_jank}" ]]; then
+  regenerate_core_lib "clojure.test" "${clojure_test_cpp}" "${clojure_test_jank}"
+fi
+
+if [[ -f "${clojure_test_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.test: ${clojure_test_cpp}"
+  compiled_objects+=("${clojure_test_cpp}")
+fi
+
 if [[ -n "${jank_source}" ]]; then
   if [[ ! -f "${jank_source}" ]]; then
     echo "error: jank source file not found: ${jank_source}" >&2
@@ -422,6 +434,7 @@ extern "C" {
   void* jank_load_string();
   void* jank_load_walk();
   void* jank_load_template__();  // 'template' is C++ keyword, gets munged
+  void* jank_load_test();
   void* jank_setup_clojure_core_for_wasm();
 
   // Dependency module init functions
@@ -496,6 +509,12 @@ static int jank_main(int argc, char const** argv) {
     jank_load_template__();  // 'template' is C++ keyword, gets munged
     __rt_ctx->module_loader.set_is_loaded("clojure.template");
     printf("[jank-wasm] clojure.template loaded!\\n");
+
+    // Load clojure.test if available
+    printf("[jank-wasm] Loading clojure.test...\\n");
+    jank_load_test();
+    __rt_ctx->module_loader.set_is_loaded("clojure.test");
+    printf("[jank-wasm] clojure.test loaded!\\n");
     printf("\\n");
 
     // Load dependencies
@@ -737,12 +756,15 @@ for cpp_file in "${compiled_objects[@]}"; do
 
     compiled_object_files+=("${obj_file}")
 
-    # Categorize: core libs (clojure.core, clojure.set, clojure.string, clojure.walk, clojure.template) vs user code
-    if [[ "${cpp_file}" == *"clojure_core_generated.cpp" ]] || \
-       [[ "${cpp_file}" == *"clojure_set_generated.cpp" ]] || \
-       [[ "${cpp_file}" == *"clojure_string_generated.cpp" ]] || \
-       [[ "${cpp_file}" == *"clojure_walk_generated.cpp" ]] || \
-       [[ "${cpp_file}" == *"clojure_template_generated.cpp" ]]; then
+    # Categorize: core libs (clojure.core, clojure.set, clojure.string, clojure.walk, clojure.template, clojure.test) vs user code
+    # Note: Use exact filename matches to avoid matching user files like "test_clojure_test_generated.cpp"
+    basename_cpp=$(basename "${cpp_file}")
+    if [[ "${basename_cpp}" == "clojure_core_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_set_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_string_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_walk_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_template_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_test_generated.cpp" ]]; then
       core_object_files+=("${obj_file}")
     else
       user_object_files+=("${obj_file}")
