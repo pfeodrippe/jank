@@ -138,9 +138,46 @@ emcc ggg_v2.cpp -o ggg_v2.wasm -sSIDE_MODULE=1 -O2 -fPIC
 - `test_eita_hot_reload.cjs` - Full jank hot-reload test
 - `hot_reload_demo.sh` - End-to-end demonstration
 
-## Patch Generator Script
+## Patch Generator Scripts
 
-Generate WASM hot-reload patches from simple jank expressions:
+### Automatic Patch Generator (NEW!)
+
+The `generate-wasm-patch-auto` script parses jank defn forms and automatically generates WASM patches:
+
+```bash
+cd /Users/pfeodrippe/dev/jank/compiler+runtime
+./bin/generate-wasm-patch-auto <input.jank> [--output-dir <dir>]
+
+# Example:
+./bin/generate-wasm-patch-auto patch.jank --output-dir ./patches
+```
+
+**Input file format:**
+```clojure
+(ns my-ns)
+
+(defn my-func [x]
+  (+ 49 x))
+
+(defn other-func [a b c]
+  (+ a b c))
+```
+
+**Supported Expressions:**
+- Integer literals: `42`, `-17`
+- Keywords: `:foo`, `:bar/baz`
+- Parameter references: `x`, `my-param`
+- Nested function calls: `(+ 1 (* 2 x))`
+- Namespaced calls: `(clojure.set/union a b)`
+- Multiple arities: `[a b c]`
+
+**Output:**
+- `<fn-name>_patch.cpp` - Generated C++ source
+- `<fn-name>_patch.wasm` - Compiled SIDE_MODULE (400-600 bytes)
+
+### Manual Patch Generator
+
+For simple expressions, use the manual generator:
 
 ```bash
 cd /Users/pfeodrippe/dev/jank/compiler+runtime
@@ -323,10 +360,155 @@ Successfully tested end-to-end hot-reload with `eita.jank` using REAL jank funct
 - `test_real_ggg_hot_reload.cjs` - Full test with real jank semantics
 
 **Remaining for Production:**
-- Auto-generate patches from jank source (compiler integration)
-- WebSocket server for browser-based eval
+- ✅ Auto-generate patches from jank source (`generate-wasm-patch-auto`)
+- ✅ WebSocket server for browser-based eval (`hot_reload_server.cjs`)
 
 ---
 
-*Last Updated: Nov 27, 2025*
-*FULL HOT-RELOAD WITH REAL JANK SEMANTICS WORKING!*
+## Browser Hot-Reload (NEW!)
+
+The complete browser hot-reload workflow is now available:
+
+### Quick Start
+
+```bash
+# 1. Build eita.jank with hot-reload support
+cd /Users/pfeodrippe/dev/jank/compiler+runtime
+HOT_RELOAD=1 ./bin/emscripten-bundle wasm-examples/eita.jank
+
+# 2. Start the hot-reload server
+cd /Users/pfeodrippe/dev/jank/wasm-clang-interpreter-test/hot-reload-test
+node hot_reload_server.cjs
+
+# 3. Open browser
+open http://localhost:8080/eita_hot_reload.html
+```
+
+### Server Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `http://localhost:8080` | HTTP server (serves HTML, JS, WASM) |
+| `ws://localhost:7888/repl` | WebSocket for browser hot-reload |
+| `localhost:7889` | nREPL server (for Emacs/CIDER) |
+| `POST http://localhost:8080/eval` | HTTP eval endpoint |
+
+### Connecting from Emacs
+
+```elisp
+;; M-x cider-connect
+;; Host: localhost
+;; Port: 7889
+```
+
+Then evaluate any `(defn ...)` form and watch it hot-reload in the browser!
+
+### Testing with curl
+
+```bash
+# Send a defn to trigger hot-reload
+curl -X POST -d '(ns eita) (defn ggg [v] (+ 100 v))' http://localhost:8080/eval
+```
+
+### Files
+
+| File | Description |
+|------|-------------|
+| `hot_reload_server.cjs` | Node.js server with HTTP, WebSocket, nREPL |
+| `eita_hot_reload.html` | Browser UI with embedded hot-reload client |
+| `start_hot_reload.sh` | Quick start script |
+
+---
+
+## Critical Emscripten Lesson: dlsym Symbol Caching
+
+**IMPORTANT:** Emscripten's `dlsym()` caches symbol lookups by name, NOT by module handle!
+
+### The Problem
+
+When loading multiple WASM side modules with the same symbol name (e.g., `jank_patch_symbols`),
+`dlsym()` returns the **first loaded** function pointer, even when called with a different module handle:
+
+```cpp
+// BROKEN - Both return the SAME function pointer!
+void* handle1 = dlopen("/tmp/patch_1.wasm", RTLD_NOW);
+void* fn1 = dlsym(handle1, "jank_patch_symbols");  // Gets v1
+
+void* handle2 = dlopen("/tmp/patch_2.wasm", RTLD_NOW);
+void* fn2 = dlsym(handle2, "jank_patch_symbols");  // STILL gets v1! (cached)
+```
+
+This is different from native dlopen/dlsym behavior where different handles return different symbols.
+
+### The Solution: Unique Symbol Names
+
+Each patch must have a **unique symbol name** to avoid the cache:
+
+```cpp
+// WORKING - Unique symbol names bypass the cache
+// patch_1.wasm exports: jank_patch_symbols_1, jank_eita_ggg_1
+// patch_2.wasm exports: jank_patch_symbols_2, jank_eita_ggg_2
+
+void* handle1 = dlopen("/tmp/patch_1.wasm", RTLD_NOW);
+void* fn1 = dlsym(handle1, "jank_patch_symbols_1");  // Gets v1
+
+void* handle2 = dlopen("/tmp/patch_2.wasm", RTLD_NOW);
+void* fn2 = dlsym(handle2, "jank_patch_symbols_2");  // Gets v2!
+```
+
+### Implementation
+
+The fix is implemented across the stack:
+
+1. **Patch Generator** (`bin/generate-wasm-patch-auto`):
+   - Accepts `--patch-id N` parameter
+   - Generates unique symbol names: `jank_patch_symbols_N`, `jank_<ns>_<fn>_N`
+
+2. **Server** (`hot_reload_server.cjs`):
+   - Increments patch counter for each new patch
+   - Passes `--patch-id` to generator
+   - Sends `symbolName` to browser with patch data
+
+3. **Browser** (`eita_hot_reload.html`):
+   - Receives `symbolName` from server
+   - Passes it to `jank_hot_reload_load_patch(path, symbolName)`
+
+4. **Runtime** (`hot_reload.cpp`):
+   - `load_patch()` accepts `symbol_name` parameter
+   - Uses provided name instead of hardcoded `"jank_patch_symbols"`
+
+### What Doesn't Work
+
+These approaches were tried and **do NOT fix** the caching issue:
+
+- ❌ `dlclose()` before `dlopen()` - dlsym cache persists
+- ❌ `RTLD_LOCAL` vs `RTLD_GLOBAL` - no effect on symbol cache
+- ❌ Different file paths - cache is by symbol name, not path
+- ❌ Clearing Emscripten's `DLFCN.loadedLibsByName` - doesn't affect dlsym
+
+### Example Generated Patch
+
+```cpp
+// Auto-generated with --patch-id 4
+// Unique function name to avoid symbol caching
+__attribute__((visibility("default")))
+void *jank_eita_ggg_4(void *v) {
+  return jank_call_var("clojure.core", "+", 2, (void*[]){jank_box_integer(111), v});
+}
+
+// Unique metadata export name
+__attribute__((visibility("default")))
+patch_symbol *jank_patch_symbols_4(int *count) {
+  static patch_symbol symbols[] = {
+    { "eita/ggg", "1", (void *)jank_eita_ggg_4 }
+  };
+  *count = 1;
+  return symbols;
+}
+```
+
+---
+
+*Last Updated: Nov 28, 2025*
+*FULL HOT-RELOAD WITH BROWSER + nREPL WORKING!*
+*Fixed: Emscripten dlsym caching with unique symbol names*

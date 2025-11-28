@@ -37,13 +37,14 @@ namespace jank::runtime
     return inst;
   }
 
-  int hot_reload_registry::load_patch(std::string const &module_path)
+  int hot_reload_registry::load_patch(std::string const &module_path,
+                                      std::string const &symbol_name)
   {
 #ifdef __EMSCRIPTEN__
-    printf("[hot-reload] Loading patch: %s\n", module_path.c_str());
+    printf("[hot-reload] Loading patch: %s (symbol: %s)\n", module_path.c_str(), symbol_name.c_str());
 
     /* Load the WASM side module via dlopen. */
-    void *handle = dlopen(module_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    void *handle = dlopen(module_path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if(!handle)
     {
       char const *error = dlerror();
@@ -51,13 +52,13 @@ namespace jank::runtime
       return -1;
     }
 
-    /* Get the patch metadata function. */
+    /* Get the patch metadata function using the UNIQUE symbol name. */
     patch_symbols_fn get_symbols
-      = reinterpret_cast<patch_symbols_fn>(dlsym(handle, "jank_patch_symbols"));
+      = reinterpret_cast<patch_symbols_fn>(dlsym(handle, symbol_name.c_str()));
 
     if(!get_symbols)
     {
-      printf("[hot-reload] Warning: No jank_patch_symbols found in %s\n", module_path.c_str());
+      printf("[hot-reload] Warning: Symbol %s not found in %s\n", symbol_name.c_str(), module_path.c_str());
       printf("[hot-reload] This patch may need manual symbol registration.\n");
       dlclose(handle);
       return -1;
@@ -223,9 +224,9 @@ namespace jank::runtime
 #ifdef __EMSCRIPTEN__
     EMSCRIPTEN_KEEPALIVE
 #endif
-    int jank_hot_reload_load_patch(char const *path)
+    int jank_hot_reload_load_patch(char const *path, char const *symbol_name)
     {
-      return hot_reload_registry::instance().load_patch(path);
+      return hot_reload_registry::instance().load_patch(path, symbol_name);
     }
 
 #ifdef __EMSCRIPTEN__

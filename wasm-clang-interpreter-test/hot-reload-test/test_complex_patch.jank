@@ -1,0 +1,17 @@
+(ns test-ns)
+
+;; Nested arithmetic: (+ 1 (* 2 x))
+(defn nested-math [x]
+  (+ 1 (* 2 x)))
+
+;; Multiple args: (+ a b c)
+(defn add-three [a b c]
+  (+ a b c))
+
+;; Keyword in println: (println :hello x)
+(defn greet [x]
+  (println :greeting x))
+
+;; Using clojure.set/union
+(defn test-union [x]
+  (clojure.set/union x x))

@@ -28,7 +28,26 @@ namespace jank::runtime
    *       - Compiles to WASM side module
    *       - Sends patch to browser
    *
-   * See: /hot-reload-test/README.md for proof of concept
+   * CRITICAL: Emscripten dlsym Symbol Caching
+   * ==========================================
+   * Emscripten's dlsym() caches symbol lookups BY NAME, not by module handle!
+   * This means loading multiple patches with the same symbol name (e.g.,
+   * "jank_patch_symbols") will always return the FIRST loaded function pointer,
+   * even when using different module handles.
+   *
+   * SOLUTION: Each patch MUST have a unique symbol name, e.g.:
+   *   - jank_patch_symbols_1, jank_patch_symbols_2, etc.
+   *   - jank_eita_ggg_1, jank_eita_ggg_2, etc.
+   *
+   * The server passes --patch-id to the generator, which creates unique symbols.
+   * The browser then passes the symbol name to load_patch().
+   *
+   * What DOESN'T work:
+   *   - dlclose() before dlopen() - cache persists
+   *   - RTLD_LOCAL vs RTLD_GLOBAL - no effect
+   *   - Different file paths - cache is by symbol name
+   *
+   * See: /hot-reload-test/README.md for full documentation
    */
   class hot_reload_registry
   {
@@ -50,7 +69,7 @@ namespace jank::runtime
      *
      * Returns 0 on success, -1 on error.
      */
-    int load_patch(std::string const &module_path);
+    int load_patch(std::string const &module_path, std::string const &symbol_name);
 
     /* Register a symbol from a loaded patch.
      * This creates a callable object and binds it to the var.
@@ -90,9 +109,10 @@ namespace jank::runtime
   {
     /* Load a patch module from the virtual filesystem.
      * Path should be like "/tmp/patch_123.wasm".
+     * symbol_name is the unique symbol to look for (e.g. "jank_patch_symbols_123").
      * Returns 0 on success, -1 on error.
      */
-    int jank_hot_reload_load_patch(char const *path);
+    int jank_hot_reload_load_patch(char const *path, char const *symbol_name);
 
     /* Get statistics about loaded patches.
      * Returns JSON string (caller must free).

@@ -273,18 +273,29 @@ emcc patch.cpp -o patch.wasm \
 
 **Completed:**
 1. ✅ Runtime helper functions exported (`jank_box_integer`, `jank_unbox_integer`)
-2. ✅ Patch generator script (`bin/generate-wasm-patch`)
+2. ✅ Manual patch generator script (`bin/generate-wasm-patch`)
 3. ✅ End-to-end hot-reload tested and working
+4. ✅ **Automatic patch generator** (`bin/generate-wasm-patch-auto`) - WORKING!
+   - Parses jank (defn ...) forms automatically
+   - Generates C++ using runtime helpers
+   - Supports nested expressions, keywords, multiple arities
+   - Compiles to WASM SIDE_MODULE (400-600 bytes)
+   - Test: `node test_auto_patch.cjs` passes!
 
 **Future Work:**
-1. **Full jank compiler integration** - Generate patches from arbitrary jank code
-2. **More runtime helpers** - `jank_box_string`, `jank_call_fn`, etc.
+1. **Full jank compiler integration** - Use jank's AST for more complex expressions (let, if, loops)
+2. **More runtime helpers** - Vectors, maps, lazy sequences
 3. **WebSocket server** - Enable browser-based eval
 4. **Multi-function patches** - Support multiple functions in one patch
 
-**Quick Test Command:**
+**Quick Test Commands:**
 ```bash
-# Generate and test a patch
+# Test auto-generated patches (NEW!)
+cd /Users/pfeodrippe/dev/jank/wasm-clang-interpreter-test/hot-reload-test
+../../compiler+runtime/bin/generate-wasm-patch-auto test_auto_patch.jank --output-dir ./auto_patches
+node test_auto_patch.cjs
+
+# Or use the manual generator for simple expressions
 cd /Users/pfeodrippe/dev/jank/compiler+runtime
 ./bin/generate-wasm-patch eita/ggg 1 "(+ 49 v)"
 cp ggg_patch.wasm /path/to/test/
