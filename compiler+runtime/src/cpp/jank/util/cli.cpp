@@ -47,12 +47,14 @@ namespace jank::util::cli
       ->check(CLI::Range(0, 3));
 
     std::map<std::string, codegen_type> const codegen_types{
-      {  "llvm-ir",  codegen_type::llvm_ir },
-      {      "cpp",      codegen_type::cpp },
-      { "wasm-aot", codegen_type::wasm_aot }
+      {    "llvm-ir",    codegen_type::llvm_ir },
+      {        "cpp",        codegen_type::cpp },
+      {   "wasm-aot",   codegen_type::wasm_aot },
+      { "wasm-patch", codegen_type::wasm_patch }
     };
     cli.add_option("--codegen", opts.codegen, "The type of code generation to use.")
-      ->transform(CLI::CheckedTransformer(codegen_types).description("{llvm-ir,cpp,wasm-aot}"))
+      ->transform(
+        CLI::CheckedTransformer(codegen_types).description("{llvm-ir,cpp,wasm-aot,wasm-patch}"))
       ->default_str(make_default(codegen_type_str(opts.codegen)));
     cli.add_flag("--save-cpp",
                  opts.save_cpp,

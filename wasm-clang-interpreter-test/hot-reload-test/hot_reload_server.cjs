@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 // jank WASM Hot-Reload Server
 //
-// This server:
+// This server is a thin proxy that:
 // 1. Serves static files (HTML, JS, WASM) for the browser
 // 2. Accepts WebSocket connections from browsers at /repl
 // 3. Accepts nREPL connections from editors (Emacs, etc.)
-// 4. When code is evaluated, generates WASM patch and broadcasts to browsers
+// 4. Forwards all nREPL ops to jank's native nREPL server
+// 5. When a defn is evaluated, asks jank to generate C++ code, compiles to WASM, and broadcasts to browsers
+//
+// IMPORTANT: jank must be running with --server flag for this to work:
+//   ./build/jank repl --server
 //
 // Usage: node hot_reload_server.cjs
 // Then open: http://localhost:8080/eita_hot_reload.html
-// Connect nREPL from Emacs: M-x cider-connect localhost:7888
+// Connect nREPL from Emacs: M-x cider-connect localhost:7889
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
 const net = require('net');
 
 // Try to load WebSocket library
@@ -110,12 +114,25 @@ const bencode = {
 const HTTP_PORT = 8080;
 const WS_PORT = 7888;
 const NREPL_PORT = 7889;
+const JANK_NREPL_PORT = process.env.JANK_NREPL_PORT || 5555;
 
 // Paths
 const BASE_DIR = __dirname;
 const JANK_DIR = '/Users/pfeodrippe/dev/jank/compiler+runtime';
 const WASM_BUILD_DIR = path.join(JANK_DIR, 'build-wasm');
-const PATCH_GENERATOR = path.join(JANK_DIR, 'bin/generate-wasm-patch-auto');
+
+// emcc compilation flags for WASM patches
+const EMCC_FLAGS = [
+  '-sSIDE_MODULE=1',
+  '-O2',
+  '-fPIC',
+  '-std=c++20',
+  '-I' + path.join(JANK_DIR, 'include/cpp'),
+  '-I' + path.join(JANK_DIR, 'third-party/jtl/include'),
+  '-I' + path.join(JANK_DIR, 'third-party/bpptree/include'),
+  '-I' + path.join(JANK_DIR, 'third-party/immer'),
+  '-I' + path.join(JANK_DIR, 'third-party/magic_enum/include')
+];
 
 // Connected browser clients
 const browserClients = new Set();
@@ -278,105 +295,208 @@ function handleBrowserMessage(ws, msg) {
   }
 }
 
-// ============== Patch Generation ==============
+// ============== jank nREPL Client ==============
+
+// Connection to jank native nREPL server
+let jankConnection = null;
+let jankMessageId = 0;
+let jankPendingCallbacks = new Map();
+let jankSessionId = null;
+
+function connectToJank() {
+  if (jankConnection && !jankConnection.destroyed) {
+    return Promise.resolve(jankConnection);
+  }
+
+  return new Promise((resolve, reject) => {
+    console.log(`[JANK] Connecting to jank nREPL at localhost:${JANK_NREPL_PORT}...`);
+
+    const socket = net.createConnection({ port: JANK_NREPL_PORT, host: 'localhost' }, () => {
+      console.log('[JANK] Connected to jank nREPL server');
+      jankConnection = socket;
+
+      // Clone a session first
+      sendJankMessage({ op: 'clone' }, (response) => {
+        jankSessionId = response['new-session']?.toString() || 'default-session';
+        console.log(`[JANK] Got session: ${jankSessionId}`);
+        resolve(socket);
+      });
+    });
+
+    let buffer = Buffer.alloc(0);
+
+    socket.on('data', (data) => {
+      buffer = Buffer.concat([buffer, data]);
+
+      // Try to decode bencode messages
+      while (buffer.length > 0) {
+        const result = bencode.decode(buffer);
+        if (!result) break;
+
+        buffer = buffer.slice(result.end);
+        handleJankResponse(result.value);
+      }
+    });
+
+    socket.on('error', (err) => {
+      console.error(`[JANK] Connection error: ${err.message}`);
+      jankConnection = null;
+      reject(err);
+    });
+
+    socket.on('close', () => {
+      console.log('[JANK] Connection closed');
+      jankConnection = null;
+    });
+  });
+}
+
+function sendJankMessage(msg, callback) {
+  const id = `msg-${++jankMessageId}`;
+  msg.id = id;
+  if (jankSessionId && !msg.session) {
+    msg.session = jankSessionId;
+  }
+
+  jankPendingCallbacks.set(id, callback);
+
+  const encoded = bencode.encode(msg);
+  jankConnection.write(encoded);
+}
+
+function handleJankResponse(msg) {
+  const id = msg.id?.toString();
+  if (!id) return;
+
+  const callback = jankPendingCallbacks.get(id);
+  if (callback) {
+    // Check if response is complete (has status with done)
+    const status = msg.status;
+    if (status && Array.isArray(status) && status.some(s => s.toString() === 'done')) {
+      jankPendingCallbacks.delete(id);
+    }
+    callback(msg);
+  }
+}
+
+// ============== Patch Generation (via jank nREPL) ==============
 
 // Patch counter to ensure unique filenames
 let patchCounter = 0;
 
+// Generate WASM patch using jank's compiler via nREPL
 function generatePatch(code, callback) {
   const startTime = Date.now();
   const patchId = ++patchCounter;
 
-  // Extract namespace from code, or default to 'eita'
-  let namespace = 'eita';
-  const nsMatch = code.match(/\(ns\s+([a-zA-Z0-9._-]+)/);
-  if (nsMatch) {
-    namespace = nsMatch[1];
-  } else {
-    // No namespace found, prepend it
-    code = `(ns ${namespace})\n\n${code}`;
-  }
+  console.log(`[PATCH] Generating patch via jank (patch ${patchId})...`);
 
-  // Use unique directory per patch to completely avoid caching
+  connectToJank()
+    .then(() => {
+      // Send wasm-compile-patch op to jank
+      sendJankMessage({
+        op: 'wasm-compile-patch',
+        code: code,
+        'patch-id': patchId.toString()
+      }, (response) => {
+        // Check for errors
+        if (response.err) {
+          console.error(`[PATCH] jank error: ${response.err}`);
+          stats.errors++;
+          callback(response.err.toString(), null);
+          return;
+        }
+
+        // We may get multiple responses, wait for the one with cpp-code
+        if (!response['cpp-code']) {
+          return; // Wait for the next response
+        }
+
+        const cppCode = response['cpp-code'].toString();
+        const varName = response['var-name']?.toString() || 'unknown';
+        const nsName = response['ns-name']?.toString() || 'user';
+        const responsePatchId = response['patch-id']?.toString() || patchId.toString();
+
+        console.log(`[PATCH] Got C++ from jank (${cppCode.length} bytes) for ${nsName}/${varName}`);
+
+        // Compile C++ to WASM using emcc
+        compileCppToWasm(cppCode, nsName, responsePatchId, (err, wasmData) => {
+          if (err) {
+            stats.errors++;
+            callback(err, null);
+            return;
+          }
+
+          const genTime = Date.now() - startTime;
+          stats.patchesGenerated++;
+          stats.lastPatchTime = genTime;
+
+          const base64Data = wasmData.toString('base64');
+          const symbolName = `jank_patch_symbols_${responsePatchId}`;
+
+          console.log(`[PATCH] Generated WASM (${wasmData.length} bytes) in ${genTime}ms`);
+
+          callback(null, {
+            data: base64Data,
+            symbols: [{ name: varName, arity: '?' }],
+            symbolName,
+            size: wasmData.length,
+            time: genTime
+          });
+        });
+      });
+    })
+    .catch((err) => {
+      console.error(`[PATCH] Failed to connect to jank: ${err.message}`);
+      console.error('[PATCH] Make sure jank is running with --server flag:');
+      console.error('[PATCH]   ./build/jank repl --server');
+      stats.errors++;
+      callback(`jank nREPL not available: ${err.message}`, null);
+    });
+}
+
+// Compile C++ code to WASM using emcc (build step, not code generation)
+function compileCppToWasm(cppCode, nsName, patchId, callback) {
   const outputDir = path.join(BASE_DIR, 'generated_patches', `patch_${patchId}`);
-  const tempFile = path.join(outputDir, `${namespace}_input.jank`);
+  const cppPath = path.join(outputDir, `${nsName}_patch.cpp`);
+  const wasmPath = path.join(outputDir, `${nsName}_patch.wasm`);
 
-  // Create fresh output directory
+  // Create output directory
   if (fs.existsSync(outputDir)) {
     fs.rmSync(outputDir, { recursive: true });
   }
   fs.mkdirSync(outputDir, { recursive: true });
 
-  fs.writeFileSync(tempFile, code);
+  // Write C++ code
+  fs.writeFileSync(cppPath, cppCode);
+  console.log(`[PATCH] Wrote C++ to ${cppPath}`);
 
-  console.log(`[PATCH] Generating patch for:\n${code.substring(0, 100)}...`);
+  // Compile with emcc
+  const emccCmd = [
+    'emcc',
+    cppPath,
+    '-o', wasmPath,
+    ...EMCC_FLAGS
+  ].join(' ');
 
-  // Run patch generator with unique patch ID
+  console.log(`[PATCH] Compiling with emcc...`);
+
   try {
-    const result = execSync(
-      `"${PATCH_GENERATOR}" "${tempFile}" --output-dir "${outputDir}" --patch-id "${patchId}"`,
-      { encoding: 'utf-8', timeout: 30000 }
-    );
+    execSync(emccCmd, { encoding: 'utf-8', timeout: 60000, stdio: 'pipe' });
 
-    console.log(`[PATCH] Generator output: ${result}`);
-
-    // Extract the patch ID from the output (should match what we passed)
-    const patchIdMatch = result.match(/PATCH_ID=(\d+)/);
-    const actualPatchId = patchIdMatch ? patchIdMatch[1] : patchId;
-    const symbolName = `jank_patch_symbols_${actualPatchId}`;
-    console.log(`[PATCH] Using symbol name: ${symbolName}`);
-
-    // Find generated .wasm file
-    const wasmFiles = fs.readdirSync(outputDir)
-      .filter(f => f.endsWith('_patch.wasm'))
-      .map(f => ({
-        name: f,
-        time: fs.statSync(path.join(outputDir, f)).mtime.getTime()
-      }))
-      .sort((a, b) => b.time - a.time);
-
-    if (wasmFiles.length === 0) {
-      throw new Error('No .wasm file generated');
+    if (!fs.existsSync(wasmPath)) {
+      callback('emcc produced no output', null);
+      return;
     }
 
-    const wasmPath = path.join(outputDir, wasmFiles[0].name);
     const wasmData = fs.readFileSync(wasmPath);
-    const base64Data = wasmData.toString('base64');
-
-    const genTime = Date.now() - startTime;
-    stats.patchesGenerated++;
-    stats.lastPatchTime = genTime;
-
-    console.log(`[PATCH] Generated ${wasmFiles[0].name} (${wasmData.length} bytes) in ${genTime}ms`);
-
-    // Extract symbol info from corresponding .cpp file
-    const cppPath = wasmPath.replace('.wasm', '.cpp');
-    let symbols = [];
-    if (fs.existsSync(cppPath)) {
-      const cppContent = fs.readFileSync(cppPath, 'utf-8');
-      const match = cppContent.match(/\{ "([^"]+)", "(\d+)"/);
-      if (match) {
-        symbols = [{ name: match[1], arity: match[2] }];
-      }
-    }
-
-    callback(null, {
-      data: base64Data,
-      symbols,
-      symbolName,  // The unique symbol name to look for
-      size: wasmData.length,
-      time: genTime
-    });
-
+    callback(null, wasmData);
   } catch (err) {
-    stats.errors++;
-    console.error(`[PATCH] Error: ${err.message}`);
-    callback(err.message, null);
-  } finally {
-    // Cleanup temp file
-    if (fs.existsSync(tempFile)) {
-      fs.unlinkSync(tempFile);
+    console.error(`[PATCH] emcc error: ${err.message}`);
+    if (err.stderr) {
+      console.error(`[PATCH] emcc stderr: ${err.stderr}`);
     }
+    callback(`emcc compilation failed: ${err.message}`, null);
   }
 }
 
@@ -385,7 +505,7 @@ function broadcastPatch(patchData) {
     type: 'patch',
     data: patchData.data,
     symbols: patchData.symbols,
-    symbolName: patchData.symbolName,  // Unique symbol name for dlsym
+    symbolName: patchData.symbolName,
     timestamp: Date.now()
   });
 
@@ -418,7 +538,7 @@ function handleEval(code, callback) {
   }
 }
 
-// ============== nREPL Server ==============
+// ============== nREPL Server (for editors) ==============
 
 const nreplSessions = new Map();
 let sessionCounter = 0;
@@ -438,13 +558,10 @@ const nreplServer = net.createServer((socket) => {
         const result = bencode.decode(buffer);
         if (!result) break;
 
-        // Slice the consumed bytes
         buffer = buffer.slice(result.end);
-
         handleNreplMessage(socket, result.value, sessionId);
       }
     } catch (e) {
-      // Incomplete message, wait for more data
       console.error('[nREPL] Parse error:', e.message);
     }
   });
@@ -459,100 +576,71 @@ const nreplServer = net.createServer((socket) => {
   });
 });
 
+// Forward all nREPL messages to jank's native nREPL server
 function handleNreplMessage(socket, msg, sessionId) {
   const op = msg.op?.toString();
   const id = msg.id?.toString() || '0';
+  const code = msg.code?.toString() || '';
 
   console.log(`[nREPL] op=${op} id=${id}`);
+  if (code) {
+    console.log(`[nREPL] code: ${code.substring(0, 80)}${code.length > 80 ? '...' : ''}`);
+  }
 
-  switch (op) {
-    case 'clone':
-      sendNreplResponse(socket, {
-        id,
-        'new-session': sessionId,
-        status: ['done']
-      });
-      break;
+  // Check if this is a defn that should trigger hot-reload
+  const isDefn = code.includes('(defn ') || code.includes('(defn^');
 
-    case 'describe':
-      sendNreplResponse(socket, {
-        id,
-        session: sessionId,
-        ops: {
-          clone: {},
-          close: {},
-          describe: {},
-          eval: {},
-          'load-file': {}
-        },
-        versions: {
-          'jank': '0.1.0',
-          'hot-reload': '1.0.0'
-        },
-        status: ['done']
-      });
-      break;
+  // Forward the message to jank's nREPL
+  forwardToJank(socket, msg, sessionId, (response) => {
+    // If this was an eval with a defn, also generate a WASM patch
+    if ((op === 'eval' || op === 'load-file') && isDefn) {
+      console.log(`[nREPL] Detected defn, generating WASM patch...`);
 
-    case 'eval':
-      let code = msg.code?.toString() || '';
-      const evalNs = msg.ns?.toString() || 'eita';
-      console.log(`[nREPL] Eval (ns=${evalNs}): ${code.substring(0, 100)}`);
-
-      // Prepend namespace if not already in code
-      if (!code.includes('(ns ')) {
-        code = `(ns ${evalNs})\n\n${code}`;
-      }
-
-      handleEval(code, (result, error) => {
-        if (error) {
-          sendNreplResponse(socket, {
-            id,
-            session: sessionId,
-            err: error,
-            status: ['done']
-          });
+      generatePatch(code, (err, patchData) => {
+        if (err) {
+          console.error(`[nREPL] Patch generation failed: ${err}`);
         } else {
-          sendNreplResponse(socket, {
-            id,
-            session: sessionId,
-            value: result,
-            status: ['done']
-          });
+          broadcastPatch(patchData);
         }
       });
-      break;
+    }
+  });
+}
 
-    case 'load-file':
-      const fileContent = msg.file?.toString() || '';
-      const fileName = msg['file-name']?.toString() || 'unknown.jank';
-      console.log(`[nREPL] Load file: ${fileName}`);
+// Forward a message to jank's native nREPL and relay responses back
+function forwardToJank(editorSocket, msg, sessionId, onComplete) {
+  connectToJank()
+    .then(() => {
+      const id = msg.id?.toString() || `fwd-${++jankMessageId}`;
 
-      handleEval(fileContent, (result, error) => {
-        sendNreplResponse(socket, {
-          id,
-          session: sessionId,
-          value: error || result,
-          status: ['done']
-        });
+      // Store callback to relay responses back to editor
+      jankPendingCallbacks.set(id, (response) => {
+        // Relay the response to the editor
+        sendNreplResponse(editorSocket, response);
+
+        // Check if this is the final response
+        const status = response.status;
+        if (status && Array.isArray(status) && status.some(s => s.toString() === 'done')) {
+          if (onComplete) onComplete(response);
+        }
       });
-      break;
 
-    case 'close':
-      sendNreplResponse(socket, {
-        id,
+      // Forward the message to jank
+      const encoded = bencode.encode(msg);
+      jankConnection.write(encoded);
+    })
+    .catch((err) => {
+      console.error(`[nREPL] Failed to forward to jank: ${err.message}`);
+      console.error('[nREPL] Make sure jank is running with --server flag:');
+      console.error('[nREPL]   ./build/jank repl --server');
+      // Send error back to editor
+      sendNreplResponse(editorSocket, {
+        id: msg.id?.toString() || '0',
         session: sessionId,
-        status: ['done']
+        err: `jank nREPL not available. Start with: ./build/jank repl --server`,
+        status: ['error', 'done']
       });
-      nreplSessions.delete(sessionId);
-      break;
-
-    default:
-      sendNreplResponse(socket, {
-        id,
-        session: sessionId,
-        status: ['error', 'unknown-op', 'done']
-      });
-  }
+    });
 }
 
 function sendNreplResponse(socket, msg) {
@@ -573,19 +661,23 @@ console.log('╠═════════════════════�
 console.log('║                                                            ║');
 console.log(`║  HTTP Server:     http://localhost:${HTTP_PORT}                    ║`);
 console.log(`║  WebSocket:       ws://localhost:${WS_PORT}/repl                   ║`);
-console.log(`║  nREPL:           localhost:${NREPL_PORT}                          ║`);
+console.log(`║  nREPL (editor):  localhost:${NREPL_PORT}                          ║`);
+console.log(`║  jank nREPL:      localhost:${JANK_NREPL_PORT} (REQUIRED)                ║`);
 console.log('║                                                            ║');
 console.log('║  Open in browser: http://localhost:8080/eita_hot_reload.html ║');
 console.log('║                                                            ║');
 console.log('║  Connect from Emacs:                                       ║');
 console.log('║    M-x cider-connect RET localhost RET 7889 RET            ║');
 console.log('║                                                            ║');
-console.log('║  Or send code directly:                                    ║');
-console.log('║    curl -X POST -d "(defn ggg [v] (+ 49 v))" \\             ║');
-console.log('║         http://localhost:8080/eval                         ║');
+console.log('║  IMPORTANT: jank must be running with --server:            ║');
+console.log('║    cd compiler+runtime && ./build/jank repl --server       ║');
 console.log('║                                                            ║');
 console.log('╚════════════════════════════════════════════════════════════╝');
 console.log('');
+
+wsServer.on('listening', () => {
+  console.log(`[WS] Server running on port ${WS_PORT}`);
+});
 
 httpServer.listen(HTTP_PORT, () => {
   console.log(`[HTTP] Server running on port ${HTTP_PORT}`);
@@ -595,16 +687,6 @@ nreplServer.listen(NREPL_PORT, () => {
   console.log(`[nREPL] Server running on port ${NREPL_PORT}`);
 });
 
-console.log(`[WS] Server running on port ${WS_PORT}`);
 console.log('');
 console.log('Waiting for connections...');
 console.log('');
-
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\nShutting down...');
-  httpServer.close();
-  wsServer.close();
-  nreplServer.close();
-  process.exit(0);
-});

@@ -693,6 +693,7 @@ if(jank_target_wasm)
       src/cpp/jank/analyze/pass/strip_source_meta.cpp
       # Codegen files
       src/cpp/jank/codegen/processor.cpp
+      src/cpp/jank/codegen/wasm_patch_processor.cpp
       # Evaluate
       src/cpp/jank/evaluate.cpp
       # Error handling for codegen
@@ -715,6 +716,7 @@ else()
     src/cpp/jank/error/aot.cpp
     src/cpp/jank/error/codegen.cpp
     src/cpp/jank/codegen/processor.cpp
+    src/cpp/jank/codegen/wasm_patch_processor.cpp
     src/cpp/jank/codegen/llvm_processor.cpp
     src/cpp/jank/nrepl_server/asio.cpp
     src/cpp/jank/nrepl_server/native_header_completion.cpp

@@ -19,7 +19,8 @@ namespace jank::util::cli
   {
     llvm_ir,
     cpp,
-    wasm_aot // Generates standalone C++ for WASM AOT compilation
+    wasm_aot,  // Generates standalone C++ for WASM AOT compilation
+    wasm_patch // Generates SIDE_MODULE patches for hot-reload
   };
 
   constexpr char const *codegen_type_str(codegen_type const type)
@@ -32,6 +33,8 @@ namespace jank::util::cli
         return "cpp";
       case codegen_type::wasm_aot:
         return "wasm-aot";
+      case codegen_type::wasm_patch:
+        return "wasm-patch";
       default:
         return "unknown";
     }

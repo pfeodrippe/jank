@@ -170,5 +170,23 @@ namespace jank::runtime
 
     /* Print objects (like println but returns nil). */
     void *jank_println(int argc, void **args);
+
+    /* Return nil value. */
+    void *jank_nil_value();
+
+#ifdef __EMSCRIPTEN__
+    /* Check if a value is truthy (non-nil, non-false). Returns 1 for truthy, 0 for falsy.
+     * Note: This is only for WASM - native builds use jank_truthy from c_api.h */
+    int jank_truthy(void *obj);
+#endif
+
+    /* Create a symbol. */
+    void *jank_make_symbol(char const *ns, char const *name);
+
+    /* Create a callable wrapper from a function pointer.
+     * This allows anonymous functions from patches to be passed to HOFs like mapv.
+     * The fn_ptr should have signature: void* (*)(void*) for arity 1, etc.
+     */
+    void *jank_make_fn_wrapper(void *fn_ptr, int arity);
   }
 } // namespace jank::runtime

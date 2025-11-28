@@ -99,6 +99,8 @@ namespace jank::runtime
            module_path.c_str());
     return 0;
 #else
+    (void)module_path;
+    (void)symbol_name;
     printf("[hot-reload] ERROR: Hot-reload is only supported in WASM builds\n");
     return -1;
 #endif
@@ -126,12 +128,13 @@ namespace jank::runtime
     std::string ns_name = qualified_name.substr(0, slash_pos);
     std::string sym_name = qualified_name.substr(slash_pos + 1);
 
-    /* Look up the namespace. */
-    auto ns = __rt_ctx->find_ns(make_box<obj::symbol>(ns_name));
+    /* Look up or create the namespace. */
+    auto ns_sym = make_box<obj::symbol>(ns_name);
+    auto ns = __rt_ctx->find_ns(ns_sym);
     if(ns.is_nil())
     {
-      printf("[hot-reload] ERROR: Namespace not found: %s\n", ns_name.c_str());
-      return -1;
+      printf("[hot-reload] Creating namespace: %s\n", ns_name.c_str());
+      ns = __rt_ctx->intern_ns(ns_sym);
     }
 
     /* Look up or create the var. */
@@ -467,6 +470,82 @@ namespace jank::runtime
     {
       /* Call clojure.core/println. */
       return jank_call_var("clojure.core", "println", argc, args);
+    }
+
+    /* ===== Additional helpers for complex expressions ===== */
+
+#ifdef __EMSCRIPTEN__
+    EMSCRIPTEN_KEEPALIVE
+#endif
+    void *jank_nil_value()
+    {
+      return jank_nil.erase();
+    }
+
+#ifdef __EMSCRIPTEN__
+    EMSCRIPTEN_KEEPALIVE
+#endif
+    void *jank_make_symbol(char const *ns, char const *name)
+    {
+      if(ns && ns[0])
+      {
+        return make_box<obj::symbol>(ns, name).erase();
+      }
+      return make_box<obj::symbol>(name).erase();
+    }
+
+    /* Create a callable wrapper from a function pointer.
+     * This allows anonymous functions from patches to be passed to HOFs like mapv.
+     * The fn_ptr should have signature: void* (*)(void*) for arity 1, etc. */
+#ifdef __EMSCRIPTEN__
+    EMSCRIPTEN_KEEPALIVE
+#endif
+    void *jank_make_fn_wrapper(void *fn_ptr, int arity)
+    {
+      using object_ref = runtime::object_ref;
+      obj::native_function_wrapper_ref wrapper;
+
+      switch(arity)
+      {
+        case 0:
+          {
+            using fn_type = object_ref (*)();
+            auto fn = reinterpret_cast<fn_type>(fn_ptr);
+            wrapper = make_box<obj::native_function_wrapper>(
+              obj::detail::function_type{ std::function<object_ref()>{ fn } });
+            break;
+          }
+        case 1:
+          {
+            using fn_type = object_ref (*)(object_ref);
+            auto fn = reinterpret_cast<fn_type>(fn_ptr);
+            wrapper = make_box<obj::native_function_wrapper>(
+              obj::detail::function_type{ std::function<object_ref(object_ref)>{ fn } });
+            break;
+          }
+        case 2:
+          {
+            using fn_type = object_ref (*)(object_ref, object_ref);
+            auto fn = reinterpret_cast<fn_type>(fn_ptr);
+            wrapper = make_box<obj::native_function_wrapper>(
+              obj::detail::function_type{ std::function<object_ref(object_ref, object_ref)>{ fn } });
+            break;
+          }
+        case 3:
+          {
+            using fn_type = object_ref (*)(object_ref, object_ref, object_ref);
+            auto fn = reinterpret_cast<fn_type>(fn_ptr);
+            wrapper = make_box<obj::native_function_wrapper>(obj::detail::function_type{
+              std::function<object_ref(object_ref, object_ref, object_ref)>{ fn } });
+            break;
+          }
+        default:
+          printf("[hot-reload] ERROR: jank_make_fn_wrapper only supports arity 0-3, got %d\n",
+                 arity);
+          return jank_nil.erase();
+      }
+
+      return wrapper.erase();
     }
   }
 } // namespace jank::runtime

@@ -646,6 +646,10 @@ namespace jank::nrepl_server::asio
       {
         return handle_analyze_last_stacktrace(msg);
       }
+      if(op == "wasm-compile-patch")
+      {
+        return handle_wasm_compile_patch(msg);
+      }
 
       return handle_unsupported(msg, "unknown-op");
     }
@@ -730,6 +734,8 @@ namespace jank::nrepl_server::asio
     std::vector<bencode::value::dict> handle_swap_middleware(message const &msg);
 
     std::vector<bencode::value::dict> handle_stdin(message const &msg);
+
+    std::vector<bencode::value::dict> handle_wasm_compile_patch(message const &msg);
 
     std::vector<bencode::value::dict>
     handle_unsupported(message const &msg, std::string_view reason)
@@ -2178,3 +2184,4 @@ namespace jank::nrepl_server::asio
 #include <jank/nrepl_server/ops/add_middleware.hpp>
 #include <jank/nrepl_server/ops/swap_middleware.hpp>
 #include <jank/nrepl_server/ops/stdin.hpp>
+#include <jank/nrepl_server/ops/wasm_compile_patch.hpp>

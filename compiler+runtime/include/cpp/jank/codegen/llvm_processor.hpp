@@ -79,7 +79,8 @@ namespace jank::codegen
     module,
     function,
     eval,
-    wasm_aot // Generates standalone C++ modules for WASM (no JIT)
+    wasm_aot,  // Generates standalone C++ modules for WASM (no JIT)
+    wasm_patch // Generates SIDE_MODULE patches for hot-reload (extern C, no headers)
   };
 
   constexpr char const *compilation_target_str(compilation_target const t)
@@ -94,6 +95,8 @@ namespace jank::codegen
         return "eval";
       case compilation_target::wasm_aot:
         return "wasm_aot";
+      case compilation_target::wasm_patch:
+        return "wasm_patch";
       default:
         return "unknown";
     }
