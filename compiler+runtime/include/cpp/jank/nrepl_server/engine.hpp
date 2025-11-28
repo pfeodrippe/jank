@@ -1516,7 +1516,7 @@ namespace jank::nrepl_server::asio
         }
       }
 
-      if(target_ns->name->name == "cpp")
+      if(query.qualifier.has_value() && query.qualifier.value() == "cpp")
       {
         auto const locked_globals{ __rt_ctx->global_cpp_functions.rlock() };
         for(auto const &[name, _] : *locked_globals)

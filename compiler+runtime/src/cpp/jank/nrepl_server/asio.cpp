@@ -14,6 +14,9 @@
 #include <thread>
 #include <utility>
 
+#define GC_THREADS
+#include <gc/gc.h>
+
 #ifndef BOOST_ERROR_CODE_HEADER_ONLY
   #define BOOST_ERROR_CODE_HEADER_ONLY
 #endif
@@ -215,7 +218,17 @@ namespace jank::nrepl_server::asio
       accept_connection();
 
       // Run io_context in a separate thread
-      io_thread_ = std::thread([this]() { io_context_.run(); });
+      // Must register with Boehm GC since this thread will allocate GC memory during eval
+      GC_allow_register_threads();
+      io_thread_ = std::thread([this]() {
+        GC_stack_base sb;
+        GC_get_stack_base(&sb);
+        GC_register_my_thread(&sb);
+
+        io_context_.run();
+
+        GC_unregister_my_thread();
+      });
     }
 
     ~server()

@@ -1,7 +1,7 @@
-#include <Interpreter/Compatibility.h>
-#include <clang/Interpreter/CppInterOp.h>
+#include <llvm/Support/Casting.h>
 
 #include <jank/codegen/processor.hpp>
+#include <jank/jit/processor.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core/truthy.hpp>

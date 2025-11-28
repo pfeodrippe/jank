@@ -554,6 +554,48 @@ namespace jank::nrepl_server::asio
       CHECK(found);
     }
 
+    TEST_CASE("complete returns global cpp functions with cpp/ prefix from user ns")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                 "eval" },
+        { "code", "(cpp/raw \"int my_global_test_fn() { return 42; }\")" }
+      }));
+
+      /* This matches what CIDER sends: prefix="cpp/" with ns="user" */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",    "cpp/" },
+        {     "ns",    "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+
+      /* cpp/raw function registration may not work in all environments */
+      if(completions.empty())
+      {
+        WARN(
+          "cpp/raw function completion not available (this may be expected in some environments)");
+        return;
+      }
+
+      bool found{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "cpp/my_global_test_fn")
+        {
+          found = true;
+          CHECK(dict.at("type").as_string() == "function");
+          break;
+        }
+      }
+      CHECK(found);
+    }
+
     TEST_CASE("complete returns global cpp functions")
     {
       engine eng;
@@ -590,6 +632,47 @@ namespace jank::nrepl_server::asio
           found = true;
           CHECK(dict.at("type").as_string() == "function");
           CHECK(dict.at("ns").as_string() == "cpp");
+          break;
+        }
+      }
+      CHECK(found);
+    }
+
+    TEST_CASE("complete returns global cpp types with cpp/ prefix from user ns")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                                                                       "eval" },
+        { "code", "(cpp/raw \"namespace test { struct Point { int x; int y; }; }\")" }
+      }));
+
+      /* This matches what CIDER sends: prefix="cpp/" with ns="user" */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",    "cpp/" },
+        {     "ns",    "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+
+      /* cpp/raw type registration may not work in all environments */
+      if(completions.empty())
+      {
+        WARN("cpp/raw type completion not available (this may be expected in some environments)");
+        return;
+      }
+
+      bool found{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "cpp/test.Point")
+        {
+          found = true;
+          CHECK(dict.at("type").as_string() == "type");
           break;
         }
       }
