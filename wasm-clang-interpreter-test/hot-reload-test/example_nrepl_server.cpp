@@ -20,9 +20,11 @@ using websocketpp::lib::bind;
 
 typedef websocketpp::server<websocketpp::config::asio> server;
 
-class HotReloadServer {
+class HotReloadServer
+{
 public:
-  HotReloadServer() {
+  HotReloadServer()
+  {
     // Set up server
     m_server.set_message_handler(bind(&HotReloadServer::on_message, this, ::_1, ::_2));
     m_server.set_open_handler(bind(&HotReloadServer::on_open, this, ::_1));
@@ -31,7 +33,8 @@ public:
     m_server.init_asio();
   }
 
-  void run(uint16_t port) {
+  void run(uint16_t port)
+  {
     m_server.listen(port);
     m_server.start_accept();
 
@@ -42,20 +45,24 @@ public:
 private:
   server m_server;
 
-  void on_open(websocketpp::connection_hdl hdl) {
+  void on_open(websocketpp::connection_hdl hdl)
+  {
     std::cout << "[jank-nrepl] Client connected\n";
   }
 
-  void on_close(websocketpp::connection_hdl hdl) {
+  void on_close(websocketpp::connection_hdl hdl)
+  {
     std::cout << "[jank-nrepl] Client disconnected\n";
   }
 
-  void on_message(websocketpp::connection_hdl hdl, server::message_ptr msg) {
+  void on_message(websocketpp::connection_hdl hdl, server::message_ptr msg)
+  {
     std::string payload = msg->get_payload();
     std::cout << "[jank-nrepl] Received: " << payload << "\n";
 
     // Parse JSON (simplified - use a real JSON library in production)
-    if (payload.find("\"type\":\"eval\"") != std::string::npos) {
+    if(payload.find("\"type\":\"eval\"") != std::string::npos)
+    {
       // Extract code (very naive parsing - use nlohmann/json in real code)
       size_t code_start = payload.find("\"code\":\"") + 8;
       size_t code_end = payload.find("\"", code_start);
@@ -66,16 +73,20 @@ private:
       // Compile and send patch
       std::vector<uint8_t> patch = compile_to_wasm_patch(code);
 
-      if (!patch.empty()) {
+      if(!patch.empty())
+      {
         send_patch(hdl, patch);
-      } else {
+      }
+      else
+      {
         send_error(hdl, "Compilation failed");
       }
     }
   }
 
   // Step 4: Server-side compilation
-  std::vector<uint8_t> compile_to_wasm_patch(const std::string& code) {
+  std::vector<uint8_t> compile_to_wasm_patch(std::string const &code)
+  {
     std::cout << "[jank-nrepl] Compiling: " << code << "\n";
 
     // STEP 1: Parse jank code
@@ -94,24 +105,22 @@ private:
 
     // STEP 4: Compile with emcc
     std::string temp_wasm = "/tmp/patch_" + generate_uuid() + ".wasm";
-    std::string cmd = "source ~/emsdk/emsdk_env.sh && emcc " + temp_cpp +
-                      " -o " + temp_wasm +
-                      " -sSIDE_MODULE=1 -O2 -fPIC 2>/dev/null";
+    std::string cmd = "source ~/emsdk/emsdk_env.sh && emcc " + temp_cpp + " -o " + temp_wasm
+      + " -sSIDE_MODULE=1 -O2 -fPIC 2>/dev/null";
 
     std::cout << "[jank-nrepl] Running: " << cmd << "\n";
 
     int result = system(cmd.c_str());
-    if (result != 0) {
+    if(result != 0)
+    {
       std::cerr << "[jank-nrepl] Compilation failed!\n";
       return {};
     }
 
     // STEP 5: Read binary
     std::ifstream wasm_file(temp_wasm, std::ios::binary);
-    std::vector<uint8_t> wasm_data(
-      (std::istreambuf_iterator<char>(wasm_file)),
-      std::istreambuf_iterator<char>()
-    );
+    std::vector<uint8_t> wasm_data((std::istreambuf_iterator<char>(wasm_file)),
+                                   std::istreambuf_iterator<char>());
 
     std::cout << "[jank-nrepl] Compiled patch: " << wasm_data.size() << " bytes\n";
 
@@ -122,7 +131,8 @@ private:
     return wasm_data;
   }
 
-  void send_patch(websocketpp::connection_hdl hdl, const std::vector<uint8_t>& patch) {
+  void send_patch(websocketpp::connection_hdl hdl, std::vector<uint8_t> const &patch)
+  {
     // Convert to base64
     std::string base64 = base64_encode(patch.data(), patch.size());
 
@@ -133,13 +143,15 @@ private:
     std::cout << "[jank-nrepl] Sent patch (" << patch.size() << " bytes)\n";
   }
 
-  void send_error(websocketpp::connection_hdl hdl, const std::string& error) {
+  void send_error(websocketpp::connection_hdl hdl, std::string const &error)
+  {
     std::string response = "{\"type\":\"error\",\"error\":\"" + error + "\"}";
     m_server.send(hdl, response, websocketpp::frame::opcode::text);
   }
 
   // Helper: Generate C++ from jank code
-  std::string generate_cpp_from_jank(const std::string& code) {
+  std::string generate_cpp_from_jank(std::string const &code)
+  {
     // This is a simplified example - real implementation would use jank's codegen
     //
     // For example, if code is: (defn ggg [v] (+ v 49))
@@ -175,47 +187,60 @@ private:
   }
 
   // Helpers
-  std::string generate_uuid() {
+  std::string generate_uuid()
+  {
     return std::to_string(std::rand());
   }
 
-  std::string base64_encode(const uint8_t* data, size_t len) {
+  std::string base64_encode(uint8_t const *data, size_t len)
+  {
     // Simplified base64 encoding - use a real library in production
-    static const char* base64_chars =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static char const *base64_chars
+      = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     std::string ret;
     int i = 0;
     uint8_t char_array_3[3];
     uint8_t char_array_4[4];
 
-    while (len--) {
+    while(len--)
+    {
       char_array_3[i++] = *(data++);
-      if (i == 3) {
+      if(i == 3)
+      {
         char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
         char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
         char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
         char_array_4[3] = char_array_3[2] & 0x3f;
 
-        for (i = 0; i < 4; i++)
+        for(i = 0; i < 4; i++)
+        {
           ret += base64_chars[char_array_4[i]];
+        }
         i = 0;
       }
     }
 
-    if (i) {
-      for (int j = i; j < 3; j++)
+    if(i)
+    {
+      for(int j = i; j < 3; j++)
+      {
         char_array_3[j] = '\0';
+      }
 
       char_array_4[0] = (char_array_3[0] & 0xfc) >> 2;
       char_array_4[1] = ((char_array_3[0] & 0x03) << 4) + ((char_array_3[1] & 0xf0) >> 4);
       char_array_4[2] = ((char_array_3[1] & 0x0f) << 2) + ((char_array_3[2] & 0xc0) >> 6);
 
-      for (int j = 0; j < i + 1; j++)
+      for(int j = 0; j < i + 1; j++)
+      {
         ret += base64_chars[char_array_4[j]];
+      }
 
-      while (i++ < 3)
+      while(i++ < 3)
+      {
         ret += '=';
+      }
     }
 
     return ret;
@@ -223,9 +248,10 @@ private:
 };
 
 // Main
-int main() {
+int main()
+{
   HotReloadServer server;
-  server.run(7888);  // Default hot-reload port
+  server.run(7888); // Default hot-reload port
   return 0;
 }
 
