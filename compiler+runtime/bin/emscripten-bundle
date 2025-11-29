@@ -691,7 +691,6 @@ jank_include_flags=(
 # Compiler flags for emscripten compatibility (must match CMakeLists.txt WASM build flags)
 jank_compile_flags=(
   -std=c++20
-  -DNDEBUG
   -D_LIBCPP_HAS_NO_INCOMPLETE_FORMAT
   -D_LIBCPP_HAS_NO_LOCALIZATION
   -DIMMER_HAS_LIBGC=1
@@ -705,11 +704,6 @@ jank_compile_flags=(
   -DJANK_TARGET_WASM=1
   -Wno-invalid-constexpr
 )
-
-# Add -fPIC for hot-reload mode (required for MAIN_MODULE dynamic linking)
-if [[ "${HOT_RELOAD:-}" == "1" ]]; then
-  jank_compile_flags+=(-fPIC)
-fi
 
 em_link_cmd=(
   em++
@@ -825,8 +819,6 @@ if [[ "${PRELINK_RUNTIME:-1}" == "1" ]]; then
     # Use em++ with -r flag to create a relocatable object file
     # This combines all the core runtime components into one file
     # Use --whole-archive to ensure all symbols from .a files are included
-    # NOTE: CppInterOp .so cannot be included here (no dynamic libs in prelinking)
-    # It will be added in the final link step instead
     em++ -r -o "${prelinked_runtime}" \
       -Wl,--whole-archive \
       "${libjank}" \
@@ -843,129 +835,6 @@ if [[ "${PRELINK_RUNTIME:-1}" == "1" ]]; then
   fi
 fi
 
-# Check if CppInterOp is available for WASM (to be added in final link)
-cppinterop_wasm_lib="$HOME/dev/jank/wasm-llvm-build/cppinterop-build/lib/libclangCppInterOp.a"
-llvm_lib_dir="$HOME/dev/jank/wasm-llvm-build/llvm-build-minimal/lib"
-cppinterop_link_flags=()
-if [[ -f "${cppinterop_wasm_lib}" ]]; then
-  echo "[emscripten-bundle] Will link CppInterOp WASM static library in final link step"
-  # Add CppInterOp and its Clang/LLVM dependencies in correct order
-  # Libraries from minimal LLVM build (WebAssembly-only target)
-  cppinterop_link_flags=(
-    "${cppinterop_wasm_lib}"
-    # Clang libraries (in dependency order)
-    "${llvm_lib_dir}/libclangInterpreter.a"
-    "${llvm_lib_dir}/libclangCodeGen.a"
-    "${llvm_lib_dir}/libclangFormat.a"
-    "${llvm_lib_dir}/libclangRewriteFrontend.a"
-    "${llvm_lib_dir}/libclangExtractAPI.a"
-    "${llvm_lib_dir}/libclangIndex.a"
-    "${llvm_lib_dir}/libclangInstallAPI.a"
-    "${llvm_lib_dir}/libclangAPINotes.a"
-    "${llvm_lib_dir}/libclangToolingInclusions.a"
-    "${llvm_lib_dir}/libclangToolingCore.a"
-    "${llvm_lib_dir}/libclangRewrite.a"
-    "${llvm_lib_dir}/libclangFrontendTool.a"
-    "${llvm_lib_dir}/libclangFrontend.a"
-    "${llvm_lib_dir}/libclangDriver.a"
-    "${llvm_lib_dir}/libclangOptions.a"
-    "${llvm_lib_dir}/libclangSerialization.a"
-    "${llvm_lib_dir}/libclangParse.a"
-    "${llvm_lib_dir}/libclangSema.a"
-    "${llvm_lib_dir}/libclangAnalysis.a"
-    "${llvm_lib_dir}/libclangAnalysisLifetimeSafety.a"
-    "${llvm_lib_dir}/libclangEdit.a"
-    "${llvm_lib_dir}/libclangAST.a"
-    "${llvm_lib_dir}/libclangASTMatchers.a"
-    "${llvm_lib_dir}/libclangBasic.a"
-    "${llvm_lib_dir}/libclangLex.a"
-    "${llvm_lib_dir}/libclangSupport.a"
-    # LLD linker libraries
-    "${llvm_lib_dir}/liblldWasm.a"
-    "${llvm_lib_dir}/liblldCommon.a"
-    # WebAssembly target libraries
-    "${llvm_lib_dir}/libLLVMWebAssemblyCodeGen.a"
-    "${llvm_lib_dir}/libLLVMWebAssemblyDesc.a"
-    "${llvm_lib_dir}/libLLVMWebAssemblyInfo.a"
-    "${llvm_lib_dir}/libLLVMWebAssemblyAsmParser.a"
-    "${llvm_lib_dir}/libLLVMWebAssemblyUtils.a"
-    "${llvm_lib_dir}/libLLVMWebAssemblyDisassembler.a"
-    # ORC JIT libraries
-    "${llvm_lib_dir}/libLLVMOrcJIT.a"
-    "${llvm_lib_dir}/libLLVMOrcDebugging.a"
-    "${llvm_lib_dir}/libLLVMOrcShared.a"
-    "${llvm_lib_dir}/libLLVMOrcTargetProcess.a"
-    "${llvm_lib_dir}/libLLVMJITLink.a"
-    "${llvm_lib_dir}/libLLVMRuntimeDyld.a"
-    "${llvm_lib_dir}/libLLVMExecutionEngine.a"
-    # Frontend libraries
-    "${llvm_lib_dir}/libLLVMFrontendOpenMP.a"
-    "${llvm_lib_dir}/libLLVMFrontendHLSL.a"
-    "${llvm_lib_dir}/libLLVMFrontendOffloading.a"
-    "${llvm_lib_dir}/libLLVMFrontendDriver.a"
-    "${llvm_lib_dir}/libLLVMFrontendAtomic.a"
-    "${llvm_lib_dir}/libLLVMFrontendDirective.a"
-    "${llvm_lib_dir}/libLLVMWindowsDriver.a"
-    # CodeGen and core LLVM libraries
-    "${llvm_lib_dir}/libLLVMCodeGen.a"
-    "${llvm_lib_dir}/libLLVMCodeGenTypes.a"
-    "${llvm_lib_dir}/libLLVMGlobalISel.a"
-    "${llvm_lib_dir}/libLLVMSelectionDAG.a"
-    "${llvm_lib_dir}/libLLVMAsmPrinter.a"
-    "${llvm_lib_dir}/libLLVMTarget.a"
-    "${llvm_lib_dir}/libLLVMPasses.a"
-    "${llvm_lib_dir}/libLLVMCoroutines.a"
-    "${llvm_lib_dir}/libLLVMLTO.a"
-    "${llvm_lib_dir}/libLLVMExtensions.a"
-    "${llvm_lib_dir}/libLLVMCFGuard.a"
-    "${llvm_lib_dir}/libLLVMCGData.a"
-    "${llvm_lib_dir}/libLLVMTargetParser.a"
-    "${llvm_lib_dir}/libLLVMScalarOpts.a"
-    "${llvm_lib_dir}/libLLVMInstCombine.a"
-    "${llvm_lib_dir}/libLLVMAggressiveInstCombine.a"
-    "${llvm_lib_dir}/libLLVMVectorize.a"
-    "${llvm_lib_dir}/libLLVMSandboxIR.a"
-    "${llvm_lib_dir}/libLLVMipo.a"
-    "${llvm_lib_dir}/libLLVMObjCARCOpts.a"
-    "${llvm_lib_dir}/libLLVMHipStdPar.a"
-    "${llvm_lib_dir}/libLLVMCoverage.a"
-    "${llvm_lib_dir}/libLLVMInstrumentation.a"
-    "${llvm_lib_dir}/libLLVMTransformUtils.a"
-    "${llvm_lib_dir}/libLLVMAnalysis.a"
-    "${llvm_lib_dir}/libLLVMOption.a"
-    "${llvm_lib_dir}/libLLVMLinker.a"
-    "${llvm_lib_dir}/libLLVMIRReader.a"
-    "${llvm_lib_dir}/libLLVMIRPrinter.a"
-    "${llvm_lib_dir}/libLLVMAsmParser.a"
-    "${llvm_lib_dir}/libLLVMObject.a"
-    "${llvm_lib_dir}/libLLVMObjectYAML.a"
-    "${llvm_lib_dir}/libLLVMTextAPI.a"
-    "${llvm_lib_dir}/libLLVMTextAPIBinaryReader.a"
-    "${llvm_lib_dir}/libLLVMBitReader.a"
-    "${llvm_lib_dir}/libLLVMBitWriter.a"
-    "${llvm_lib_dir}/libLLVMProfileData.a"
-    "${llvm_lib_dir}/libLLVMMC.a"
-    "${llvm_lib_dir}/libLLVMMCParser.a"
-    "${llvm_lib_dir}/libLLVMMCDisassembler.a"
-    "${llvm_lib_dir}/libLLVMCore.a"
-    "${llvm_lib_dir}/libLLVMBinaryFormat.a"
-    "${llvm_lib_dir}/libLLVMRemarks.a"
-    "${llvm_lib_dir}/libLLVMBitstreamReader.a"
-    # Debug info libraries
-    "${llvm_lib_dir}/libLLVMDebugInfoDWARF.a"
-    "${llvm_lib_dir}/libLLVMDebugInfoDWARFLowLevel.a"
-    "${llvm_lib_dir}/libLLVMDebugInfoCodeView.a"
-    "${llvm_lib_dir}/libLLVMDebugInfoMSF.a"
-    "${llvm_lib_dir}/libLLVMDebugInfoPDB.a"
-    "${llvm_lib_dir}/libLLVMDebugInfoBTF.a"
-    "${llvm_lib_dir}/libLLVMDebugInfoGSYM.a"
-    "${llvm_lib_dir}/libLLVMSymbolize.a"
-    # Base libraries (must be last)
-    "${llvm_lib_dir}/libLLVMSupport.a"
-    "${llvm_lib_dir}/libLLVMDemangle.a"
-  )
-fi
-
 # Add inputs to link command (either prelinked runtime + user code, or all separately)
 if [[ "${PRELINK_RUNTIME:-1}" == "1" && -f "${prelinked_runtime}" ]]; then
   # Fast path: Use prelinked runtime + user code only
@@ -980,51 +849,18 @@ if [[ "${PRELINK_RUNTIME:-1}" == "1" && -f "${prelinked_runtime}" ]]; then
   )
 
   # Add only user object files (core libs are in prelinked runtime)
-  if [[ ${#user_object_files[@]} -gt 0 ]]; then
-    for obj in "${user_object_files[@]}"; do
-      if [[ -f "${obj}" ]]; then
-        em_link_cmd+=("${obj}")
-      fi
-    done
-  fi
-
-  # Add CppInterOp library if available (must be in final link, not prelink)
-  if [[ ${#cppinterop_link_flags[@]} -gt 0 ]]; then
-    em_link_cmd+=("${cppinterop_link_flags[@]}")
-  fi
+  for obj in "${user_object_files[@]}"; do
+    if [[ -f "${obj}" ]]; then
+      em_link_cmd+=("${obj}")
+    fi
+  done
 else
   # Slow path: Link everything separately (original behavior)
-  # Rebuild em_link_cmd to properly group libraries for circular dependency resolution
-  if [[ ${#cppinterop_link_flags[@]} -gt 0 ]]; then
-    # With CppInterOp, we need --start-group/--end-group to handle circular deps
-    # between libjank.a (which uses LLVM symbols) and LLVM libraries
-    em_link_cmd=(
-      em++
-      -o "${output_dir}/${output_name}.js"
-      "${jank_include_flags[@]}"
-      "${jank_compile_flags[@]}"
-    )
-
-    # Add compiled object files first (they reference libjank)
-    for obj in "${compiled_object_files[@]}"; do
-      if [[ -f "${obj}" ]]; then
-        em_link_cmd+=("${obj}")
-      fi
-    done
-
-    # Wrap all static libraries in --start-group/--end-group
-    em_link_cmd+=("-Wl,--start-group")
-    em_link_cmd+=("${libjank}" "${libjankzip}" "${libgc}")
-    em_link_cmd+=("${cppinterop_link_flags[@]}")
-    em_link_cmd+=("-Wl,--end-group")
-  else
-    # No CppInterOp, use original behavior
-    for obj in "${compiled_object_files[@]}"; do
-      if [[ -f "${obj}" ]]; then
-        em_link_cmd+=("${obj}")
-      fi
-    done
-  fi
+  for obj in "${compiled_object_files[@]}"; do
+    if [[ -f "${obj}" ]]; then
+      em_link_cmd+=("${obj}")
+    fi
+  done
 fi
 
 # Compile entrypoint to .o for caching (if we have one)
@@ -1102,47 +938,6 @@ em_link_cmd+=(
   -frtti
 )
 
-# Embed system headers for CppInterOp interpreter (if CppInterOp is available)
-if [[ ${#cppinterop_link_flags[@]} -gt 0 ]]; then
-  echo "[emscripten-bundle] Embedding system headers for CppInterOp interpreter..."
-
-  # Find emscripten sysroot (try Homebrew first, then emsdk)
-  emsdk_sysroot=""
-  if [[ -d "/opt/homebrew/Cellar/emscripten/4.0.20/libexec/cache/sysroot" ]]; then
-    emsdk_sysroot="/opt/homebrew/Cellar/emscripten/4.0.20/libexec/cache/sysroot"
-    emsdk_clang_include="/opt/homebrew/Cellar/emscripten/4.0.20/libexec/llvm/lib/clang/22/include"
-  elif [[ -n "${EMSDK:-}" && -d "${EMSDK}/upstream/emscripten/cache/sysroot" ]]; then
-    emsdk_sysroot="${EMSDK}/upstream/emscripten/cache/sysroot"
-    emsdk_clang_include="${EMSDK}/upstream/emscripten/cache/sysroot/include/llvm/lib/clang/22/include"
-  fi
-
-  if [[ -n "${emsdk_sysroot}" && -d "${emsdk_sysroot}" ]]; then
-    # Embed C++ standard library headers
-    em_link_cmd+=(
-      --embed-file "${emsdk_sysroot}/include/c++/v1@/include/c++/v1"
-    )
-
-    # Embed Clang built-in headers
-    if [[ -d "${emsdk_clang_include}" ]]; then
-      em_link_cmd+=(
-        --embed-file "${emsdk_clang_include}@/include/clang/22/include"
-      )
-    fi
-
-    # Embed C library headers (selective - only common ones to reduce size)
-    if [[ -d "${emsdk_sysroot}/include" ]]; then
-      em_link_cmd+=(
-        --embed-file "${emsdk_sysroot}/include@/include"
-      )
-    fi
-
-    echo "[emscripten-bundle] Headers embedded from: ${emsdk_sysroot}"
-  else
-    echo "[emscripten-bundle] WARNING: Could not find emscripten sysroot for header embedding"
-    echo "[emscripten-bundle] Runtime eval may not work without system headers"
-  fi
-fi
-
 # Development mode (default): Use -O0 for fast linking and readable output
 # Set RELEASE=1 for production builds with optimization and minification
 if [[ "${RELEASE:-}" == "1" ]]; then
@@ -1166,32 +961,6 @@ fi
 em_link_cmd+=(
   -sEXPORT_ES6=1
 )
-
-# Hot-reload support for REPL-like development
-# Set HOT_RELOAD=1 to enable MAIN_MODULE mode for runtime function patching
-if [[ "${HOT_RELOAD:-}" == "1" ]]; then
-  echo "[emscripten-bundle] HOT-RELOAD MODE: Enabling dynamic linking (-sMAIN_MODULE=2)"
-  echo "[emscripten-bundle] This allows loading function patches at runtime via dlopen"
-  echo "[emscripten-bundle] WARNING: Bundle size will increase (~100-150MB)"
-  em_link_cmd+=(
-    -sMAIN_MODULE=2                     # Optimized dynamic linking
-    -sALLOW_TABLE_GROWTH=1              # Allow adding functions to indirect call table
-    -sEXPORTED_RUNTIME_METHODS=FS,stringToNewUTF8,ccall,cwrap,UTF8ToString
-    -sFILESYSTEM=1                      # Required for dlopen to work
-    -Wl,--allow-multiple-definition     # Handle bdwgc symbol conflicts
-    -sEXPORT_ALL=1                      # Export all symbols for dlsym
-  )
-elif [[ "${DYNAMIC_LINK:-}" == "1" ]]; then
-  # Legacy DYNAMIC_LINK mode (kept for backwards compatibility)
-  echo "[emscripten-bundle] EXPERIMENTAL: Enabling dynamic linking (-sMAIN_MODULE=1)"
-  echo "[emscripten-bundle] WARNING: This significantly increases WASM size!"
-  em_link_cmd+=(
-    -sMAIN_MODULE=1
-    -sEXPORT_ALL=1
-    # Allow duplicate symbols (bdwgc conflicts with libc malloc wrappers)
-    -Wl,--allow-multiple-definition
-  )
-fi
 
 # Experimental: Incremental linking support (not compatible with libgc)
 # Set INCREMENTAL_LINK=1 to try Emscripten's experimental incremental linker
