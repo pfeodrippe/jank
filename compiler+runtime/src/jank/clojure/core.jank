@@ -4337,17 +4337,6 @@
                  local
                  member)))))
 
-(defn native-header-functions
-  "Returns the native function names that back a :native-header alias in the
-   current namespace. Optionally filter by the provided prefix."
-  ([alias]
-   (native-header-functions alias ""))
-  ([alias prefix]
-   (throw-if (not (symbol? alias)) (str "Native alias must be a symbol: " alias))
-   (throw-if (not (string? prefix)) (str "Prefix must be a string: " prefix))
-   #?(:wasm (throw "Native C++ headers are not supported in WASM")
-      :jank (cpp/clojure.core_native.native_header_functions *ns* alias prefix))))
-
 (defn- prependss [x coll]
   (if (symbol? x)
     (cons x coll)
@@ -7790,3 +7779,15 @@ fails, attempts to require sym's namespace and retries."
   "Returns true if num is negative or positive infinity, else false"
   [num]
   (cpp/jank.runtime.is_infinite num))
+
+(defn native-header-functions
+  "Returns the native function names that back a :native-header alias.
+   Searches all namespaces to find the one containing the alias.
+   Optionally filter by the provided prefix."
+  ([alias]
+   (native-header-functions alias ""))
+  ([alias prefix]
+   (throw-if (not (symbol? alias)) (str "Native alias must be a symbol: " alias))
+   (throw-if (not (string? prefix)) (str "Prefix must be a string: " prefix))
+   #?(:wasm (throw "Native C++ headers are not supported in WASM")
+      :jank (cpp/clojure.core_native.native_header_functions nil alias prefix))))

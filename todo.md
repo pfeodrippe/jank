@@ -16,6 +16,10 @@
   - [x] call `ecs_init`
   - [x] static
   - [ ] autocompletion
+    - [x] global
+    - [ ] nested
+      - [ ] see if we can precompute info about a header
+    - [ ] (require '["flecs.h" :as f-w :scope "world"])
   - [ ] wasm
 - [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`
 - [ ] Fix implicit conversion
@@ -38,3 +42,4 @@
   - [ ] gather
   - [ ] complain if trying to use something ambiguous (e.g. aliasing or refering to a fn that has the same name in 2 namespaces)
 - [ ] vybe
+- [ ] jank bootstrapping

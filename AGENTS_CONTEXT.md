@@ -277,3 +277,91 @@ extern "C" void* jank_export_<munged_name>(void* arg)
 - Namespace mappings are accessed via `ns->get_mappings()` which returns a persistent_hash_map
 - Function name munging converts `-` to `_` etc. via `munge()`
 - Emscripten requires functions to be explicitly listed in `-sEXPORTED_FUNCTIONS` to be callable from JS
+
+---
+
+## Session: November 29, 2025
+
+### Task: nREPL Autocompletion for Nested C++ Type Members
+
+**Problem:** Autocomplete worked for top-level symbols like `flecs/world` and `flecs/type`, but not for their nested members like `flecs/world.defer_begin`.
+
+### Key Discoveries
+
+1. **nREPL Autocompletion Architecture:**
+   - `engine.hpp` contains the nREPL message handling including `handle_completions()` and `handle_complete()`
+   - Completion queries go through `prepare_completion_query()` → `collect_symbol_names()` → `make_completion_candidates()`
+   - For native C++ header aliases (like `flecs`), completion uses `native_header_index_.list_functions()`
+   - The `handle_complete` op (used by CIDER) calls `native_header_index_.contains()` to check if a candidate exists
+
+2. **Root Cause (Multiple Issues):**
+   - **Issue 1:** `list_functions()` used cached top-level symbols, but `enumerate_native_header_member_symbols()` was never called for nested member access
+   - **Issue 2:** `contains()` method also used the cache directly without handling nested member access
+   - **Issue 3:** `describe_native_header_function()` used `GetFunctionsUsingName(scope, symbol_name)` where `symbol_name` was `world.defer_begin`, but `GetFunctionsUsingName` expects just a function name, not a qualified member access
+
+3. **The `enumerate_native_header_member_symbols()` function already existed!**
+   - Located in `native_header_completion.cpp`
+   - It properly uses CppInterOp to enumerate members of a C++ type
+   - It was NOT being used in the `list_functions()` path for the "complete" op
+
+### Solution (Three Fixes)
+
+**Fix 1:** Modified `native_header_index.cpp` - `list_functions()`:
+- Added `parse_nested_prefix()` helper to detect member access patterns (e.g., `"world.defer_begin"` → `{"world", "defer_begin"}`)
+- When a dot is found in the prefix, it bypasses the cache and calls `enumerate_native_header_member_symbols()` directly
+
+**Fix 2:** Modified `native_header_index.cpp` - `contains()`:
+- Added same nested member access detection
+- For nested members, it calls `enumerate_native_header_member_symbols()` and checks if the name exists in the result
+
+**Fix 3:** Modified `engine.hpp` - `describe_native_header_function()`:
+- Added nested member access parsing
+- For `world.defer_begin`, it now:
+  1. Looks up the `world` type in the namespace scope
+  2. Uses that type scope to look up `defer_begin`
+
+### Test Infrastructure Added
+
+Created test header `compiler+runtime/include/cpp/test/nested_types.hpp` with:
+- `test::nested_types::world` struct with member functions like `defer_begin`, `defer_end`, etc.
+- `test::nested_types::entity` struct with member functions
+
+Added test case in `compiler+runtime/test/cpp/jank/nrepl/engine.cpp`:
+- `TEST_CASE("complete returns nested member functions of native header types")`
+- Tests that `nested-test/world.defer` returns `world.defer_begin` and `world.defer_end` completions
+
+### Files Modified
+- `compiler+runtime/src/cpp/jank/nrepl_server/native_header_index.cpp`
+- `compiler+runtime/include/cpp/jank/nrepl_server/engine.hpp`
+- `compiler+runtime/include/cpp/test/nested_types.hpp` (new)
+- `compiler+runtime/test/cpp/jank/nrepl/engine.cpp`
+
+### Commands Learned
+```bash
+# Build jank
+cd compiler+runtime && ./bin/compile
+
+# Run all tests
+./bin/test
+
+# Run specific test case
+./bin/test --test-case="*nested*"
+```
+
+### Key Files for Future Reference
+- `compiler+runtime/include/cpp/jank/nrepl_server/engine.hpp` - nREPL message handling
+- `compiler+runtime/include/cpp/jank/nrepl_server/native_header_index.hpp` - Header symbol index
+- `compiler+runtime/src/cpp/jank/nrepl_server/native_header_index.cpp` - Implementation
+- `compiler+runtime/src/cpp/jank/nrepl_server/native_header_completion.cpp` - Symbol enumeration using CppInterOp
+- `compiler+runtime/include/cpp/jank/nrepl_server/ops/complete.hpp` - The "complete" op handler (used by CIDER)
+- `compiler+runtime/include/cpp/jank/nrepl_server/ops/completions.hpp` - The "completions" op handler
+
+### Additional Fix: Crash on Complex Types (flecs::world)
+
+**Problem:** When trying to autocomplete `flecs/world.` in CIDER, the nREPL server crashed with `EXC_BAD_ACCESS` in `Cpp::GetAllCppNames()`.
+
+**Root Cause:** The `flecs::world` class is a complex C++ type with template instantiations and special declarations. When `Cpp::GetAllCppNames()` iterates over its declarations, some of them have invalid/null pointers, causing the crash in `clang::Decl::getNextDeclInContext()`.
+
+**Fix:** Added a check using `Cpp::IsComplete(type_scope)` before calling `Cpp::GetAllCppNames()`. Incomplete types (forward declarations, templates not yet instantiated, etc.) are now skipped, preventing the crash.
+
+**File Modified:** `compiler+runtime/src/cpp/jank/nrepl_server/native_header_completion.cpp`

@@ -353,15 +353,41 @@ namespace clojure::core_native
                                      object_ref const alias,
                                      object_ref const prefix)
   {
-    auto const ns_obj(try_object<ns>(current_ns));
     auto const alias_sym(try_object<obj::symbol>(alias));
-    auto const alias_data(ns_obj->find_native_alias(alias_sym));
-    if(!alias_data)
+    jtl::option<ns::native_alias> alias_data;
+
+    /* If current_ns is nil, search all namespaces for the alias. */
+    if(runtime::is_nil(current_ns))
     {
-      throw std::runtime_error{ util::format(
-        "Native alias '{}' is not registered in namespace '{}'",
-        alias_sym->to_string(),
-        ns_obj->name->to_string()) };
+      __rt_ctx->namespaces.withRLock([&](auto const &ns_map) {
+        for(auto const &pair : ns_map)
+        {
+          auto const ns_ptr = try_object<ns>(pair.second);
+          alias_data = ns_ptr->find_native_alias(alias_sym);
+          if(alias_data)
+          {
+            break;
+          }
+        }
+      });
+      if(!alias_data)
+      {
+        throw std::runtime_error{
+          util::format("Native alias '{}' not found in any namespace", alias_sym->to_string())
+        };
+      }
+    }
+    else
+    {
+      auto const ns_obj(try_object<ns>(current_ns));
+      alias_data = ns_obj->find_native_alias(alias_sym);
+      if(!alias_data)
+      {
+        throw std::runtime_error{ util::format(
+          "Native alias '{}' is not registered in namespace '{}'",
+          alias_sym->to_string(),
+          ns_obj->name->to_string()) };
+      }
     }
 
     auto const &alias_value(alias_data.unwrap());
@@ -384,6 +410,20 @@ namespace clojure::core_native
       runtime::detail::native_persistent_vector{ boxed.begin(), boxed.end() });
   }
 #endif // !JANK_TARGET_WASM
+
+  object_ref all_ns()
+  {
+    native_vector<object_ref> namespaces;
+    __rt_ctx->namespaces.withRLock([&](auto const &ns_map) {
+      namespaces.reserve(ns_map.size());
+      for(auto const &pair : ns_map)
+      {
+        namespaces.emplace_back(pair.second);
+      }
+    });
+    return make_box<obj::persistent_list>(
+      runtime::detail::native_persistent_list{ namespaces.rbegin(), namespaces.rend() });
+  }
 
   object_ref eval(object_ref const expr)
   {
@@ -644,6 +684,7 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
   intern_fn("register-native-header", &core_native::register_native_header);
   intern_fn("native-header-functions", &core_native::native_header_functions);
 #endif
+  intern_fn("all-ns", &core_native::all_ns);
   intern_fn("eval", &core_native::eval);
   intern_fn("hash-unordered-coll", &core_native::hash_unordered);
   intern_fn("read-string", &core_native::read_string);

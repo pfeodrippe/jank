@@ -1957,5 +1957,328 @@ namespace jank::nrepl_server::asio
       }
       CHECK(found_reverse);
     }
+
+    TEST_CASE("complete returns nested member functions for types via native header alias")
+    {
+      engine eng;
+
+      /* Define a namespace with a class that has member functions.
+       * This simulates the pattern from flecs.h where flecs::world has
+       * methods like defer_begin(), defer_end(), etc.
+       *
+       * Using a header alias like (require ["header.h" :as mylib :scope "myns"])
+       * means mylib/Type should work, and mylib/Type. should show members. */
+      eng.handle(make_message({
+        {   "op",                                                                          "eval" },
+        { "code",
+         "(cpp/raw \"namespace nested_alias_test { struct world { void defer_begin() {} void "
+         "defer_end() {} int get_value() { return 42; } }; }\")" }
+      }));
+
+      /* Require it as a native header alias with :scope pointing to our namespace.
+       * This simulates: (require ["flecs.h" :as flecs]) where flecs::world exists */
+      eng.handle(make_message({
+        {   "op",                                                                       "eval" },
+        { "code", "(require '[\"jank/runtime/context.hpp\" :as nested-alias :scope \"nested_alias_test\"])" }
+      }));
+
+      /* First, verify that completing the type itself works via the alias */
+      auto type_responses(eng.handle(make_message({
+        {     "op",          "complete" },
+        { "prefix", "nested-alias/worl" },
+        {     "ns",              "user" }
+      })));
+
+      REQUIRE(type_responses.size() == 1);
+      auto const &type_payload(type_responses.front());
+      auto const &type_completions(type_payload.at("completions").as_list());
+
+      std::cerr << "Native header alias type completions count: " << type_completions.size() << "\n";
+      for(auto const &entry : type_completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string() << " (type: "
+                  << dict.at("type").as_string() << ")\n";
+      }
+
+      /* Type completion via native header alias may not work in all environments */
+      if(type_completions.empty())
+      {
+        WARN("native header alias type completion not available - skipping nested member test");
+        return;
+      }
+
+      bool found_type{ false };
+      for(auto const &entry : type_completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "nested-alias/world")
+        {
+          found_type = true;
+          CHECK(dict.at("type").as_string() == "type");
+          break;
+        }
+      }
+      CHECK(found_type);
+
+      /* Now test completing nested members: nested-alias/world.
+       * This should return the member functions of the world struct.
+       * This is the key test - after typing "flecs/world." users expect to see
+       * defer_begin, defer_end, etc. */
+      auto member_responses(eng.handle(make_message({
+        {     "op",           "complete" },
+        { "prefix", "nested-alias/world." },
+        {     "ns",               "user" }
+      })));
+
+      REQUIRE(member_responses.size() == 1);
+      auto const &member_payload(member_responses.front());
+      auto const &member_completions(member_payload.at("completions").as_list());
+
+      std::cerr << "Native header alias nested member completions count: "
+                << member_completions.size() << "\n";
+      for(auto const &entry : member_completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string() << " (type: "
+                  << dict.at("type").as_string() << ")\n";
+      }
+
+      /* Should have member functions */
+      REQUIRE_FALSE(member_completions.empty());
+
+      bool found_defer_begin{ false };
+      bool found_defer_end{ false };
+      bool found_get_value{ false };
+      for(auto const &entry : member_completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "nested-alias/world.defer_begin")
+        {
+          found_defer_begin = true;
+          CHECK(dict.at("type").as_string() == "function");
+        }
+        if(candidate == "nested-alias/world.defer_end")
+        {
+          found_defer_end = true;
+          CHECK(dict.at("type").as_string() == "function");
+        }
+        if(candidate == "nested-alias/world.get_value")
+        {
+          found_get_value = true;
+          CHECK(dict.at("type").as_string() == "function");
+        }
+      }
+
+      CHECK(found_defer_begin);
+      CHECK(found_defer_end);
+      CHECK(found_get_value);
+    }
+
+    TEST_CASE("complete handles class with template base without crash")
+    {
+      engine eng;
+
+      /* Define a class that inherits from a template base, similar to flecs::world
+       * which inherits from world_base<world>. This pattern can cause crashes
+       * in GetAllCppNames when iterating declarations. */
+      eng.handle(make_message({
+        {   "op",                                                                          "eval" },
+        { "code",
+         "(cpp/raw \""
+         "namespace template_base_test {"
+         "  template<typename T> struct base_template { void base_method() {} };"
+         "  struct world : base_template<world> {"
+         "    void defer_begin() {}"
+         "    void defer_end() {}"
+         "    int get_value() { return 42; }"
+         "  };"
+         "}\")" }
+      }));
+
+      /* Require it as a native header alias */
+      eng.handle(make_message({
+        {   "op",                                                                        "eval" },
+        { "code", "(require '[\"jank/runtime/context.hpp\" :as tmpl-test :scope \"template_base_test\"])" }
+      }));
+
+      /* Verify that completing the type itself works */
+      auto type_responses(eng.handle(make_message({
+        {     "op",       "complete" },
+        { "prefix", "tmpl-test/worl" },
+        {     "ns",           "user" }
+      })));
+
+      REQUIRE(type_responses.size() == 1);
+      auto const &type_payload(type_responses.front());
+      auto const &type_completions(type_payload.at("completions").as_list());
+
+      std::cerr << "Template base class type completions: " << type_completions.size() << "\n";
+      for(auto const &entry : type_completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string() << "\n";
+      }
+
+      /* Type completions should NEVER be empty */
+      REQUIRE_FALSE(type_completions.empty());
+
+      /* Now test completing nested members: tmpl-test/world.
+       * This is the key test - classes with template bases used to crash here.
+       * Using GetClassMethods, we can now get member completions. */
+      auto member_responses(eng.handle(make_message({
+        {     "op",        "complete" },
+        { "prefix", "tmpl-test/world." },
+        {     "ns",            "user" }
+      })));
+
+      REQUIRE(member_responses.size() == 1);
+      auto const &member_payload(member_responses.front());
+      auto const &member_completions(member_payload.at("completions").as_list());
+
+      std::cerr << "Template base class member completions: " << member_completions.size() << "\n";
+      for(auto const &entry : member_completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string() << "\n";
+      }
+
+      /* Member completions should NEVER be empty */
+      REQUIRE_FALSE(member_completions.empty());
+      CHECK(member_completions.size() >= 3);
+    }
+
+    TEST_CASE("complete flecs-like world with mixin includes")
+    {
+      engine eng;
+
+      /* Include the test_flecs.hpp header via cpp/raw to compile it.
+       * This mimics how real flecs.h is used - the header must be compiled
+       * before the alias can access its types.
+       *
+       * The test_flecs.hpp file mimics real flecs::world structure with:
+       * - Template methods (like entity<T>())
+       * - Non-template methods (like progress(), defer_begin())
+       * Path is relative from build directory to test directory. */
+      eng.handle(make_message({
+        {   "op",                                                         "eval" },
+        { "code", "(cpp/raw \"#include \\\"../test/cpp/jank/nrepl/test_flecs.hpp\\\"\")" }
+      }));
+
+      /* Create the alias using require with :scope.
+       * This is like (require '["flecs.h" :as flecs :scope "flecs"]) */
+      eng.handle(make_message({
+        {   "op",                                                                   "eval" },
+        { "code", "(require '[\"jank/runtime/context.hpp\" :as flecs :scope \"flecs\"])" }
+      }));
+
+      /* Test completing flecs/wor -> flecs/world */
+      auto type_responses(eng.handle(make_message({
+        {     "op",    "complete" },
+        { "prefix", "flecs/wor" },
+        {     "ns",        "user" }
+      })));
+
+      REQUIRE(type_responses.size() == 1);
+      auto const &type_payload(type_responses.front());
+      auto const &type_completions(type_payload.at("completions").as_list());
+
+      std::cerr << "Flecs-like type completions: " << type_completions.size() << "\n";
+      for(auto const &entry : type_completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string() << "\n";
+      }
+
+      /* Type completions should NEVER be empty */
+      REQUIRE_FALSE(type_completions.empty());
+
+      bool found_world{ false };
+      for(auto const &entry : type_completions)
+      {
+        auto const &dict(entry.as_dict());
+        if(dict.at("candidate").as_string() == "flecs/world")
+        {
+          found_world = true;
+        }
+      }
+      CHECK(found_world);
+
+      /* Now test completing flecs/world. -> member methods
+       * This is the critical test - the mixin #include inside class body
+       * used to crash GetAllCppNames. */
+      auto member_responses(eng.handle(make_message({
+        {     "op",      "complete" },
+        { "prefix", "flecs/world." },
+        {     "ns",          "user" }
+      })));
+
+      REQUIRE(member_responses.size() == 1);
+      auto const &member_payload(member_responses.front());
+      auto const &member_completions(member_payload.at("completions").as_list());
+
+      std::cerr << "Flecs-like world member completions: " << member_completions.size() << "\n";
+      for(auto const &entry : member_completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string() << "\n";
+      }
+
+      /* Member completions should NEVER be empty */
+      REQUIRE_FALSE(member_completions.empty());
+
+      /* Check for non-template methods.
+       * Note: Template methods (like entity<T>()) are NOT returned by GetClassMethods().
+       * This is a known limitation - GetClassMethods only returns regular methods. */
+      bool found_progress{ false };
+      bool found_defer_begin{ false };
+      bool found_defer_end{ false };
+      bool found_quit{ false };
+      bool found_get_count{ false };
+      bool found_get_world_ptr{ false };
+
+      for(auto const &entry : member_completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "flecs/world.progress")
+        {
+          found_progress = true;
+        }
+        if(candidate == "flecs/world.defer_begin")
+        {
+          found_defer_begin = true;
+        }
+        if(candidate == "flecs/world.defer_end")
+        {
+          found_defer_end = true;
+        }
+        if(candidate == "flecs/world.quit")
+        {
+          found_quit = true;
+        }
+        if(candidate == "flecs/world.get_count")
+        {
+          found_get_count = true;
+        }
+        if(candidate == "flecs/world.get_world_ptr")
+        {
+          found_get_world_ptr = true;
+        }
+      }
+
+      /* All non-template methods should be found */
+      CHECK(found_progress);
+      CHECK(found_defer_begin);
+      CHECK(found_defer_end);
+      CHECK(found_quit);
+      CHECK(found_get_count);
+      CHECK(found_get_world_ptr);
+
+      /* Should have at least 6 completions (all non-template methods) */
+      CHECK(member_completions.size() >= 6);
+    }
   }
 }

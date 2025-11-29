@@ -2234,6 +2234,26 @@ namespace jank::nrepl_server::asio
       return std::nullopt;
     }
 
+    /* Convert jank-style dot notation to C++ scope notation.
+     * e.g., "world.inner" -> "world::inner" */
+    std::string dots_to_cpp_scope(std::string const &value) const
+    {
+      std::string result;
+      result.reserve(value.size() * 2);
+      for(auto const ch : value)
+      {
+        if(ch == '.')
+        {
+          result.append("::");
+        }
+        else
+        {
+          result.push_back(ch);
+        }
+      }
+      return result;
+    }
+
     std::optional<var_documentation>
     describe_native_header_function(std::string const &alias_name,
                                     ns::native_alias const &alias,
@@ -2246,7 +2266,44 @@ namespace jank::nrepl_server::asio
       }
 
       auto const scope(scope_res.expect_ok());
-      auto const fns(Cpp::GetFunctionsUsingName(scope.data, symbol_name));
+
+      /* Check if symbol_name contains a dot - this indicates a member function.
+       * e.g., "world.defer_begin" means we want defer_begin() method of type "world" */
+      auto const last_dot = symbol_name.rfind('.');
+      void *lookup_scope = scope.data;
+      std::string function_name = symbol_name;
+
+      if(last_dot != std::string::npos)
+      {
+        /* Split into type path and function name.
+         * For "world.defer_begin": type_path="world", function_name="defer_begin" */
+        auto const type_path = symbol_name.substr(0, last_dot);
+        function_name = symbol_name.substr(last_dot + 1);
+
+        /* Build the full C++ qualified name for the type */
+        auto const cpp_type_path = dots_to_cpp_scope(type_path);
+        auto const base_scope_name = to_std_string(alias.scope);
+        std::string full_type_name;
+        if(base_scope_name.empty())
+        {
+          full_type_name = cpp_type_path;
+        }
+        else
+        {
+          /* Convert base scope dots to :: as well */
+          full_type_name = dots_to_cpp_scope(base_scope_name) + "::" + cpp_type_path;
+        }
+
+        auto const type_scope = Cpp::GetScopeFromCompleteName(full_type_name);
+        if(!type_scope)
+        {
+          return std::nullopt;
+        }
+
+        lookup_scope = type_scope;
+      }
+
+      auto const fns(Cpp::GetFunctionsUsingName(lookup_scope, function_name));
       if(fns.empty())
       {
         return std::nullopt;
