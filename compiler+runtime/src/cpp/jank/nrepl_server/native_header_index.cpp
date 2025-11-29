@@ -28,7 +28,7 @@ namespace jank::nrepl_server::asio
       return it->second;
     }
 
-    auto entries(enumerate_native_header_functions(alias, ""));
+    auto entries(enumerate_native_header_symbols(alias, ""));
     std::ranges::sort(entries);
     auto const unique_end(std::ranges::unique(entries));
     entries.erase(unique_end.begin(), unique_end.end());

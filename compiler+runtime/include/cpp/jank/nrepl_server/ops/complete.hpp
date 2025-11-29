@@ -48,12 +48,12 @@ namespace jank::nrepl_server::asio
       auto const var(query.target_ns->find_var(symbol));
       std::optional<var_documentation> var_info;
       auto const describe_native_candidate = [&]() {
-        return describe_native_header_function(query.qualifier.value(),
-                                               query.native_alias.value(),
-                                               candidate.symbol_name);
+        return describe_native_header_entity(query.qualifier.value(),
+                                             query.native_alias.value(),
+                                             candidate.symbol_name);
       };
 
-      // Check if this symbol is a native refer (unqualified symbol referring to a native header function)
+      // Check if this symbol is a native refer (unqualified symbol referring to a native header entity)
       if(!var_info.has_value() && !query.qualifier.has_value())
       {
         auto const native_refer = query.target_ns->find_native_refer(symbol);
@@ -62,7 +62,7 @@ namespace jank::nrepl_server::asio
           auto const &refer_info = native_refer.unwrap();
           // Get the alias name to look up in the native header index
           auto const alias_name = to_std_string(refer_info.alias->name);
-          var_info = describe_native_header_function(
+          var_info = describe_native_header_entity(
             alias_name,
             query.target_ns->find_native_alias(refer_info.alias).unwrap(),
             to_std_string(refer_info.member->name));

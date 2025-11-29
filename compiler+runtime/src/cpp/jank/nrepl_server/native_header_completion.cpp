@@ -38,7 +38,7 @@ namespace jank::nrepl_server::asio
   }
 
   std::vector<std::string>
-  enumerate_native_header_functions(ns::native_alias const &alias, std::string const &prefix)
+  enumerate_native_header_symbols(ns::native_alias const &alias, std::string const &prefix)
   {
     std::vector<std::string> matches;
 
@@ -66,15 +66,25 @@ namespace jank::nrepl_server::asio
           continue;
         }
 
+        // Check if it's a function
         auto const overloads = Cpp::GetFunctionsUsingName(scope_handle, name);
-        if(overloads.empty())
+        if(!overloads.empty())
         {
+          if(seen.insert(name).second)
+          {
+            matches.emplace_back(name);
+          }
           continue;
         }
 
-        if(seen.insert(name).second)
+        // Check if it's a type (class, struct, or enum)
+        auto const child_scope = Cpp::GetScope(name, scope_handle);
+        if(child_scope && (Cpp::IsClass(child_scope) || Cpp::IsEnumScope(child_scope)))
         {
-          matches.emplace_back(name);
+          if(seen.insert(name).second)
+          {
+            matches.emplace_back(name);
+          }
         }
       }
     }

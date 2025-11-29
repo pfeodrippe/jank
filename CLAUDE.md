@@ -1,5 +1,19 @@
 # Claude Code Notes for jank
 
+## CRITICAL: Do NOT Delete llvm-install
+
+**NEVER delete or run `rm -rf` on the `build/` directory or `build/llvm-install/`!**
+
+The `llvm-install` folder contains the pre-built LLVM/Clang toolchain and takes hours to rebuild. If you need to clean the build:
+- Only delete `build/CMakeCache.txt` and `build/CMakeFiles/`
+- Or use `./bin/clean` which preserves llvm-install
+- NEVER run `rm -rf build` or any command that would delete `build/llvm-install/`
+
+## Rule 1
+
+Always added what you learned to new .md files in the compiler+runtime/ai folder in this project!
+Put them in the `20251129-001-some-time.md` format.
+
 ## Building
 
 Before building, you MUST set these environment variables:

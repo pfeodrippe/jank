@@ -372,7 +372,7 @@ namespace clojure::core_native
     }
 
     auto matches(
-      jank::nrepl_server::asio::enumerate_native_header_functions(alias_value, prefix_str));
+      jank::nrepl_server::asio::enumerate_native_header_symbols(alias_value, prefix_str));
     native_vector<object_ref> boxed;
     boxed.reserve(matches.size());
     for(auto const &match : matches)

@@ -10,6 +10,7 @@
 #include <cstdlib>
 
 #include <jank/error.hpp>
+#include <jank/jit/processor.hpp>
 
 namespace jank::nrepl_server::asio
 {
@@ -18,6 +19,46 @@ namespace jank::nrepl_server::asio
   inline thread_local jmp_buf eval_jmp_buf;
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
   inline thread_local volatile sig_atomic_t signal_received = 0;
+  // Thread-local alternate signal stack for handling stack overflow
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+  inline thread_local void *alt_stack_memory = nullptr;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+  inline thread_local bool alt_stack_installed = false;
+
+  // Size of alternate stack (128KB should be enough for signal handler + longjmp)
+  constexpr size_t ALT_STACK_SIZE = 128 * 1024;
+
+  inline void ensure_alt_stack()
+  {
+    if(alt_stack_installed)
+    {
+      return;
+    }
+
+    // Allocate alternate stack memory
+    alt_stack_memory = std::malloc(ALT_STACK_SIZE);
+    if(alt_stack_memory == nullptr)
+    {
+      std::cerr << "Failed to allocate alternate signal stack\n";
+      return;
+    }
+
+    // Set up the alternate stack
+    stack_t ss{};
+    ss.ss_sp = alt_stack_memory;
+    ss.ss_size = ALT_STACK_SIZE;
+    ss.ss_flags = 0;
+
+    if(sigaltstack(&ss, nullptr) != 0)
+    {
+      std::cerr << "Failed to install alternate signal stack: " << strerror(errno) << "\n";
+      std::free(alt_stack_memory);
+      alt_stack_memory = nullptr;
+      return;
+    }
+
+    alt_stack_installed = true;
+  }
 
   inline void eval_signal_handler(int sig)
   {
@@ -100,11 +141,15 @@ namespace jank::nrepl_server::asio
     // Set up signal handlers to catch crashes during eval
     signal_received = 0;
 
+    // Ensure we have an alternate signal stack for stack overflow recovery
+    ensure_alt_stack();
+
     struct sigaction sa_new{}, sa_old_segv{}, sa_old_abrt{}, sa_old_bus{};
     memset(&sa_new, 0, sizeof(sa_new));
     sa_new.sa_handler = eval_signal_handler;
     sigemptyset(&sa_new.sa_mask);
-    sa_new.sa_flags = 0;
+    // SA_ONSTACK: use alternate stack so handler can run even when main stack overflows
+    sa_new.sa_flags = SA_ONSTACK;
 
     sigaction(SIGSEGV, &sa_new, &sa_old_segv);
     sigaction(SIGABRT, &sa_new, &sa_old_abrt);
@@ -122,9 +167,20 @@ namespace jank::nrepl_server::asio
       sigaction(SIGBUS, &sa_old_bus, nullptr);
 
       // Create error response
-      char sig_buf[128];
+      char sig_buf[256];
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
-      std::snprintf(sig_buf, sizeof(sig_buf), "Caught signal %d during eval", jmp_result);
+      if(jmp_result == jit::JIT_FATAL_ERROR_SIGNAL)
+      {
+        std::snprintf(sig_buf, sizeof(sig_buf), "JIT/LLVM fatal error during eval (check stderr for details)");
+      }
+      else if(jmp_result == SIGSEGV)
+      {
+        std::snprintf(sig_buf, sizeof(sig_buf), "Stack overflow or segmentation fault during eval (signal %d). This can happen with large/complex C++ headers like flecs.h", jmp_result);
+      }
+      else
+      {
+        std::snprintf(sig_buf, sizeof(sig_buf), "Caught signal %d during eval", jmp_result);
+      }
 
       update_ns();
       emit_pending_output();
@@ -144,6 +200,9 @@ namespace jank::nrepl_server::asio
 
       return responses;
     }
+
+    // Register eval_jmp_buf with JIT so LLVM fatal errors can recover too
+    jit::scoped_jit_recovery const jit_recovery{ eval_jmp_buf };
 
     try
     {

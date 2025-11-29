@@ -13,6 +13,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <pthread.h>
 
 #define GC_THREADS
 #include <gc/gc.h>
@@ -217,18 +218,33 @@ namespace jank::nrepl_server::asio
       // Start accepting connections
       accept_connection();
 
-      // Run io_context in a separate thread
+      // Run io_context in a separate thread with large stack size
+      // Large stack is needed for complex C++ headers like flecs.h that trigger
+      // deep template instantiation in Clang (can exceed 500+ stack frames)
       // Must register with Boehm GC since this thread will allocate GC memory during eval
       GC_allow_register_threads();
-      io_thread_ = std::thread([this]() {
+
+      pthread_attr_t attr;
+      pthread_attr_init(&attr);
+      // Set stack size to 16MB (default is ~512KB on macOS, too small for flecs.h)
+      constexpr size_t LARGE_STACK_SIZE = 16 * 1024 * 1024;
+      pthread_attr_setstacksize(&attr, LARGE_STACK_SIZE);
+
+      auto thread_func = [](void *arg) -> void * {
+        auto *self = static_cast<server *>(arg);
+
         GC_stack_base sb;
         GC_get_stack_base(&sb);
         GC_register_my_thread(&sb);
 
-        io_context_.run();
+        self->io_context_.run();
 
         GC_unregister_my_thread();
-      });
+        return nullptr;
+      };
+
+      pthread_create(&io_thread_, &attr, thread_func, this);
+      pthread_attr_destroy(&attr);
     }
 
     ~server()
@@ -259,10 +275,7 @@ namespace jank::nrepl_server::asio
 
       io_context_.stop();
 
-      if(io_thread_.joinable())
-      {
-        io_thread_.join();
-      }
+      pthread_join(io_thread_, nullptr);
     }
 
     int get_port() const
@@ -301,7 +314,7 @@ namespace jank::nrepl_server::asio
     boost::asio::io_context io_context_;
     std::shared_ptr<engine> engine_;
     std::unique_ptr<tcp::acceptor> acceptor_;
-    std::thread io_thread_;
+    pthread_t io_thread_{};
     boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
     bool running_{ true };
   };

@@ -2315,6 +2315,121 @@ namespace jank::nrepl_server::asio
       return info;
     }
 
+    std::optional<var_documentation>
+    describe_native_header_type(std::string const &alias_name,
+                                ns::native_alias const &alias,
+                                std::string const &symbol_name) const
+    {
+      /* Try to find the type using CppInterOp's scope resolution. The symbol_name
+       * is just the base name (e.g., "world"), but we need to look it up within
+       * the namespace scope (e.g., flecs::world). */
+      auto const qualified_name(to_std_string(alias.scope) + "::" + symbol_name);
+      auto const type_scope(Cpp::GetScopeFromCompleteName(qualified_name));
+      if(!type_scope)
+      {
+        return std::nullopt;
+      }
+
+      /* Verify it's actually a class/struct or enum */
+      if(!Cpp::IsClass(type_scope) && !Cpp::IsEnumScope(type_scope))
+      {
+        return std::nullopt;
+      }
+
+      var_documentation info;
+      info.ns_name = alias_name;
+      info.name = symbol_name;
+      info.is_cpp_type = true;
+
+      /* Get the fully qualified type name */
+      auto const type_name(Cpp::GetQualifiedName(type_scope));
+      info.return_type = type_name;
+
+      /* Extract docstring and location from the type declaration */
+      auto const metadata(extract_cpp_decl_metadata(type_scope));
+      if(metadata.doc.has_value())
+      {
+        info.doc = metadata.doc;
+      }
+      if(metadata.file.has_value())
+      {
+        info.file = metadata.file;
+      }
+      if(metadata.line.has_value())
+      {
+        info.line = metadata.line;
+      }
+      if(metadata.column.has_value())
+      {
+        info.column = metadata.column;
+      }
+
+      /* For class/struct types, try to get constructor info */
+      if(Cpp::IsClass(type_scope))
+      {
+        /* Get constructors using the type's name */
+        auto const ctors(Cpp::GetFunctionsUsingName(type_scope, symbol_name));
+        if(!ctors.empty())
+        {
+          for(auto const ctor : ctors)
+          {
+            if(!Cpp::IsConstructor(ctor))
+            {
+              continue;
+            }
+
+            std::string signature{ "[" };
+            auto const num_args(Cpp::GetFunctionNumArgs(ctor));
+            for(size_t idx{}; idx < num_args; ++idx)
+            {
+              if(idx != 0)
+              {
+                signature.push_back(' ');
+              }
+              signature.push_back('[');
+              auto const arg_type(Cpp::GetFunctionArgType(ctor, idx));
+              signature += Cpp::GetTypeAsString(arg_type);
+              auto const arg_name(Cpp::GetFunctionArgName(ctor, idx));
+              if(!arg_name.empty())
+              {
+                signature.push_back(' ');
+                signature += arg_name;
+              }
+              signature.push_back(']');
+            }
+            signature.push_back(']');
+            info.arglists.emplace_back(std::move(signature));
+          }
+        }
+
+        /* If no constructors found, show as empty brackets for default construction */
+        if(info.arglists.empty())
+        {
+          info.arglists.emplace_back("[]");
+        }
+      }
+
+      if(!info.arglists.empty())
+      {
+        info.arglists_str = join_with_newline(info.arglists);
+      }
+
+      return info;
+    }
+
+    std::optional<var_documentation>
+    describe_native_header_entity(std::string const &alias_name,
+                                  ns::native_alias const &alias,
+                                  std::string const &symbol_name) const
+    {
+      /* Try function first, then fall back to type */
+      if(auto fn_info = describe_native_header_function(alias_name, alias, symbol_name))
+      {
+        return fn_info;
+      }
+      return describe_native_header_type(alias_name, alias, symbol_name);
+    }
+
     bencode::value::list serialize_cpp_signatures(var_documentation const &info) const
     {
       bencode::value::list payload;

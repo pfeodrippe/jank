@@ -28,6 +28,30 @@
 
 namespace jank::jit
 {
+  /* Thread-local recovery point for LLVM fatal errors. */
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+  static thread_local jmp_buf *jit_recovery_buf{ nullptr };
+
+  void set_jit_recovery_point(jmp_buf *buf)
+  {
+    jit_recovery_buf = buf;
+  }
+
+  jmp_buf *get_jit_recovery_point()
+  {
+    return jit_recovery_buf;
+  }
+
+  scoped_jit_recovery::scoped_jit_recovery(jmp_buf &buf)
+  {
+    set_jit_recovery_point(&buf);
+  }
+
+  scoped_jit_recovery::~scoped_jit_recovery()
+  {
+    set_jit_recovery_point(nullptr);
+  }
+
   static jtl::immutable_string default_shared_lib_name(jtl::immutable_string const &lib)
 #if defined(__APPLE__)
   {
@@ -39,20 +63,25 @@ namespace jank::jit
   }
 #endif
 
-  [[maybe_unused]]
-  static void
-  handle_fatal_llvm_error(void * const user_data, char const *message, bool const gen_crash_diag)
+  static void handle_fatal_llvm_error(void * const, char const *message, bool const gen_crash_diag)
   {
-    auto &diags(*static_cast<clang::DiagnosticsEngine *>(user_data));
-    diags.Report(clang::diag::err_fe_error_backend) << message;
+    /* Log the error message to stderr. */
+    std::cerr << "LLVM fatal error: " << (message ? message : "(null)") << "\n";
 
     /* Run the interrupt handlers to make sure any special cleanups get done, in
        particular that we remove files registered with RemoveFileOnSignal. */
     llvm::sys::RunInterruptHandlers();
 
-    /* We cannot recover from llvm errors.  When reporting a fatal error, exit
-       with status 70 to generate crash diagnostics.  For BSD systems this is
-       defined as an internal software error. Otherwise, exit with status 1. */
+    /* Check if a recovery point has been registered (e.g., by nREPL eval).
+     * If so, longjmp to it instead of exiting. This allows the caller to
+     * handle the error gracefully. */
+    if(auto *buf = get_jit_recovery_point())
+    {
+      // NOLINTNEXTLINE(modernize-avoid-setjmp-longjmp)
+      longjmp(*buf, JIT_FATAL_ERROR_SIGNAL);
+    }
+
+    /* No recovery point - exit as before. */
     std::exit(gen_crash_diag ? 70 : 1);
   }
 
@@ -180,6 +209,11 @@ namespace jank::jit
     interpreter.reset(static_cast<Cpp::Interpreter *>(
       Cpp::CreateInterpreter(args, {}, vfs, static_cast<int>(llvm::CodeModel::Large))));
 
+    /* Install our custom fatal error handler so we can recover from LLVM crashes in the REPL.
+     * The handler checks if a recovery point has been registered (via set_jit_recovery_point)
+     * and longjmps to it instead of calling exit(). */
+    llvm::install_fatal_error_handler(handle_fatal_llvm_error, nullptr);
+
     /* Enabling perf support requires registering a couple of plugins with LLVM. These
      * plugins will generate files which perf can then use to inject additional info
      * into its recorded data (via `perf inject`).
@@ -246,6 +280,17 @@ namespace jank::jit
 
   void processor::load_object(jtl::immutable_string_view const &path) const
   {
+    /* Canonicalize the path to detect duplicates even with different relative paths. */
+    std::error_code ec;
+    auto const canonical_path{ std::filesystem::canonical(std::string_view{ path }, ec) };
+    std::string const path_key{ ec ? std::string{ path } : canonical_path.string() };
+
+    /* Skip if already loaded - makes this idempotent for nREPL load-file operations. */
+    if(loaded_objects_.contains(path_key))
+    {
+      return;
+    }
+
     auto const ee{ interpreter->getExecutionEngine() };
     auto file{ llvm::MemoryBuffer::getFile(std::string_view{ path }) };
     if(!file)
@@ -256,6 +301,7 @@ namespace jank::jit
      * runtime, which likely won't happen until clang::Interpreter is on the ORC runtime. */
     /* TODO: Return result on failure. */
     llvm::cantFail(ee->addObjectFile(std::move(file.get())));
+    loaded_objects_.insert(path_key);
     register_jit_stack_frames();
   }
 

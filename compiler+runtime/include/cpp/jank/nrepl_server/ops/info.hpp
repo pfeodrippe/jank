@@ -57,9 +57,9 @@ namespace jank::nrepl_server::asio
           auto const native_alias_opt = target_ns->find_native_alias(refer_info.alias);
           if(native_alias_opt.is_some())
           {
-            info = describe_native_header_function(alias_name,
-                                                   native_alias_opt.unwrap(),
-                                                   to_std_string(refer_info.member->name));
+            info = describe_native_header_entity(alias_name,
+                                                 native_alias_opt.unwrap(),
+                                                 to_std_string(refer_info.member->name));
           }
         }
       }
@@ -81,9 +81,9 @@ namespace jank::nrepl_server::asio
 
     if(!info.has_value() && requested_native_alias.has_value())
     {
-      info = describe_native_header_function(alias_display,
-                                             requested_native_alias.value(),
-                                             parts.name);
+      info = describe_native_header_entity(alias_display,
+                                           requested_native_alias.value(),
+                                           parts.name);
     }
     if(!info.has_value())
     {

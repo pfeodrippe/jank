@@ -10,6 +10,17 @@
   - [x] :refer
   - [x] autocompletion
   - [x] if a function has a docstring, can we show it?
+- [ ] add flecs to something as a test
+  - [x] include
+    - (cpp/raw "#include <flecs.h>")
+  - [x] call `ecs_init`
+  - [x] static
+  - [ ] autocompletion
+  - [ ] wasm
+- [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`
+- [ ] Fix implicit conversion
+  - Unknown implicit conversion from ecs_world_t * to jank::runtime::object *. {:jank/error-kind "internal/analysis-failure" :jank/error-message "Unknown implicit conversion from ecs_world_t * to jank::runtime::object *."}
+- [ ] fix tests at `./bin/compile && bin/jank/compiler+runtime/bash_test.clj > grep -v "missing from root"`
 - [ ] use it to hotreload in SC
   - [x] dylib from SC
   - [x] ability to export symbol from jank
@@ -26,3 +37,4 @@
   - functions, namespaces
   - [ ] gather
   - [ ] complain if trying to use something ambiguous (e.g. aliasing or refering to a fn that has the same name in 2 namespaces)
+- [ ] vybe
