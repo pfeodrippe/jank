@@ -19,7 +19,7 @@ namespace jank::util::cli
   {
     llvm_ir,
     cpp,
-    wasm_aot,  // Generates standalone C++ for WASM AOT compilation
+    wasm_aot, // Generates standalone C++ for WASM AOT compilation
     wasm_patch // Generates SIDE_MODULE patches for hot-reload
   };
 

@@ -1,16 +1,15 @@
 - [x] compile it to a standalone and check the nREPL server
   - [x] compile
-- [ ] wasm
+- [x] wasm
   - [x] compile
   - [x] source mapping to cpp
   - [x] source mapping to jank
-  - [ ] cpp/raw
-- [ ] cpp integration
+  - [x] cpp/raw
+- [x] cpp integration
   - [x] :as
   - [x] :refer
   - [x] autocompletion
-  - [ ] if a function has a docstring, can we show it?
-  - [ ] test with some non jank file (or create some that's not so well organized)
+  - [x] if a function has a docstring, can we show it?
 - [ ] use it to hotreload in SC
   - [x] dylib from SC
   - [x] ability to export symbol from jank

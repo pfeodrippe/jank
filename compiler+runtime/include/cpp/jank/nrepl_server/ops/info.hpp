@@ -132,7 +132,7 @@ namespace jank::nrepl_server::asio
       {
         if(!rendered.empty())
         {
-          rendered.push_back(' ');
+          rendered.append("\n\n");
         }
         rendered += metadata.doc.value();
       }

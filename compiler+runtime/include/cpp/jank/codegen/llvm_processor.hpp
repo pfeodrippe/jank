@@ -79,7 +79,7 @@ namespace jank::codegen
     module,
     function,
     eval,
-    wasm_aot,  // Generates standalone C++ modules for WASM (no JIT)
+    wasm_aot, // Generates standalone C++ modules for WASM (no JIT)
     wasm_patch // Generates SIDE_MODULE patches for hot-reload (extern C, no headers)
   };
 

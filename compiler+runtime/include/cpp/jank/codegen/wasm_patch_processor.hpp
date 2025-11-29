@@ -78,6 +78,8 @@ namespace jank::codegen
     size_t anon_fn_counter_{ 0 };
     jtl::string_builder output_;
     jtl::string_builder anon_fns_; // Accumulates anonymous function definitions
-    jtl::string_builder *current_output_{ &output_ }; // Active output buffer (switches for nested fns)
+    jtl::string_builder *current_output_{
+      &output_
+    }; // Active output buffer (switches for nested fns)
   };
 } // namespace jank::codegen

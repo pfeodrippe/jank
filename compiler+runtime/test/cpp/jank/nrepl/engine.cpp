@@ -565,8 +565,8 @@ namespace jank::nrepl_server::asio
       /* This matches what CIDER sends: prefix="cpp/" with ns="user" */
       auto responses(eng.handle(make_message({
         {     "op", "complete" },
-        { "prefix",    "cpp/" },
-        {     "ns",    "user" }
+        { "prefix",     "cpp/" },
+        {     "ns",     "user" }
       })));
 
       REQUIRE(responses.size() == 1);
@@ -642,15 +642,15 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
       eng.handle(make_message({
-        {   "op",                                                                       "eval" },
+        {   "op",                                                             "eval" },
         { "code", "(cpp/raw \"namespace test { struct Point { int x; int y; }; }\")" }
       }));
 
       /* This matches what CIDER sends: prefix="cpp/" with ns="user" */
       auto responses(eng.handle(make_message({
         {     "op", "complete" },
-        { "prefix",    "cpp/" },
-        {     "ns",    "user" }
+        { "prefix",     "cpp/" },
+        {     "ns",     "user" }
       })));
 
       REQUIRE(responses.size() == 1);
@@ -1256,6 +1256,100 @@ namespace jank::nrepl_server::asio
 
       CHECK(payload.at("docstring").as_string() == "int");
       CHECK(payload.at("doc").as_string() == payload.at("docstring").as_string());
+    }
+
+    TEST_CASE("info returns cpp function docstring from doxygen comment")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op","eval"                },
+        { "code",
+         "(cpp/raw \"/** Adds two integers together.\\n * @param a First operand\\n * @param b "
+         "Second operand\\n * @return The sum of a and b\\n */\\nint cpp_documented_fn(int a, int "
+         "b) { return a + b; }\")" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {  "op",                  "info" },
+        { "sym", "cpp/cpp_documented_fn" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      CHECK(payload.at("name").as_string() == "cpp_documented_fn");
+      CHECK(payload.at("ns").as_string() == "cpp");
+      CHECK(payload.at("type").as_string() == "native-function");
+
+      // Check that docstring contains the documentation comment
+      auto const docstring_it(payload.find("docstring"));
+      REQUIRE(docstring_it != payload.end());
+      auto const &docstring(docstring_it->second.as_string());
+      INFO("docstring: " << docstring);
+      std::cerr << "C++ function docstring: '" << docstring << "'\n";
+
+      // The docstring should contain the Doxygen comment content
+      CHECK(docstring.find("Adds two integers") != std::string::npos);
+
+      // Check for source location metadata
+      auto const file_it(payload.find("file"));
+      auto const line_it(payload.find("line"));
+      auto const column_it(payload.find("column"));
+
+      INFO("file present: " << (file_it != payload.end()));
+      INFO("line present: " << (line_it != payload.end()));
+      INFO("column present: " << (column_it != payload.end()));
+
+      if(file_it != payload.end())
+      {
+        std::cerr << "C++ function file: '" << file_it->second.as_string() << "'\n";
+      }
+      if(line_it != payload.end())
+      {
+        std::cerr << "C++ function line: " << line_it->second.as_integer() << "\n";
+      }
+      if(column_it != payload.end())
+      {
+        std::cerr << "C++ function column: " << column_it->second.as_integer() << "\n";
+      }
+
+      auto const statuses(extract_status(payload));
+      CHECK(std::ranges::find(statuses, "done") != statuses.end());
+    }
+
+    TEST_CASE("info returns cpp function docstring from regular comment")
+    {
+      engine eng;
+      eng.handle(make_message({
+        {   "op",                      "eval"                },
+        { "code",
+         "(cpp/raw \"// This is a regular comment\\n// describing the function\\nint "
+         "cpp_regular_comment_fn(int x) { return x * 2; }\")" }
+      }));
+
+      auto responses(eng.handle(make_message({
+        {  "op",                       "info" },
+        { "sym", "cpp/cpp_regular_comment_fn" }
+      })));
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      CHECK(payload.at("name").as_string() == "cpp_regular_comment_fn");
+      CHECK(payload.at("ns").as_string() == "cpp");
+      CHECK(payload.at("type").as_string() == "native-function");
+
+      // Check that docstring contains the regular comment
+      auto const docstring_it(payload.find("docstring"));
+      REQUIRE(docstring_it != payload.end());
+      auto const &docstring(docstring_it->second.as_string());
+      INFO("docstring: " << docstring);
+      std::cerr << "C++ regular comment docstring: '" << docstring << "'\n";
+
+      // The docstring should contain the comment content
+      CHECK(docstring.find("regular comment") != std::string::npos);
+      CHECK(docstring.find("describing the function") != std::string::npos);
+
+      auto const statuses(extract_status(payload));
+      CHECK(std::ranges::find(statuses, "done") != statuses.end());
     }
 
     TEST_CASE("info returns cpp type with fields in docstring")

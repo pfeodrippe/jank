@@ -41,7 +41,9 @@ namespace jank::runtime
                                       std::string const &symbol_name)
   {
 #ifdef __EMSCRIPTEN__
-    printf("[hot-reload] Loading patch: %s (symbol: %s)\n", module_path.c_str(), symbol_name.c_str());
+    printf("[hot-reload] Loading patch: %s (symbol: %s)\n",
+           module_path.c_str(),
+           symbol_name.c_str());
 
     /* Load the WASM side module via dlopen. */
     void *handle = dlopen(module_path.c_str(), RTLD_NOW | RTLD_LOCAL);
@@ -58,7 +60,9 @@ namespace jank::runtime
 
     if(!get_symbols)
     {
-      printf("[hot-reload] Warning: Symbol %s not found in %s\n", symbol_name.c_str(), module_path.c_str());
+      printf("[hot-reload] Warning: Symbol %s not found in %s\n",
+             symbol_name.c_str(),
+             module_path.c_str());
       printf("[hot-reload] This patch may need manual symbol registration.\n");
       dlclose(handle);
       return -1;
@@ -527,8 +531,8 @@ namespace jank::runtime
           {
             using fn_type = object_ref (*)(object_ref, object_ref);
             auto fn = reinterpret_cast<fn_type>(fn_ptr);
-            wrapper = make_box<obj::native_function_wrapper>(
-              obj::detail::function_type{ std::function<object_ref(object_ref, object_ref)>{ fn } });
+            wrapper = make_box<obj::native_function_wrapper>(obj::detail::function_type{
+              std::function<object_ref(object_ref, object_ref)>{ fn } });
             break;
           }
         case 3:

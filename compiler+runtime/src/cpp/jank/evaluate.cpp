@@ -972,6 +972,15 @@ namespace jank::evaluate
                 metadata.arguments.emplace_back(std::move(argument));
               }
 
+              /* Store the jank source location where cpp/raw was called */
+              if(expr->source.is_some())
+              {
+                auto const &src(expr->source.unwrap());
+                metadata.origin = src.file;
+                metadata.origin_line = static_cast<std::int64_t>(src.start.line);
+                metadata.origin_column = static_cast<std::int64_t>(src.start.col);
+              }
+
               auto locked_globals{ __rt_ctx->global_cpp_functions.wlock() };
               auto &bucket((*locked_globals)[metadata.name]);
               auto const existing(std::ranges::find_if(bucket, [&](auto const &entry) {

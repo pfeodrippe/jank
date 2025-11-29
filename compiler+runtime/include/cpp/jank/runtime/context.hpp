@@ -138,6 +138,8 @@ namespace jank::runtime
       jtl::immutable_string return_type;
       native_vector<cpp_function_argument_metadata> arguments;
       jtl::option<jtl::immutable_string> origin;
+      jtl::option<std::int64_t> origin_line;
+      jtl::option<std::int64_t> origin_column;
     };
 
     enum class cpp_record_kind : std::uint8_t

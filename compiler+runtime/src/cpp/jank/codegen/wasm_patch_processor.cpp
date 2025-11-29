@@ -142,7 +142,9 @@ struct patch_symbol {
         {
           /* Unsupported expression type - return nil for now */
           auto const tmp{ fresh_local() };
-          util::format_to(*current_output_, "  void *{} = jank_nil_value(); // unsupported expr\n", tmp);
+          util::format_to(*current_output_,
+                          "  void *{} = jank_nil_value(); // unsupported expr\n",
+                          tmp);
           return tmp;
         }
       },
@@ -175,11 +177,17 @@ struct patch_symbol {
         }
         else if constexpr(std::same_as<T, runtime::obj::integer>)
         {
-          util::format_to(*current_output_, "  void *{} = jank_box_integer({});\n", tmp, typed_o->data);
+          util::format_to(*current_output_,
+                          "  void *{} = jank_box_integer({});\n",
+                          tmp,
+                          typed_o->data);
         }
         else if constexpr(std::same_as<T, runtime::obj::real>)
         {
-          util::format_to(*current_output_, "  void *{} = jank_box_double({});\n", tmp, typed_o->data);
+          util::format_to(*current_output_,
+                          "  void *{} = jank_box_double({});\n",
+                          tmp,
+                          typed_o->data);
         }
         else if constexpr(std::same_as<T, runtime::obj::keyword>)
         {
@@ -207,7 +215,9 @@ struct patch_symbol {
         else
         {
           /* Fall back to nil for unsupported literals */
-          util::format_to(*current_output_, "  void *{} = jank_nil_value(); // unsupported literal\n", tmp);
+          util::format_to(*current_output_,
+                          "  void *{} = jank_nil_value(); // unsupported literal\n",
+                          tmp);
         }
       },
       expr->data);
@@ -288,7 +298,8 @@ struct patch_symbol {
     return munge_name(expr->name->name);
   }
 
-  jtl::immutable_string wasm_patch_processor::gen_var_deref(analyze::expr::var_deref_ref const &expr)
+  jtl::immutable_string
+  wasm_patch_processor::gen_var_deref(analyze::expr::var_deref_ref const &expr)
   {
     auto const tmp{ fresh_local() };
     util::format_to(*current_output_,
@@ -328,8 +339,11 @@ struct patch_symbol {
       }
       (*current_output_)(" };\n");
 
-      util::format_to(
-        *current_output_, "  void *{} = jank_make_vector({}, {});\n", tmp, elem_tmps.size(), elems_array);
+      util::format_to(*current_output_,
+                      "  void *{} = jank_make_vector({}, {});\n",
+                      tmp,
+                      elem_tmps.size(),
+                      elems_array);
     }
 
     return tmp;
@@ -364,8 +378,11 @@ struct patch_symbol {
       }
       (*current_output_)(" };\n");
 
-      util::format_to(
-        *current_output_, "  void *{} = jank_make_set({}, {});\n", tmp, elem_tmps.size(), elems_array);
+      util::format_to(*current_output_,
+                      "  void *{} = jank_make_set({}, {});\n",
+                      tmp,
+                      elem_tmps.size(),
+                      elems_array);
     }
 
     return tmp;
@@ -450,9 +467,7 @@ struct patch_symbol {
     auto const param_count{ arity.params.size() };
 
     /* Generate the anonymous function declaration into anon_fns_ buffer */
-    util::format_to(anon_fns_,
-                    "__attribute__((visibility(\"default\")))\nvoid *{}(",
-                    fn_name);
+    util::format_to(anon_fns_, "__attribute__((visibility(\"default\")))\nvoid *{}(", fn_name);
     for(size_t i = 0; i < param_count; ++i)
     {
       if(i > 0)
@@ -477,8 +492,11 @@ struct patch_symbol {
 
     /* Return a wrapper for the anonymous function */
     auto const tmp{ fresh_local() };
-    util::format_to(
-      output_, "  void *{} = jank_make_fn_wrapper((void *){}, {});\n", tmp, fn_name, param_count);
+    util::format_to(output_,
+                    "  void *{} = jank_make_fn_wrapper((void *){}, {});\n",
+                    tmp,
+                    fn_name,
+                    param_count);
     return tmp;
   }
 
@@ -562,9 +580,7 @@ struct patch_symbol {
     final_output(anon_fns_.view());
 
     /* Add main function signature */
-    util::format_to(final_output,
-                    "__attribute__((visibility(\"default\")))\nvoid *{}(",
-                    fn_c_name);
+    util::format_to(final_output, "__attribute__((visibility(\"default\")))\nvoid *{}(", fn_c_name);
     for(size_t i = 0; i < param_count; ++i)
     {
       if(i > 0)
@@ -581,11 +597,18 @@ struct patch_symbol {
     final_output("}\n\n");
 
     /* Add patch metadata export */
-    util::format_to(final_output, "// Patch metadata export - UNIQUE NAME with patch ID {}\n", patch_id_);
+    util::format_to(final_output,
+                    "// Patch metadata export - UNIQUE NAME with patch ID {}\n",
+                    patch_id_);
     final_output("__attribute__((visibility(\"default\")))\n");
     util::format_to(final_output, "patch_symbol *jank_patch_symbols_{}(int *count) ", patch_id_);
     final_output("{\n  static patch_symbol symbols[] = {\n    { ");
-    util::format_to(final_output, "\"{}/{}\", \"{}\", (void *){}", var_ns, var_name, param_count, fn_c_name);
+    util::format_to(final_output,
+                    "\"{}/{}\", \"{}\", (void *){}",
+                    var_ns,
+                    var_name,
+                    param_count,
+                    fn_c_name);
     final_output(" }\n  };\n  *count = 1;\n  return symbols;\n}\n\n}\n");
 
     return final_output.release();

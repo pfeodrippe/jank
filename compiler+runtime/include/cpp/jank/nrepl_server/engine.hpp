@@ -50,8 +50,18 @@
 
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/Decl.h>
+#include <clang/AST/ASTContext.h>
+#include <clang/AST/RawCommentList.h>
+#include <clang/Basic/SourceManager.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Demangle/Demangle.h>
+
+#include <jank/jit/processor.hpp>
+
+namespace Cpp
+{
+  class Interpreter;
+}
 
 namespace jank::nrepl_server::asio
 {
@@ -1391,6 +1401,162 @@ namespace jank::nrepl_server::asio
       }
     }
 
+    struct cpp_decl_metadata
+    {
+      std::optional<std::string> doc;
+      std::optional<std::string> file;
+      std::optional<std::int64_t> line;
+      std::optional<std::int64_t> column;
+    };
+
+    // Helper to extract comment lines from source text preceding a declaration
+    std::optional<std::string>
+    extract_preceding_comments(clang::SourceManager const &src_mgr, clang::SourceLocation loc) const
+    {
+      if(!loc.isValid())
+      {
+        return std::nullopt;
+      }
+
+      // Get the file and offset for this location
+      auto const file_id = src_mgr.getFileID(loc);
+      auto const file_offset = src_mgr.getFileOffset(loc);
+
+      // Get the buffer for this file
+      bool invalid = false;
+      auto const buffer = src_mgr.getBufferData(file_id, &invalid);
+      if(invalid || buffer.empty() || file_offset == 0)
+      {
+        return std::nullopt;
+      }
+
+      // Search backwards from the declaration to find comment lines
+      std::string_view before_decl(buffer.data(), file_offset);
+
+      // Find the start of the current line
+      auto line_start = before_decl.rfind('\n');
+      if(line_start == std::string_view::npos)
+      {
+        line_start = 0;
+      }
+      else
+      {
+        line_start++; // Move past the newline
+      }
+
+      // Now search backwards for comment lines
+      std::vector<std::string> comment_lines;
+      size_t search_pos = line_start;
+
+      while(search_pos > 0)
+      {
+        // Find the previous line
+        auto prev_line_end = search_pos - 1; // Points to the '\n' before current line
+        if(prev_line_end == 0)
+        {
+          break;
+        }
+
+        auto prev_line_start = before_decl.rfind('\n', prev_line_end - 1);
+        if(prev_line_start == std::string_view::npos)
+        {
+          prev_line_start = 0;
+        }
+        else
+        {
+          prev_line_start++; // Move past the newline
+        }
+
+        std::string_view prev_line
+          = before_decl.substr(prev_line_start, prev_line_end - prev_line_start);
+
+        // Trim leading whitespace
+        auto content_start = prev_line.find_first_not_of(" \t");
+        if(content_start == std::string_view::npos)
+        {
+          // Empty line - stop searching
+          break;
+        }
+
+        std::string_view trimmed = prev_line.substr(content_start);
+
+        // Check if it's a comment line
+        if(trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*"))
+        {
+          comment_lines.push_back(std::string(prev_line));
+          search_pos = prev_line_start;
+        }
+        else
+        {
+          // Not a comment line - stop searching
+          break;
+        }
+      }
+
+      if(comment_lines.empty())
+      {
+        return std::nullopt;
+      }
+
+      // Reverse to get comments in correct order (top to bottom)
+      std::string result;
+      for(auto it = comment_lines.rbegin(); it != comment_lines.rend(); ++it)
+      {
+        if(!result.empty())
+        {
+          result.push_back('\n');
+        }
+        result += *it;
+      }
+
+      return result;
+    }
+
+    cpp_decl_metadata extract_cpp_decl_metadata(void *fn) const
+    {
+      cpp_decl_metadata result;
+      if(!fn)
+      {
+        return result;
+      }
+
+      auto const *decl = static_cast<clang::Decl const *>(fn);
+      auto &ast_ctx = decl->getASTContext();
+      auto &src_mgr = ast_ctx.getSourceManager();
+
+      // First try to get a Doxygen-style documentation comment
+      if(auto const *raw_comment = ast_ctx.getRawCommentForDeclNoCache(decl))
+      {
+        result.doc = raw_comment->getRawText(src_mgr).str();
+      }
+      else
+      {
+        // Fall back to extracting any comment preceding the declaration
+        result.doc = extract_preceding_comments(src_mgr, decl->getBeginLoc());
+      }
+
+      // Extract source location
+      auto const loc = decl->getLocation();
+      if(loc.isValid())
+      {
+        auto const presumed = src_mgr.getPresumedLoc(loc);
+        if(presumed.isValid())
+        {
+          std::string_view filename(presumed.getFilename());
+          // Skip internal Clang interpreter file names like "input_line_N"
+          // These are not useful for users - they're virtual files from the REPL
+          if(!filename.starts_with("input_line_"))
+          {
+            result.file = std::string(filename);
+            result.line = presumed.getLine();
+            result.column = presumed.getColumn();
+          }
+        }
+      }
+
+      return result;
+    }
+
     bencode::value::dict make_done_response(std::string const &session,
                                             std::string const &id,
                                             std::vector<std::string> const &statuses) const
@@ -1815,11 +1981,53 @@ namespace jank::nrepl_server::asio
         }
       };
 
+      // Look up the actual function declaration for docstrings and location info
+      auto const scope(Cpp::GetGlobalScope());
+      auto const functions(Cpp::GetFunctionsUsingName(scope, symbol_name));
+
+      // Extract metadata from the first function declaration (docstring, location)
+      if(!functions.empty())
+      {
+        auto const metadata(extract_cpp_decl_metadata(functions.front()));
+        if(metadata.doc.has_value())
+        {
+          info.doc = metadata.doc;
+        }
+        if(metadata.file.has_value())
+        {
+          info.file = metadata.file;
+        }
+        if(metadata.line.has_value())
+        {
+          info.line = metadata.line;
+        }
+        if(metadata.column.has_value())
+        {
+          info.column = metadata.column;
+        }
+      }
+
       if(it != locked_globals->end() && !it->second.empty())
       {
         info.arglists.clear();
         info.arglists.reserve(it->second.size());
         info.cpp_signatures.reserve(it->second.size());
+
+        /* Use the jank source location from the first metadata entry if available */
+        auto const &first_metadata(it->second.front());
+        if(first_metadata.origin.is_some())
+        {
+          info.file = to_std_string(first_metadata.origin.unwrap());
+        }
+        if(first_metadata.origin_line.is_some())
+        {
+          info.line = first_metadata.origin_line.unwrap();
+        }
+        if(first_metadata.origin_column.is_some())
+        {
+          info.column = first_metadata.origin_column.unwrap();
+        }
+
         for(auto const &metadata : it->second)
         {
           var_documentation::cpp_signature signature;
@@ -1854,15 +2062,13 @@ namespace jank::nrepl_server::asio
           info.cpp_signatures.emplace_back(std::move(signature));
         }
       }
+      else if(!functions.empty())
+      {
+        populate_from_cpp_functions(functions);
+      }
       else
       {
-        auto const scope(Cpp::GetGlobalScope());
-        auto const functions(Cpp::GetFunctionsUsingName(scope, symbol_name));
-        if(functions.empty())
-        {
-          return std::nullopt;
-        }
-        populate_from_cpp_functions(functions);
+        return std::nullopt;
       }
 
       if(info.cpp_signatures.empty())
