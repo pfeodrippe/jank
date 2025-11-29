@@ -773,6 +773,12 @@ namespace jank::evaluate
 
     /* Parse and execute the C++ code */
     auto parse_res{ interpreter->Parse(expr->code.c_str()) };
+    if(!parse_res)
+    {
+      /* Parse failed - report the error */
+      llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "cpp/raw parse error: ");
+      throw make_box("Failed to parse cpp/raw code").erase();
+    }
     if(parse_res)
     {
       auto const translation_unit{ parse_res->TUPart };
@@ -1007,8 +1013,23 @@ namespace jank::evaluate
       }
     }
 
-    /* Execute the code */
-    __rt_ctx->jit_prc.eval_string(expr->code);
+    /* Execute the parsed code. We must use Execute() on the parse result, not eval_string(),
+     * because Parse() already registered the declarations. Calling eval_string() would try
+     * to parse the same code again, causing symbol conflicts. */
+    if(parse_res)
+    {
+      auto err(interpreter->Execute(*parse_res));
+      if(err)
+      {
+        llvm::logAllUnhandledErrors(jtl::move(err), llvm::errs(), "cpp/raw execute error: ");
+        throw make_box("Failed to execute cpp/raw code").erase();
+      }
+    }
+    else
+    {
+      /* Parse failed or returned no result - fall back to eval_string */
+      __rt_ctx->jit_prc.eval_string(expr->code);
+    }
     return runtime::jank_nil;
 #else
     (void)expr;

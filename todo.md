@@ -2,7 +2,8 @@
   - [x] compile
 - [ ] wasm
   - [x] compile
-  - [ ] source mapping
+  - [x] source mapping to cpp
+  - [x] source mapping to jank
   - [ ] cpp/raw
 - [ ] cpp integration
   - [x] :as

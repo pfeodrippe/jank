@@ -705,6 +705,11 @@ jank_compile_flags=(
   -Wno-invalid-constexpr
 )
 
+# Add debug flags in dev mode for source mapping
+if [[ "${RELEASE:-}" != "1" ]]; then
+  jank_compile_flags+=(-g3)
+fi
+
 em_link_cmd=(
   em++
   -o "${output_dir}/${output_name}.js"
@@ -1101,6 +1106,33 @@ fi
 
 echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.js"
 echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.wasm"
+
+# --- Copy jank source files for source mapping (dev mode only) ---
+if [[ "${RELEASE:-}" != "1" ]]; then
+  # Copy user's jank source file if provided
+  if [[ -n "${jank_source}" && -f "${jank_source}" ]]; then
+    # Get the absolute path that the #line directives will reference
+    jank_source_abs="$(cd "$(dirname "${jank_source}")" && pwd)/$(basename "${jank_source}")"
+    # Copy to output directory with the same path structure
+    cp "${jank_source}" "${output_dir}/"
+    echo "[emscripten-bundle] Copied source for debugging: ${output_dir}/$(basename "${jank_source}")"
+  fi
+
+  # Copy clojure.core and other standard library sources
+  for lib_jank in "${repo_root}/src/jank/clojure/core.jank" \
+                  "${repo_root}/src/jank/clojure/set.jank" \
+                  "${repo_root}/src/jank/clojure/string.jank" \
+                  "${repo_root}/src/jank/clojure/walk.jank" \
+                  "${repo_root}/src/jank/clojure/template.jank" \
+                  "${repo_root}/src/jank/clojure/test.jank"; do
+    if [[ -f "${lib_jank}" ]]; then
+      lib_dir="${output_dir}/$(dirname "${lib_jank#${repo_root}/}")"
+      mkdir -p "${lib_dir}"
+      cp "${lib_jank}" "${lib_dir}/"
+    fi
+  done
+  echo "[emscripten-bundle] Copied standard library sources for debugging"
+fi
 
 # --- Generate simple HTML wrapper for browser testing ---
 html_file="${output_dir}/${output_name}.html"

@@ -3,6 +3,33 @@
    [clojure.set :as set]
    [clojure.string :as str]))
 
+(cpp/raw "
+int my_add(int x, int y) {
+    return (x + y);
+}
+")
+
+(println :my_add (cpp/my_add 4 33))
+
+(cpp/raw "namespace test
+          {
+            struct Point
+            {
+              Point() : x{0}, y{0} {}
+              Point(int x_val) : x{x_val}, y{0} {}
+              Point(int x_val, int y_val) : x{x_val}, y{y_val} {}
+
+              int x;
+              int y;
+            };
+          }")
+
+(println :point
+         (let [a (cpp/test.Point.  (cpp/int. 4)
+                                   (cpp/int. 56))]
+           [(cpp/.-x a)
+            (cpp/.-y a)]))
+
 ;; Test basic set operations from clojure.set
 (def s1 #{1 2 3 4 30})
 (def s2 #{3 4 5 6})
@@ -41,6 +68,14 @@
            (+ 50 v)
            (set/union #{999} (set (mapv #(* 3 %) [1 5 v]))))
   (+ 48 v))
+
+(defn ^:export ->cpp-point
+  [x]
+  (let [a (cpp/test.Point.  (cpp/int. (* x 2))
+                            (cpp/int. (* x 3)))]
+    (println ::POINT [(cpp/.-x a)
+                      (cpp/.-y a)])
+    x))
 
 (defn ^:export heavy-stress
   [n]

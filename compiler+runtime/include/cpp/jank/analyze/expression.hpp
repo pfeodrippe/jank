@@ -1,8 +1,10 @@
 #pragma once
 
 #include <jtl/ptr.hpp>
+#include <jtl/option.hpp>
 
 #include <jank/runtime/object.hpp>
+#include <jank/read/source.hpp>
 
 namespace jank::analyze
 {
@@ -159,6 +161,11 @@ namespace jank::analyze
                expression_position position,
                local_frame_ptr frame,
                bool needs_box);
+    expression(expression_kind kind,
+               expression_position position,
+               local_frame_ptr frame,
+               bool needs_box,
+               read::source const &source);
     virtual ~expression() = default;
 
     virtual void propagate_position(expression_position const pos);
@@ -169,6 +176,7 @@ namespace jank::analyze
     expression_position position{};
     local_frame_ptr frame;
     bool needs_box{ true };
+    jtl::option<read::source> source;
   };
 
   using expression_ref = jtl::ref<expression>;

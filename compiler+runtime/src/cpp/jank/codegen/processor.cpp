@@ -382,6 +382,22 @@ namespace jank::codegen
     {
       return local_name; // + "__boxed";
     }
+
+    /* Emit #line directive to map generated C++ back to jank source. */
+    static void emit_line_directive(jtl::string_builder &buffer, read::source const &source)
+    {
+      if(source.file == read::no_source_path)
+      {
+        return;
+      }
+      util::format_to(buffer, "\n#line {} \"{}\"\n", source.start.line, source.file);
+    }
+
+    static void emit_line_directive(jtl::string_builder &buffer, runtime::object_ref const form)
+    {
+      auto const source{ runtime::object_source(form) };
+      emit_line_directive(buffer, source);
+    }
   }
 
   handle::handle(jtl::immutable_string const &name, bool const boxed)
@@ -620,6 +636,9 @@ namespace jank::codegen
   jtl::option<handle>
   processor::gen(analyze::expr::call_ref const expr, analyze::expr::function_arity const &fn_arity)
   {
+    /* Emit #line directive for source mapping. */
+    detail::emit_line_directive(body_buffer, expr->form);
+
     handle ret_tmp{ runtime::munge(__rt_ctx->unique_namespaced_string("call")) };
     auto const &source_tmp(gen(expr->source_expr, fn_arity));
     format_dynamic_call(source_tmp.unwrap().str(true),
