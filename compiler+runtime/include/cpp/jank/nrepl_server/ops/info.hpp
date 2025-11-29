@@ -81,9 +81,8 @@ namespace jank::nrepl_server::asio
 
     if(!info.has_value() && requested_native_alias.has_value())
     {
-      info = describe_native_header_entity(alias_display,
-                                           requested_native_alias.value(),
-                                           parts.name);
+      info
+        = describe_native_header_entity(alias_display, requested_native_alias.value(), parts.name);
     }
     if(!info.has_value())
     {

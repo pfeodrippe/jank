@@ -171,11 +171,17 @@ namespace jank::nrepl_server::asio
       // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
       if(jmp_result == jit::JIT_FATAL_ERROR_SIGNAL)
       {
-        std::snprintf(sig_buf, sizeof(sig_buf), "JIT/LLVM fatal error during eval (check stderr for details)");
+        std::snprintf(sig_buf,
+                      sizeof(sig_buf),
+                      "JIT/LLVM fatal error during eval (check stderr for details)");
       }
       else if(jmp_result == SIGSEGV)
       {
-        std::snprintf(sig_buf, sizeof(sig_buf), "Stack overflow or segmentation fault during eval (signal %d). This can happen with large/complex C++ headers like flecs.h", jmp_result);
+        std::snprintf(sig_buf,
+                      sizeof(sig_buf),
+                      "Stack overflow or segmentation fault during eval (signal %d). This can "
+                      "happen with large/complex C++ headers like flecs.h",
+                      jmp_result);
       }
       else
       {

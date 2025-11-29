@@ -924,22 +924,24 @@ namespace jank::nrepl_server::asio
       engine eng;
       /* Define a namespace with a struct to simulate what flecs.h provides */
       eng.handle(make_message({
-        {   "op",                                                                          "eval" },
-        { "code", "(cpp/raw \"namespace native_header_types_test { struct TestEntity { int id; }; }\")" }
+        {   "op","eval"        },
+        { "code",
+         "(cpp/raw \"namespace native_header_types_test { struct TestEntity { int id; }; "
+         "}\")" }
       }));
 
       /* Require it as a native header alias - this simulates (require ["header.h" :as alias]) */
       eng.handle(make_message({
-        {   "op",                                                                  "eval" },
+        {   "op",                                                            "eval" },
         { "code", "(require '[\"clojure/string_native.hpp\" :as str-native-types])" }
       }));
 
       /* Test that global cpp types appear in completions with cpp/ prefix.
        * This is the same mechanism used for native header type completion. */
       auto responses(eng.handle(make_message({
-        {     "op",                                         "complete" },
+        {     "op",                             "complete" },
         { "prefix", "cpp/native_header_types_test.TestEnt" },
-        {     "ns",                                             "user" }
+        {     "ns",                                 "user" }
       })));
 
       REQUIRE(responses.size() == 1);
@@ -949,8 +951,8 @@ namespace jank::nrepl_server::asio
       /* Type registration may not work in all environments */
       if(completions.empty())
       {
-        WARN(
-          "native header type completion not available (this may be expected in some environments)");
+        WARN("native header type completion not available (this may be expected in some "
+             "environments)");
         return;
       }
 
@@ -1797,7 +1799,7 @@ namespace jank::nrepl_server::asio
        * This verifies the interpreter can parse and execute code that
        * includes headers. */
       auto responses(eng.handle(make_message({
-        {   "op",                                                                     "eval" },
+        {   "op",    "eval"                },
         { "code",
          "(cpp/raw \"#include <vector>\ninline int vector_size_test() { std::vector<int> v = "
          "{1, 2, 3}; return v.size(); }\")" }
@@ -1835,7 +1837,7 @@ namespace jank::nrepl_server::asio
       /* Test that cpp/raw works with jank runtime header includes.
        * This is the pattern used for integrating with libraries like flecs. */
       auto responses(eng.handle(make_message({
-        {   "op",                                                                          "eval" },
+        {   "op",                    "eval"                },
         { "code",
          "(cpp/raw \"#include <jank/runtime/context.hpp>\ninline int rt_ctx_test() { return "
          "jank::runtime::__rt_ctx != nullptr ? 1 : 0; }\")" }
@@ -1854,15 +1856,13 @@ namespace jank::nrepl_server::asio
 
         /* Now test calling the function */
         auto call_responses(eng.handle(make_message({
-          {   "op",             "eval" },
+          {   "op",              "eval" },
           { "code", "(cpp/rt_ctx_test)" }
         })));
-        auto call_value
-          = std::ranges::find_if(call_responses.begin(),
-                                 call_responses.end(),
-                                 [](auto const &payload) {
-                                   return payload.find("value") != payload.end();
-                                 });
+        auto call_value = std::ranges::find_if(
+          call_responses.begin(),
+          call_responses.end(),
+          [](auto const &payload) { return payload.find("value") != payload.end(); });
         if(call_value != call_responses.end())
         {
           CHECK(call_value->at("value").as_string() == "1");
@@ -1895,15 +1895,15 @@ namespace jank::nrepl_server::asio
        * is tested implicitly through the cpp/ namespace tests and the
        * describe_native_header_entity function which now handles both functions and types. */
       eng.handle(make_message({
-        {   "op",                                                            "eval" },
+        {   "op",                                                           "eval" },
         { "code", "(require '[\"clojure/string_native.hpp\" :as native-str-test])" }
       }));
 
       /* Test completion for the alias prefix */
       auto responses(eng.handle(make_message({
-        {     "op",             "complete" },
+        {     "op",            "complete" },
         { "prefix", "native-str-test/rev" },
-        {     "ns",                 "user" }
+        {     "ns",                "user" }
       })));
 
       REQUIRE(responses.size() == 1);
@@ -1917,8 +1917,8 @@ namespace jank::nrepl_server::asio
       for(auto const &entry : completions)
       {
         auto const &dict(entry.as_dict());
-        std::cerr << "  - " << dict.at("candidate").as_string() << " (type: "
-                  << dict.at("type").as_string() << ")\n";
+        std::cerr << "  - " << dict.at("candidate").as_string()
+                  << " (type: " << dict.at("type").as_string() << ")\n";
         auto const arglists_it(dict.find("arglists"));
         if(arglists_it != dict.end())
         {
@@ -1969,7 +1969,7 @@ namespace jank::nrepl_server::asio
        * Using a header alias like (require ["header.h" :as mylib :scope "myns"])
        * means mylib/Type should work, and mylib/Type. should show members. */
       eng.handle(make_message({
-        {   "op",                                                                          "eval" },
+        {   "op",                         "eval"                },
         { "code",
          "(cpp/raw \"namespace nested_alias_test { struct world { void defer_begin() {} void "
          "defer_end() {} int get_value() { return 42; } }; }\")" }
@@ -1978,8 +1978,10 @@ namespace jank::nrepl_server::asio
       /* Require it as a native header alias with :scope pointing to our namespace.
        * This simulates: (require ["flecs.h" :as flecs]) where flecs::world exists */
       eng.handle(make_message({
-        {   "op",                                                                       "eval" },
-        { "code", "(require '[\"jank/runtime/context.hpp\" :as nested-alias :scope \"nested_alias_test\"])" }
+        {   "op","eval"                 },
+        { "code",
+         "(require '[\"jank/runtime/context.hpp\" :as nested-alias :scope "
+         "\"nested_alias_test\"])" }
       }));
 
       /* First, verify that completing the type itself works via the alias */
@@ -1993,12 +1995,13 @@ namespace jank::nrepl_server::asio
       auto const &type_payload(type_responses.front());
       auto const &type_completions(type_payload.at("completions").as_list());
 
-      std::cerr << "Native header alias type completions count: " << type_completions.size() << "\n";
+      std::cerr << "Native header alias type completions count: " << type_completions.size()
+                << "\n";
       for(auto const &entry : type_completions)
       {
         auto const &dict(entry.as_dict());
-        std::cerr << "  - " << dict.at("candidate").as_string() << " (type: "
-                  << dict.at("type").as_string() << ")\n";
+        std::cerr << "  - " << dict.at("candidate").as_string()
+                  << " (type: " << dict.at("type").as_string() << ")\n";
       }
 
       /* Type completion via native header alias may not work in all environments */
@@ -2027,9 +2030,9 @@ namespace jank::nrepl_server::asio
        * This is the key test - after typing "flecs/world." users expect to see
        * defer_begin, defer_end, etc. */
       auto member_responses(eng.handle(make_message({
-        {     "op",           "complete" },
+        {     "op",            "complete" },
         { "prefix", "nested-alias/world." },
-        {     "ns",               "user" }
+        {     "ns",                "user" }
       })));
 
       REQUIRE(member_responses.size() == 1);
@@ -2041,8 +2044,8 @@ namespace jank::nrepl_server::asio
       for(auto const &entry : member_completions)
       {
         auto const &dict(entry.as_dict());
-        std::cerr << "  - " << dict.at("candidate").as_string() << " (type: "
-                  << dict.at("type").as_string() << ")\n";
+        std::cerr << "  - " << dict.at("candidate").as_string()
+                  << " (type: " << dict.at("type").as_string() << ")\n";
       }
 
       /* Should have member functions */
@@ -2085,7 +2088,7 @@ namespace jank::nrepl_server::asio
        * which inherits from world_base<world>. This pattern can cause crashes
        * in GetAllCppNames when iterating declarations. */
       eng.handle(make_message({
-        {   "op",                                                                          "eval" },
+        {   "op","eval"        },
         { "code",
          "(cpp/raw \""
          "namespace template_base_test {"
@@ -2100,8 +2103,10 @@ namespace jank::nrepl_server::asio
 
       /* Require it as a native header alias */
       eng.handle(make_message({
-        {   "op",                                                                        "eval" },
-        { "code", "(require '[\"jank/runtime/context.hpp\" :as tmpl-test :scope \"template_base_test\"])" }
+        {   "op","eval"                 },
+        { "code",
+         "(require '[\"jank/runtime/context.hpp\" :as tmpl-test :scope "
+         "\"template_base_test\"])" }
       }));
 
       /* Verify that completing the type itself works */
@@ -2129,9 +2134,9 @@ namespace jank::nrepl_server::asio
        * This is the key test - classes with template bases used to crash here.
        * Using GetClassMethods, we can now get member completions. */
       auto member_responses(eng.handle(make_message({
-        {     "op",        "complete" },
+        {     "op",         "complete" },
         { "prefix", "tmpl-test/world." },
-        {     "ns",            "user" }
+        {     "ns",             "user" }
       })));
 
       REQUIRE(member_responses.size() == 1);
@@ -2163,22 +2168,22 @@ namespace jank::nrepl_server::asio
        * - Non-template methods (like progress(), defer_begin())
        * Path is relative from build directory to test directory. */
       eng.handle(make_message({
-        {   "op",                                                         "eval" },
+        {   "op",                                                                 "eval" },
         { "code", "(cpp/raw \"#include \\\"../test/cpp/jank/nrepl/test_flecs.hpp\\\"\")" }
       }));
 
       /* Create the alias using require with :scope.
        * This is like (require '["flecs.h" :as flecs :scope "flecs"]) */
       eng.handle(make_message({
-        {   "op",                                                                   "eval" },
+        {   "op",                                                                 "eval" },
         { "code", "(require '[\"jank/runtime/context.hpp\" :as flecs :scope \"flecs\"])" }
       }));
 
       /* Test completing flecs/wor -> flecs/world */
       auto type_responses(eng.handle(make_message({
-        {     "op",    "complete" },
+        {     "op",  "complete" },
         { "prefix", "flecs/wor" },
-        {     "ns",        "user" }
+        {     "ns",      "user" }
       })));
 
       REQUIRE(type_responses.size() == 1);
@@ -2210,9 +2215,9 @@ namespace jank::nrepl_server::asio
        * This is the critical test - the mixin #include inside class body
        * used to crash GetAllCppNames. */
       auto member_responses(eng.handle(make_message({
-        {     "op",      "complete" },
+        {     "op",     "complete" },
         { "prefix", "flecs/world." },
-        {     "ns",          "user" }
+        {     "ns",         "user" }
       })));
 
       REQUIRE(member_responses.size() == 1);
@@ -2279,6 +2284,97 @@ namespace jank::nrepl_server::asio
 
       /* Should have at least 6 completions (all non-template methods) */
       CHECK(member_completions.size() >= 6);
+    }
+
+    TEST_CASE("complete returns members for classes with #include inside class body")
+    {
+      /* This test verifies that noload_lookups works for classes that use
+       * #include inside the class body (like flecs::world does with mixins).
+       *
+       * Previously, GetAllCppNames and GetClassMethods would crash or return
+       * empty results for such classes because iterating decls() fails on
+       * complex declaration chains created by #include inside class body.
+       *
+       * The fix uses Clang's noload_lookups() to iterate the lookup table instead. */
+      engine eng;
+
+      /* Include the test header with #include inside class body */
+      eng.handle(make_message({
+        {   "op",                                             "eval"                 },
+        { "code",
+         "(cpp/raw \"#include \\\"../test/cpp/jank/nrepl/test_mixin_class.hpp\\\"\")" }
+      }));
+
+      /* Create the alias using require with :scope */
+      eng.handle(make_message({
+        {   "op",                                                                      "eval" },
+        { "code", "(require '[\"jank/runtime/context.hpp\" :as mixin :scope \"mixin_test\"])" }
+      }));
+
+      /* Test completing mixin/complex_class. -> member methods
+       * This should include both direct methods AND mixin methods. */
+      auto member_responses(eng.handle(make_message({
+        {     "op",             "complete" },
+        { "prefix", "mixin/complex_class." },
+        {     "ns",                 "user" }
+      })));
+
+      REQUIRE(member_responses.size() == 1);
+      auto const &member_payload(member_responses.front());
+      auto const &member_completions(member_payload.at("completions").as_list());
+
+      std::cerr << "Mixin class member completions: " << member_completions.size() << "\n";
+      for(auto const &entry : member_completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string() << "\n";
+      }
+
+      /* Member completions should NEVER be empty - this was the bug */
+      REQUIRE_FALSE(member_completions.empty());
+
+      /* Check for both direct methods and mixin methods */
+      bool found_direct_method{ false };
+      bool found_direct_get{ false };
+      bool found_mixin_method_a{ false };
+      bool found_mixin_method_b{ false };
+      bool found_mixin_get_value{ false };
+
+      for(auto const &entry : member_completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "mixin/complex_class.direct_method")
+        {
+          found_direct_method = true;
+        }
+        if(candidate == "mixin/complex_class.direct_get")
+        {
+          found_direct_get = true;
+        }
+        if(candidate == "mixin/complex_class.mixin_method_a")
+        {
+          found_mixin_method_a = true;
+        }
+        if(candidate == "mixin/complex_class.mixin_method_b")
+        {
+          found_mixin_method_b = true;
+        }
+        if(candidate == "mixin/complex_class.mixin_get_value")
+        {
+          found_mixin_get_value = true;
+        }
+      }
+
+      /* All methods (both direct and mixin) should be found */
+      CHECK(found_direct_method);
+      CHECK(found_direct_get);
+      CHECK(found_mixin_method_a);
+      CHECK(found_mixin_method_b);
+      CHECK(found_mixin_get_value);
+
+      /* Should have at least 5 completions */
+      CHECK(member_completions.size() >= 5);
     }
   }
 }

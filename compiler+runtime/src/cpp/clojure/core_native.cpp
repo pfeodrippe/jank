@@ -372,9 +372,8 @@ namespace clojure::core_native
       });
       if(!alias_data)
       {
-        throw std::runtime_error{
-          util::format("Native alias '{}' not found in any namespace", alias_sym->to_string())
-        };
+        throw std::runtime_error{ util::format("Native alias '{}' not found in any namespace",
+                                               alias_sym->to_string()) };
       }
     }
     else

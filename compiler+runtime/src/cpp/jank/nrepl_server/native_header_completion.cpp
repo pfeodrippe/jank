@@ -10,6 +10,7 @@
 #include <clang/AST/Decl.h>
 #include <clang/AST/DeclCXX.h>
 #include <clang/AST/DeclBase.h>
+#include <clang/AST/DeclLookups.h>
 
 #include <jank/nrepl_server/native_header_completion.hpp>
 #include <jank/runtime/context.hpp>
@@ -61,9 +62,12 @@ namespace jank::nrepl_server::asio
       return result;
     }
 
-    /* Safely enumerate member function names using Cpp::GetClassMethods.
-     * This avoids the problematic declaration chain iteration in GetAllCppNames
-     * that can crash on complex classes with mixins.
+    /* Safely enumerate member names of a class scope using Clang's lookup table.
+     * This avoids iterating decls() which can crash on classes with complex
+     * declarations (like flecs::world which uses #include inside the class body).
+     *
+     * Instead, we iterate the lookup table which contains all named members
+     * without walking the declaration chain.
      *
      * Returns true on success, false if enumeration failed. */
     bool safe_get_class_members(void *scope, std::set<std::string> &names)
@@ -73,45 +77,44 @@ namespace jank::nrepl_server::asio
         return false;
       }
 
-      /* Get class methods - this uses a different iteration path that's safer */
-      std::vector<void *> methods;
-      Cpp::GetClassMethods(scope, methods);
-      for(auto const method : methods)
+      try
       {
-        if(!method)
+        auto *decl = static_cast<clang::Decl *>(scope);
+        auto *cxxrd = clang::dyn_cast<clang::CXXRecordDecl>(decl);
+        if(!cxxrd)
         {
-          continue;
+          return false;
         }
-        auto const name = Cpp::GetFunctionSignature(method);
-        if(name.empty())
-        {
-          continue;
-        }
-        /* Extract just the function name (before the '(') */
-        auto const paren_pos = name.find('(');
-        if(paren_pos != std::string::npos)
-        {
-          auto fn_name = name.substr(0, paren_pos);
-          /* Remove any leading return type and class name qualifiers */
-          auto const space_pos = fn_name.rfind(' ');
-          if(space_pos != std::string::npos)
-          {
-            fn_name = fn_name.substr(space_pos + 1);
-          }
-          /* Remove any remaining qualifiers (ClassName::) */
-          auto const colon_pos = fn_name.rfind(':');
-          if(colon_pos != std::string::npos)
-          {
-            fn_name = fn_name.substr(colon_pos + 1);
-          }
-          if(!fn_name.empty() && fn_name[0] != '~')
-          {
-            names.insert(fn_name);
-          }
-        }
-      }
 
-      return true;
+        /* Use noload_lookups() to iterate the lookup table without loading
+         * external declarations. This is safer than decls() iteration.
+         * Pass false to not preserve internal state (we don't need it).
+         * We need to iterate using iterators to access getLookupName(). */
+        auto lookups = cxxrd->noload_lookups(false);
+        for(auto it = lookups.begin(); it != lookups.end(); ++it)
+        {
+          auto const decl_name = it.getLookupName();
+          if(!decl_name.isIdentifier())
+          {
+            continue;
+          }
+
+          auto const name_str = decl_name.getAsString();
+          if(name_str.empty() || name_str[0] == '~')
+          {
+            continue;
+          }
+
+          names.insert(name_str);
+        }
+
+        return true;
+      }
+      catch(...)
+      {
+        /* Swallow all exceptions - just return empty results */
+        return false;
+      }
     }
 
     /* Enumerate members of a nested type within a scope.
@@ -160,8 +163,9 @@ namespace jank::nrepl_server::asio
         }
 
         /* Get all member names using our safe implementation.
-         * This uses GetClassMethods instead of GetAllCppNames,
-         * avoiding crashes caused by corrupted declaration chains. */
+         * This uses noload_lookups() instead of GetAllCppNames or decls(),
+         * avoiding crashes caused by corrupted declaration chains in complex
+         * classes like flecs::world that use #include inside the class body. */
         std::set<std::string> member_names;
         if(!safe_get_class_members(type_scope, member_names))
         {
