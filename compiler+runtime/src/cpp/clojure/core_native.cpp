@@ -410,6 +410,47 @@ namespace clojure::core_native
   }
 #endif // !JANK_TARGET_WASM
 
+  // WASM versions of native header functions
+  // In native jank: delegate to the regular functions (which do JIT include)
+  // In WASM: only register metadata, no JIT compilation needed
+  object_ref register_native_header_wasm(object_ref const current_ns,
+                                         object_ref const alias,
+                                         object_ref const header,
+                                         object_ref const scope,
+                                         object_ref const include_directive)
+  {
+#ifndef JANK_TARGET_WASM
+    // In native jank, just call the regular function
+    return register_native_header(current_ns, alias, header, scope, include_directive);
+#else
+    // In WASM, only register metadata (JIT is not available)
+    auto const ns_obj(try_object<ns>(current_ns));
+    runtime::ns::native_alias alias_data{ runtime::to_string(header),
+                                          runtime::to_string(include_directive),
+                                          runtime::to_string(scope) };
+    ns_obj->add_native_alias(try_object<obj::symbol>(alias), std::move(alias_data)).expect_ok();
+    return jank_nil;
+#endif
+  }
+
+  object_ref register_native_refer_wasm(object_ref const current_ns,
+                                        object_ref const alias,
+                                        object_ref const local_sym,
+                                        object_ref const member_sym)
+  {
+#ifndef JANK_TARGET_WASM
+    // In native jank, just call the regular function
+    return register_native_refer(current_ns, alias, local_sym, member_sym);
+#else
+    // In WASM, only register metadata
+    auto const ns_obj(try_object<ns>(current_ns));
+    auto const alias_sym(try_object<obj::symbol>(alias));
+    auto const member(try_object<obj::symbol>(member_sym));
+    ns_obj->add_native_refer(try_object<obj::symbol>(local_sym), alias_sym, member).expect_ok();
+    return jank_nil;
+#endif
+  }
+
   object_ref all_ns()
   {
     native_vector<object_ref> namespaces;
@@ -681,8 +722,12 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
 #ifndef JANK_TARGET_WASM
   intern_fn("compile", &core_native::compile);
   intern_fn("register-native-header", &core_native::register_native_header);
+  intern_fn("register-native-refer", &core_native::register_native_refer);
   intern_fn("native-header-functions", &core_native::native_header_functions);
 #endif
+  // WASM versions are always registered (for AOT compilation in native, and runtime in WASM)
+  intern_fn("register-native-header-wasm", &core_native::register_native_header_wasm);
+  intern_fn("register-native-refer-wasm", &core_native::register_native_refer_wasm);
   intern_fn("all-ns", &core_native::all_ns);
   intern_fn("eval", &core_native::eval);
   intern_fn("hash-unordered-coll", &core_native::hash_unordered);

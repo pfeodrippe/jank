@@ -2,6 +2,16 @@
 
 set -euo pipefail
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+error() {
+  echo -e "${RED}[emscripten-bundle] ERROR: $*${NC}" >&2
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   here="$(cd "$(dirname "$0")" && pwd)"
 else
@@ -238,7 +248,7 @@ regenerate_core_lib() {
       echo "[emscripten-bundle] ${lib_name} regeneration successful!"
       return 0
     else
-      echo "[emscripten-bundle] WARNING: ${lib_name} regeneration failed!"
+      error "${lib_name} regeneration failed!"
       return 1
     fi
   fi
@@ -373,7 +383,22 @@ if [[ -n "${jank_source}" ]]; then
     echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm-aot..."
 
     # Build the jank command
-    jank_cmd=("${native_jank}" run \
+    # Note: -I flags are global options and must come BEFORE the subcommand
+    jank_cmd=("${native_jank}")
+
+    # Add include paths (global options go before subcommand)
+    if [[ ${#extra_include_paths[@]} -gt 0 ]]; then
+      for inc_path in "${extra_include_paths[@]}"; do
+        # Resolve to absolute path if relative
+        if [[ "${inc_path:0:1}" != "/" ]]; then
+          inc_path="$(cd "${inc_path}" 2>/dev/null && pwd || echo "${inc_path}")"
+        fi
+        jank_cmd+=(-I "${inc_path}")
+      done
+    fi
+
+    # Add the subcommand and its options
+    jank_cmd+=(run \
       --codegen wasm-aot \
       --module-path src/jank \
       --save-cpp \
@@ -391,8 +416,8 @@ if [[ -n "${jank_source}" ]]; then
       echo "[emscripten-bundle] AOT compilation successful!"
       aot_mode=true
     else
-      echo "[emscripten-bundle] AOT compilation failed, falling back to runtime eval mode"
-      aot_mode=false
+      error "AOT compilation failed!"
+      exit 1
     fi
   else
     # Using cached C++ generation, assume AOT mode
@@ -908,11 +933,13 @@ if [[ "${PRELINK_RUNTIME:-1}" == "1" && -f "${prelinked_runtime}" ]]; then
   )
 
   # Add only user object files (core libs are in prelinked runtime)
-  for obj in "${user_object_files[@]}"; do
-    if [[ -f "${obj}" ]]; then
-      em_link_cmd+=("${obj}")
-    fi
-  done
+  if [[ ${#user_object_files[@]} -gt 0 ]]; then
+    for obj in "${user_object_files[@]}"; do
+      if [[ -f "${obj}" ]]; then
+        em_link_cmd+=("${obj}")
+      fi
+    done
+  fi
 
   # Add extra libraries from --lib arguments
   if [[ ${#extra_libs[@]} -gt 0 ]]; then
@@ -1178,9 +1205,12 @@ if [[ "${RELEASE:-}" != "1" ]]; then
   if [[ -n "${jank_source}" && -f "${jank_source}" ]]; then
     # Get the absolute path that the #line directives will reference
     jank_source_abs="$(cd "$(dirname "${jank_source}")" && pwd)/$(basename "${jank_source}")"
-    # Copy to output directory with the same path structure
-    cp "${jank_source}" "${output_dir}/"
-    echo "[emscripten-bundle] Copied source for debugging: ${output_dir}/$(basename "${jank_source}")"
+    dest_file="${output_dir}/$(basename "${jank_source}")"
+    # Only copy if source and destination are different files
+    if [[ ! "${jank_source}" -ef "${dest_file}" ]]; then
+      cp "${jank_source}" "${output_dir}/"
+      echo "[emscripten-bundle] Copied source for debugging: ${dest_file}"
+    fi
   fi
 
   # Copy clojure.core and other standard library sources
@@ -1537,15 +1567,24 @@ if [[ "${run_after}" == "true" ]]; then
   cp "${output_dir}/${output_name}.js" "${js_as_mjs}"
 
   # Use dynamic import() which works in both CommonJS and ES modules
+  # Use ANSI codes for red error output
   runner_code=$(cat <<EOF
+const RED = '\x1b[31m';
+const NC = '\x1b[0m';
 import('${js_as_mjs}').then(module => {
   console.log('[jank-runner] Loading WASM module...');
   const moduleFactory = module.default;
   return moduleFactory();
-}).then(() => {
+}).then((Module) => {
+  // Check the exit status from the WASM main() function
+  const exitStatus = Module.EXITSTATUS !== undefined ? Module.EXITSTATUS : 0;
+  if (exitStatus !== 0) {
+    console.error(RED + '[jank-runner] ERROR: Module exited with code ' + exitStatus + NC);
+    process.exit(exitStatus);
+  }
   console.log('[jank-runner] Module executed successfully');
 }).catch(e => {
-  console.error('[jank-runner] Error:', e);
+  console.error(RED + '[jank-runner] ERROR: ' + e + NC);
   process.exit(1);
 });
 EOF

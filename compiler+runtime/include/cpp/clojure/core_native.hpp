@@ -43,6 +43,15 @@ namespace clojure::core_native
                                    object_ref alias,
                                    object_ref local_sym,
                                    object_ref member_sym);
+  object_ref register_native_header_wasm(object_ref current_ns,
+                                         object_ref alias,
+                                         object_ref header,
+                                         object_ref scope,
+                                         object_ref include_directive);
+  object_ref register_native_refer_wasm(object_ref current_ns,
+                                        object_ref alias,
+                                        object_ref local_sym,
+                                        object_ref member_sym);
   object_ref native_header_functions(object_ref current_ns, object_ref alias, object_ref prefix);
 
   object_ref not_(object_ref o);

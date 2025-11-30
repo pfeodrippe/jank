@@ -4322,20 +4322,34 @@
      :refers refers}))
 
 (defn- register-native-header! [spec]
-  #?(:wasm (throw "Native C++ headers are not supported in WASM")
-     :jank (let [{:keys [alias header scope include refers]} (normalize-native-libspec spec)]
-             (cpp/clojure.core_native.register_native_header
-               *ns*
-               alias
-               header
-               scope
-               include)
-             (doseq [{:keys [local member]} refers]
-               (cpp/clojure.core_native.register_native_refer
+  (let [{:keys [alias header scope include refers]} (normalize-native-libspec spec)]
+    #?(:wasm (do
+               ;; WASM AOT: Just register metadata, #include was already processed at compile time
+               (cpp/clojure.core_native.register_native_header_wasm
                  *ns*
                  alias
-                 local
-                 member)))))
+                 header
+                 scope
+                 include)
+               (doseq [{:keys [local member]} refers]
+                 (cpp/clojure.core_native.register_native_refer_wasm
+                   *ns*
+                   alias
+                   local
+                   member)))
+       :jank (do
+               (cpp/clojure.core_native.register_native_header
+                 *ns*
+                 alias
+                 header
+                 scope
+                 include)
+               (doseq [{:keys [local member]} refers]
+                 (cpp/clojure.core_native.register_native_refer
+                   *ns*
+                   alias
+                   local
+                   member))))))
 
 (defn- prependss [x coll]
   (if (symbol? x)
@@ -7789,5 +7803,5 @@ fails, attempts to require sym's namespace and retries."
   ([alias prefix]
    (throw-if (not (symbol? alias)) (str "Native alias must be a symbol: " alias))
    (throw-if (not (string? prefix)) (str "Prefix must be a string: " prefix))
-   #?(:wasm (throw "Native C++ headers are not supported in WASM")
+   #?(:wasm []  ;; WASM AOT: introspection not available, return empty
       :jank (cpp/clojure.core_native.native_header_functions nil alias prefix))))
