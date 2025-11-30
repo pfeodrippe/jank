@@ -1,5 +1,7 @@
 #include <jank/runtime/hot_reload.hpp>
 
+#include <cstring>
+
 #ifdef __EMSCRIPTEN__
   #include <dlfcn.h>
   #include <emscripten.h>
@@ -16,7 +18,7 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/rtti.hpp>
 #include <jank/runtime/behavior/callable.hpp>
-#include <jank/util/fmt.hpp>
+#include <jank/util/fmt/print.hpp>
 
 namespace jank::runtime
 {
@@ -105,7 +107,7 @@ namespace jank::runtime
 #else
     (void)module_path;
     (void)symbol_name;
-    printf("[hot-reload] ERROR: Hot-reload is only supported in WASM builds\n");
+    util::println("[hot-reload] ERROR: Hot-reload is only supported in WASM builds");
     return -1;
 #endif
   }
@@ -114,30 +116,29 @@ namespace jank::runtime
                                            void *fn_ptr,
                                            std::string const &signature)
   {
-    printf("[hot-reload] Registering: %s (sig: %s, ptr: %p)\n",
-           qualified_name.c_str(),
-           signature.c_str(),
-           fn_ptr);
+    util::println("[hot-reload] Registering: {} (sig: {}, ptr: {})",
+                  qualified_name,
+                  signature,
+                  fn_ptr);
 
     /* Parse the qualified name to get namespace and symbol.
      * Format: "namespace/symbol-name" e.g. "user/my-func" */
     auto slash_pos = qualified_name.find('/');
     if(slash_pos == std::string::npos)
     {
-      printf("[hot-reload] ERROR: Invalid qualified name (missing /): %s\n",
-             qualified_name.c_str());
+      util::println("[hot-reload] ERROR: Invalid qualified name (missing /): {}", qualified_name);
       return -1;
     }
 
-    std::string ns_name = qualified_name.substr(0, slash_pos);
-    std::string sym_name = qualified_name.substr(slash_pos + 1);
+    std::string const ns_name = qualified_name.substr(0, slash_pos);
+    std::string const sym_name = qualified_name.substr(slash_pos + 1);
 
     /* Look up or create the namespace. */
     auto ns_sym = make_box<obj::symbol>(ns_name);
     auto ns = __rt_ctx->find_ns(ns_sym);
     if(ns.is_nil())
     {
-      printf("[hot-reload] Creating namespace: %s\n", ns_name.c_str());
+      util::println("[hot-reload] Creating namespace: {}", ns_name);
       ns = __rt_ctx->intern_ns(ns_sym);
     }
 
@@ -147,7 +148,7 @@ namespace jank::runtime
 
     /* Parse the signature to determine arity.
      * For now, we support simple numeric signatures like "1", "2", etc. */
-    int arity = std::atoi(signature.c_str());
+    int const arity = static_cast<int>(std::strtol(signature.c_str(), nullptr, 10));
 
     /* Create a native_function_wrapper based on arity.
      * We need to create a std::function that matches the arity. */
@@ -198,7 +199,8 @@ namespace jank::runtime
           break;
         }
       default:
-        printf("[hot-reload] ERROR: Unsupported arity: %d (max 4 currently supported)\n", arity);
+        util::println("[hot-reload] ERROR: Unsupported arity: {} (max 4 currently supported)",
+                      arity);
         return -1;
     }
 
@@ -206,9 +208,7 @@ namespace jank::runtime
     var->bind_root(wrapper);
 
     registered_symbols_++;
-    printf("[hot-reload] Successfully registered %s with arity %d\n",
-           qualified_name.c_str(),
-           arity);
+    util::println("[hot-reload] Successfully registered {} with arity {}", qualified_name, arity);
 
     return 0;
   }
@@ -261,9 +261,11 @@ namespace jank::runtime
 
       json += "]}";
 
-      /* Allocate persistent string (caller must free with free()). */
-      char *result = static_cast<char *>(malloc(json.size() + 1));
-      strcpy(result, json.c_str());
+      /* Allocate persistent string (caller must free with free()).
+       * NOLINT: This C API is intended for WASM/JS interop which requires malloc. */
+      char *result
+        = static_cast<char *>(malloc(json.size() + 1)); // NOLINT(cppcoreguidelines-no-malloc)
+      std::memcpy(result, json.c_str(), json.size() + 1);
       return result;
     }
 
@@ -285,7 +287,7 @@ namespace jank::runtime
       {
         return 0;
       }
-      object_ref ref{ reinterpret_cast<object *>(obj) };
+      object_ref const ref{ reinterpret_cast<object *>(obj) };
       auto int_obj = dyn_cast<obj::integer>(ref);
       if(int_obj.is_nil())
       {
@@ -299,8 +301,8 @@ namespace jank::runtime
 #endif
     void *jank_add_integers(void *a, void *b)
     {
-      int64_t val_a = jank_unbox_integer(a);
-      int64_t val_b = jank_unbox_integer(b);
+      int64_t const val_a = jank_unbox_integer(a);
+      int64_t const val_b = jank_unbox_integer(b);
       return jank_box_integer(val_a + val_b);
     }
 
@@ -315,7 +317,7 @@ namespace jank::runtime
       auto var = __rt_ctx->find_var(ns, name);
       if(var.is_nil())
       {
-        printf("[hot-reload] ERROR: Var not found: %s/%s\n", ns, name);
+        util::println("[hot-reload] ERROR: Var not found: {}/{}", ns, name);
         return jank_nil.erase();
       }
 
@@ -356,7 +358,8 @@ namespace jank::runtime
                               object_ref{ reinterpret_cast<object *>(args[4]) })
             .erase();
         default:
-          printf("[hot-reload] ERROR: jank_call_var only supports up to 5 args, got %d\n", argc);
+          util::println("[hot-reload] ERROR: jank_call_var only supports up to 5 args, got {}",
+                        argc);
           return jank_nil.erase();
       }
     }
@@ -379,7 +382,7 @@ namespace jank::runtime
 #endif
     void *jank_make_keyword(char const *ns, char const *name)
     {
-      std::string ns_str = (ns && ns[0]) ? ns : "";
+      std::string const ns_str = (ns && ns[0]) ? ns : "";
       auto kw = __rt_ctx->intern_keyword(ns_str, name, true).expect_ok();
       return kw.erase();
     }
@@ -440,7 +443,7 @@ namespace jank::runtime
       {
         return 0.0;
       }
-      object_ref ref{ reinterpret_cast<object *>(obj) };
+      object_ref const ref{ reinterpret_cast<object *>(obj) };
 
       /* Try real first. */
       auto real_obj = dyn_cast<obj::real>(ref);
@@ -544,8 +547,8 @@ namespace jank::runtime
             break;
           }
         default:
-          printf("[hot-reload] ERROR: jank_make_fn_wrapper only supports arity 0-3, got %d\n",
-                 arity);
+          util::println("[hot-reload] ERROR: jank_make_fn_wrapper only supports arity 0-3, got {}",
+                        arity);
           return jank_nil.erase();
       }
 

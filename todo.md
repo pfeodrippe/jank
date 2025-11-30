@@ -20,6 +20,7 @@
     - [x] nested
     - [x] (require '["flecs.h" :as fw :scope "flecs.world"])
 - [x] when native and external header, get info about the location
+- [ ] vybe
 - [ ] wasm
   - [x] no require
   - [x] with require (do the AOT instead of JIT when generating code for WASM)
@@ -41,7 +42,6 @@
   - functions, namespaces
   - [ ] gather
   - [ ] complain if trying to use something ambiguous (e.g. aliasing or refering to a fn that has the same name in 2 namespaces)
-- [ ] vybe
 - [ ] jank bootstrapping ?
 - [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`
 - [ ] Fix implicit conversion

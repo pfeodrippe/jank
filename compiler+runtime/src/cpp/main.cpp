@@ -80,7 +80,7 @@ namespace jank
           /* Demunge the module name: convert underscores to hyphens for namespace lookup.
            * File names use underscores (my_flecs_wasm.jank) but namespaces use hyphens (my-flecs-wasm). */
           std::string ns_name{ module_name };
-          std::replace(ns_name.begin(), ns_name.end(), '_', '-');
+          std::ranges::replace(ns_name, '_', '-');
           auto const ns(__rt_ctx->find_ns(make_box<obj::symbol>(ns_name)));
           if(!ns.is_nil())
           {

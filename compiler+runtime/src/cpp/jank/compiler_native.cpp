@@ -88,6 +88,22 @@ namespace jank::compiler_native
     return cg_prc.declaration_str();
   }
 
+  static jtl::immutable_string
+  render_cpp_aot_declaration(analyze::expr::function_ref const &wrapped_expr,
+                             jtl::immutable_string const &module)
+  {
+    codegen::processor cg_prc{ wrapped_expr, module, codegen::compilation_target::module };
+    return cg_prc.declaration_str();
+  }
+
+  static jtl::immutable_string
+  render_cpp_wasm_aot_declaration(analyze::expr::function_ref const &wrapped_expr,
+                                  jtl::immutable_string const &module)
+  {
+    codegen::processor cg_prc{ wrapped_expr, module, codegen::compilation_target::wasm_aot };
+    return cg_prc.declaration_str();
+  }
+
   static object_ref native_source(object_ref const form)
   {
     return with_pipeline(
@@ -183,6 +199,46 @@ namespace jank::compiler_native
       });
   }
 
+  static object_ref native_aot_source_raw(object_ref const form)
+  {
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        return make_string_object(render_cpp_aot_declaration(wrapped_expr, module));
+      });
+  }
+
+  static object_ref native_aot_source_formatted(object_ref const form)
+  {
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        auto const declaration(render_cpp_aot_declaration(wrapped_expr, module));
+        auto formatted(util::format_cpp_source(declaration).expect_ok());
+        return make_string_object(formatted);
+      });
+  }
+
+  static object_ref native_wasm_aot_source_raw(object_ref const form)
+  {
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        return make_string_object(render_cpp_wasm_aot_declaration(wrapped_expr, module));
+      });
+  }
+
+  static object_ref native_wasm_aot_source_formatted(object_ref const form)
+  {
+    return with_pipeline(
+      form,
+      [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {
+        auto const declaration(render_cpp_wasm_aot_declaration(wrapped_expr, module));
+        auto formatted(util::format_cpp_source(declaration).expect_ok());
+        return make_string_object(formatted);
+      });
+  }
+
   static object_ref native_aot_entrypoint_source(object_ref const form)
   {
     auto const list(dyn_cast<obj::persistent_list>(form));
@@ -261,6 +317,10 @@ extern "C" jank_object_ref jank_load_jank_compiler_native()
   intern_fn("native-llvm-ir-optimized", &compiler_native::native_llvm_ir_optimized);
   intern_fn("native-cpp-source-raw", &compiler_native::native_cpp_source_raw);
   intern_fn("native-cpp-source-formatted", &compiler_native::native_cpp_source_formatted);
+  intern_fn("native-aot-source-raw", &compiler_native::native_aot_source_raw);
+  intern_fn("native-aot-source-formatted", &compiler_native::native_aot_source_formatted);
+  intern_fn("native-wasm-aot-source-raw", &compiler_native::native_wasm_aot_source_raw);
+  intern_fn("native-wasm-aot-source-formatted", &compiler_native::native_wasm_aot_source_formatted);
   intern_fn("native-aot-entrypoint-source", &compiler_native::native_aot_entrypoint_source);
 
   return jank_nil.erase();
