@@ -2748,7 +2748,7 @@ namespace jank::nrepl_server::asio
 
       /* Then require it with :scope to get the namespace alias */
       eng.handle(make_message({
-        {   "op","eval"                 },
+        {   "op","eval"                },
         { "code",
          "(require '[\"test/cpp/jank/nrepl/template_types.hpp\" :as tmpl-test :scope "
          "\"template_type_test\"])" }
@@ -2785,7 +2785,7 @@ namespace jank::nrepl_server::asio
 
       /* Then require it with :scope to get the namespace alias */
       eng.handle(make_message({
-        {   "op","eval"                 },
+        {   "op","eval"                },
         { "code",
          "(require '[\"test/cpp/jank/nrepl/template_types.hpp\" :as tmpl-test :scope "
          "\"template_type_test\"])" }
@@ -2839,7 +2839,7 @@ namespace jank::nrepl_server::asio
 
       /* Then require it with :scope to get the namespace alias */
       eng.handle(make_message({
-        {   "op","eval"                 },
+        {   "op","eval"                },
         { "code",
          "(require '[\"test/cpp/jank/nrepl/template_types.hpp\" :as tmpl-test :scope "
          "\"template_type_test\"])" }
@@ -2880,7 +2880,7 @@ namespace jank::nrepl_server::asio
 
       /* Then require it with :scope to get the namespace alias */
       eng.handle(make_message({
-        {   "op","eval"                 },
+        {   "op","eval"                },
         { "code",
          "(require '[\"test/cpp/jank/nrepl/template_types.hpp\" :as tmpl-test :scope "
          "\"template_type_test\"])" }

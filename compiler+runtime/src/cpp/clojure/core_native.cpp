@@ -451,18 +451,21 @@ namespace clojure::core_native
 #endif
   }
 
-  static object_ref all_ns()
+  namespace
   {
-    native_vector<object_ref> namespaces;
-    __rt_ctx->namespaces.withRLock([&](auto const &ns_map) {
-      namespaces.reserve(ns_map.size());
-      for(auto const &pair : ns_map)
-      {
-        namespaces.emplace_back(pair.second);
-      }
-    });
-    return make_box<obj::persistent_list>(
-      runtime::detail::native_persistent_list{ namespaces.rbegin(), namespaces.rend() });
+    object_ref all_ns()
+    {
+      native_vector<object_ref> namespaces;
+      __rt_ctx->namespaces.withRLock([&](auto const &ns_map) {
+        namespaces.reserve(ns_map.size());
+        for(auto const &pair : ns_map)
+        {
+          namespaces.emplace_back(pair.second);
+        }
+      });
+      return make_box<obj::persistent_list>(
+        runtime::detail::native_persistent_list{ namespaces.rbegin(), namespaces.rend() });
+    }
   }
 
   object_ref eval(object_ref const expr)

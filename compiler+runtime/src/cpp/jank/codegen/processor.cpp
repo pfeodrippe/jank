@@ -1,3 +1,5 @@
+#include <cmath>
+
 #include <llvm/Support/Casting.h>
 
 #include <jank/codegen/processor.hpp>
@@ -182,10 +184,37 @@ namespace jank::codegen
           }
           else if constexpr(std::same_as<T, runtime::obj::real>)
           {
-            util::format_to(buffer,
-                            "jank::runtime::make_box<jank::runtime::obj::real>(static_cast<jank::"
-                            "f64>({}))",
-                            typed_o->data);
+            if(std::isinf(typed_o->data))
+            {
+              if(typed_o->data > 0)
+              {
+                util::format_to(
+                  buffer,
+                  "jank::runtime::make_box<jank::runtime::obj::real>(std::numeric_limits<jank::"
+                  "f64>::infinity())");
+              }
+              else
+              {
+                util::format_to(
+                  buffer,
+                  "jank::runtime::make_box<jank::runtime::obj::real>(-std::numeric_limits<jank::"
+                  "f64>::infinity())");
+              }
+            }
+            else if(std::isnan(typed_o->data))
+            {
+              util::format_to(
+                buffer,
+                "jank::runtime::make_box<jank::runtime::obj::real>(std::numeric_limits<jank::"
+                "f64>::quiet_NaN())");
+            }
+            else
+            {
+              util::format_to(buffer,
+                              "jank::runtime::make_box<jank::runtime::obj::real>(static_cast<jank::"
+                              "f64>({}))",
+                              typed_o->data);
+            }
           }
           else if constexpr(std::same_as<T, runtime::obj::big_integer>)
           {

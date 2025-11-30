@@ -451,8 +451,8 @@ namespace clojure::string_native
     }
     else
     {
-      jtl::immutable_string::size_type start = 0;
-      jtl::immutable_string::size_type pos = 0;
+      jtl::immutable_string::size_type start{ 0 };
+      jtl::immutable_string::size_type pos{ 0 };
 
       while((pos = s_str.find(delim_str, start)) != jtl::immutable_string::npos)
       {
@@ -489,9 +489,9 @@ namespace clojure::string_native
     native_vector<object_ref> vec;
     vec.reserve(limit_int);
 
-    jtl::immutable_string::size_type start = 0;
-    jtl::immutable_string::size_type pos = 0;
-    i64 count = 1;
+    jtl::immutable_string::size_type start{ 0 };
+    jtl::immutable_string::size_type pos{ 0 };
+    i64 count{ 1 };
 
     while(count < limit_int && (pos = s_str.find(delim_str, start)) != jtl::immutable_string::npos)
     {
@@ -525,8 +525,8 @@ namespace clojure::string_native
     }
 
     jtl::string_builder buff;
-    jtl::immutable_string::size_type start = 0;
-    jtl::immutable_string::size_type pos = 0;
+    jtl::immutable_string::size_type start{ 0 };
+    jtl::immutable_string::size_type pos{ 0 };
 
     while((pos = s_str.find(match_str, start)) != jtl::immutable_string::npos)
     {

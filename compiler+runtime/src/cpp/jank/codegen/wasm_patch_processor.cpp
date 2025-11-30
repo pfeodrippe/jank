@@ -1,3 +1,5 @@
+#include <cmath>
+
 #include <jank/codegen/wasm_patch_processor.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core/munge.hpp>
@@ -184,10 +186,28 @@ struct patch_symbol {
         }
         else if constexpr(std::same_as<T, runtime::obj::real>)
         {
-          util::format_to(*current_output_,
-                          "  void *{} = jank_box_double({});\n",
-                          tmp,
-                          typed_o->data);
+          if(std::isinf(typed_o->data))
+          {
+            if(typed_o->data > 0)
+            {
+              util::format_to(*current_output_, "  void *{} = jank_box_double(INFINITY);\n", tmp);
+            }
+            else
+            {
+              util::format_to(*current_output_, "  void *{} = jank_box_double(-INFINITY);\n", tmp);
+            }
+          }
+          else if(std::isnan(typed_o->data))
+          {
+            util::format_to(*current_output_, "  void *{} = jank_box_double(NAN);\n", tmp);
+          }
+          else
+          {
+            util::format_to(*current_output_,
+                            "  void *{} = jank_box_double({});\n",
+                            tmp,
+                            typed_o->data);
+          }
         }
         else if constexpr(std::same_as<T, runtime::obj::keyword>)
         {
