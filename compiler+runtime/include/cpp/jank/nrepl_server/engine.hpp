@@ -1431,7 +1431,8 @@ namespace jank::nrepl_server::asio
       }
 
       // Search backwards from the declaration to find comment lines
-      std::string_view before_decl(buffer.data(), file_offset);
+      // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): size is explicitly provided
+      std::string_view const before_decl(buffer.data(), file_offset);
 
       // Find the start of the current line
       auto line_start = before_decl.rfind('\n');
@@ -1467,7 +1468,7 @@ namespace jank::nrepl_server::asio
           prev_line_start++; // Move past the newline
         }
 
-        std::string_view prev_line
+        std::string_view const prev_line
           = before_decl.substr(prev_line_start, prev_line_end - prev_line_start);
 
         // Trim leading whitespace
@@ -1478,12 +1479,12 @@ namespace jank::nrepl_server::asio
           break;
         }
 
-        std::string_view trimmed = prev_line.substr(content_start);
+        std::string_view const trimmed = prev_line.substr(content_start);
 
         // Check if it's a comment line
         if(trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*"))
         {
-          comment_lines.push_back(std::string(prev_line));
+          comment_lines.emplace_back(prev_line);
           search_pos = prev_line_start;
         }
         else
@@ -1500,13 +1501,13 @@ namespace jank::nrepl_server::asio
 
       // Reverse to get comments in correct order (top to bottom)
       std::string result;
-      for(auto it = comment_lines.rbegin(); it != comment_lines.rend(); ++it)
+      for(auto const &comment_line : std::ranges::reverse_view(comment_lines))
       {
         if(!result.empty())
         {
           result.push_back('\n');
         }
-        result += *it;
+        result += comment_line;
       }
 
       return result;
@@ -1542,12 +1543,31 @@ namespace jank::nrepl_server::asio
         auto const presumed = src_mgr.getPresumedLoc(loc);
         if(presumed.isValid())
         {
-          std::string_view filename(presumed.getFilename());
+          std::string_view const filename(presumed.getFilename());
           // Skip internal Clang interpreter file names like "input_line_N"
           // These are not useful for users - they're virtual files from the REPL
           if(!filename.starts_with("input_line_"))
           {
-            result.file = std::string(filename);
+            // Try to get the full path from the file entry
+            auto const file_id = src_mgr.getFileID(loc);
+            if(auto const file_entry = src_mgr.getFileEntryRefForID(file_id))
+            {
+              auto const real_path = file_entry->getFileEntry().tryGetRealPathName();
+              if(!real_path.empty())
+              {
+                result.file = real_path.str();
+              }
+              else
+              {
+                // Fall back to the filename from the file entry
+                result.file = file_entry->getName().str();
+              }
+            }
+            else
+            {
+              // Fall back to the presumed filename
+              result.file = std::string(filename);
+            }
             result.line = presumed.getLine();
             result.column = presumed.getColumn();
           }
@@ -1942,7 +1962,23 @@ namespace jank::nrepl_server::asio
         {
           var_documentation::cpp_signature signature;
           auto const return_type(Cpp::GetFunctionReturnType(fn));
-          signature.return_type = Cpp::GetTypeAsString(return_type);
+          if(return_type)
+          {
+            auto const ret_type_str = Cpp::GetTypeAsString(return_type);
+            if(ret_type_str.find("NULL TYPE") == std::string::npos)
+            {
+              signature.return_type = ret_type_str;
+            }
+            else
+            {
+              auto const ret_scope = Cpp::GetScopeFromType(return_type);
+              signature.return_type = ret_scope ? Cpp::GetQualifiedName(ret_scope) : "auto";
+            }
+          }
+          else
+          {
+            signature.return_type = "void";
+          }
 
           auto const num_args(Cpp::GetFunctionNumArgs(fn));
           std::string rendered_signature{ "[" };
@@ -1951,7 +1987,23 @@ namespace jank::nrepl_server::asio
           {
             var_documentation::cpp_argument arg_doc;
             auto const arg_type(Cpp::GetFunctionArgType(fn, idx));
-            arg_doc.type = Cpp::GetTypeAsString(arg_type);
+            if(arg_type)
+            {
+              auto const type_str = Cpp::GetTypeAsString(arg_type);
+              if(type_str.find("NULL TYPE") == std::string::npos)
+              {
+                arg_doc.type = type_str;
+              }
+              else
+              {
+                auto const type_scope = Cpp::GetScopeFromType(arg_type);
+                arg_doc.type = type_scope ? Cpp::GetQualifiedName(type_scope) : "auto";
+              }
+            }
+            else
+            {
+              arg_doc.type = "auto";
+            }
             auto const arg_name(Cpp::GetFunctionArgName(fn, idx));
             if(arg_name.empty())
             {
@@ -2339,7 +2391,32 @@ namespace jank::nrepl_server::asio
       {
         var_documentation::cpp_signature signature;
         auto const return_type(Cpp::GetFunctionReturnType(fn));
-        signature.return_type = Cpp::GetTypeAsString(return_type);
+        if(return_type)
+        {
+          auto const ret_type_str = Cpp::GetTypeAsString(return_type);
+          // Check for "NULL TYPE" which indicates CppInterOp couldn't stringify the type
+          if(ret_type_str.find("NULL TYPE") == std::string::npos)
+          {
+            signature.return_type = ret_type_str;
+          }
+          else
+          {
+            // Try to get a better type representation using qualified name
+            auto const ret_scope = Cpp::GetScopeFromType(return_type);
+            if(ret_scope)
+            {
+              signature.return_type = Cpp::GetQualifiedName(ret_scope);
+            }
+            else
+            {
+              signature.return_type = "auto";
+            }
+          }
+        }
+        else
+        {
+          signature.return_type = "void";
+        }
 
         std::string rendered_signature{ "[" };
         bool first_arg{ true };
@@ -2367,7 +2444,32 @@ namespace jank::nrepl_server::asio
         {
           var_documentation::cpp_argument arg_doc;
           auto const arg_type(Cpp::GetFunctionArgType(fn, idx));
-          arg_doc.type = Cpp::GetTypeAsString(arg_type);
+          if(arg_type)
+          {
+            auto const type_str = Cpp::GetTypeAsString(arg_type);
+            // Check for "NULL TYPE" which indicates CppInterOp couldn't stringify the type
+            if(type_str.find("NULL TYPE") == std::string::npos)
+            {
+              arg_doc.type = type_str;
+            }
+            else
+            {
+              // Try to get a better type representation using qualified name
+              auto const type_scope = Cpp::GetScopeFromType(arg_type);
+              if(type_scope)
+              {
+                arg_doc.type = Cpp::GetQualifiedName(type_scope);
+              }
+              else
+              {
+                arg_doc.type = "auto";
+              }
+            }
+          }
+          else
+          {
+            arg_doc.type = "auto";
+          }
           arg_doc.name = Cpp::GetFunctionArgName(fn, idx);
           if(arg_doc.name.empty())
           {
@@ -2510,7 +2612,23 @@ namespace jank::nrepl_server::asio
               }
               signature.push_back('[');
               auto const arg_type(Cpp::GetFunctionArgType(ctor, idx));
-              signature += Cpp::GetTypeAsString(arg_type);
+              if(arg_type)
+              {
+                auto const type_str = Cpp::GetTypeAsString(arg_type);
+                if(type_str.find("NULL TYPE") == std::string::npos)
+                {
+                  signature += type_str;
+                }
+                else
+                {
+                  auto const type_scope = Cpp::GetScopeFromType(arg_type);
+                  signature += type_scope ? Cpp::GetQualifiedName(type_scope) : "auto";
+                }
+              }
+              else
+              {
+                signature += "auto";
+              }
               auto const arg_name(Cpp::GetFunctionArgName(ctor, idx));
               if(!arg_name.empty())
               {

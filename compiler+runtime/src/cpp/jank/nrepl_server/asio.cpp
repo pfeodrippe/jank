@@ -15,8 +15,23 @@
 #include <utility>
 #include <pthread.h>
 
+/* Enable GC thread support. We need explicit forward declarations because
+ * some system gc.h headers may not expose these even with GC_THREADS defined. */
 #define GC_THREADS
 #include <gc/gc.h>
+
+/* Forward declarations for GC thread registration functions.
+ * These ensure the functions are declared even if gc.h doesn't expose them
+ * (e.g., when using system libgc that wasn't built with thread support).
+ * If the library doesn't have them, we'll get a link error which is more
+ * diagnosable than a compile error in clang-tidy. */
+extern "C"
+{
+  GC_API void GC_CALL GC_allow_register_threads(void);
+  GC_API int GC_CALL GC_register_my_thread(const struct GC_stack_base *);
+  GC_API int GC_CALL GC_unregister_my_thread(void);
+  GC_API int GC_CALL GC_get_stack_base(struct GC_stack_base *);
+}
 
 #ifndef BOOST_ERROR_CODE_HEADER_ONLY
   #define BOOST_ERROR_CODE_HEADER_ONLY
@@ -227,13 +242,13 @@ namespace jank::nrepl_server::asio
       pthread_attr_t attr;
       pthread_attr_init(&attr);
       // Set stack size to 16MB (default is ~512KB on macOS, too small for flecs.h)
-      constexpr size_t LARGE_STACK_SIZE = 16 * 1024 * 1024;
+      constexpr size_t LARGE_STACK_SIZE = static_cast<size_t>(16) * 1024 * 1024;
       pthread_attr_setstacksize(&attr, LARGE_STACK_SIZE);
 
       auto thread_func = [](void *arg) -> void * {
         auto *self = static_cast<server *>(arg);
 
-        GC_stack_base sb;
+        GC_stack_base sb{};
         GC_get_stack_base(&sb);
         GC_register_my_thread(&sb);
 

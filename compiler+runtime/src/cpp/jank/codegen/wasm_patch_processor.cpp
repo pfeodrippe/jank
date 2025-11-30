@@ -604,7 +604,7 @@ struct patch_symbol {
     util::format_to(final_output, "patch_symbol *jank_patch_symbols_{}(int *count) ", patch_id_);
     final_output("{\n  static patch_symbol symbols[] = {\n    { ");
     util::format_to(final_output,
-                    "\"{}/{}\", \"{}\", (void *){}",
+                    R"("{}/{}", "{}", (void *){})",
                     var_ns,
                     var_name,
                     param_count,

@@ -211,7 +211,10 @@ namespace jank::nrepl_server::asio
             if(seen.insert(name).second)
             {
               /* Return as type_path.member_name so display shows full path */
-              matches.emplace_back(type_path + "." + name);
+              std::string full_name;
+              full_name.reserve(type_path.size() + 1 + name.size());
+              full_name.append(type_path).append(".").append(name);
+              matches.emplace_back(std::move(full_name));
             }
             continue;
           }
@@ -222,7 +225,10 @@ namespace jank::nrepl_server::asio
           {
             if(seen.insert(name).second)
             {
-              matches.emplace_back(type_path + "." + name);
+              std::string full_name;
+              full_name.reserve(type_path.size() + 1 + name.size());
+              full_name.append(type_path).append(".").append(name);
+              matches.emplace_back(std::move(full_name));
             }
           }
         }
@@ -243,7 +249,7 @@ namespace jank::nrepl_server::asio
   /* Enumerate class members directly (for class-level scopes).
    * This is used when the scope itself is a class like "flecs::world",
    * allowing `fw/defer_begin` to directly refer to members. */
-  std::vector<std::string>
+  static std::vector<std::string>
   enumerate_class_members_directly(void *class_scope, std::string const &prefix)
   {
     std::vector<std::string> matches;

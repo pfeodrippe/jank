@@ -26,7 +26,7 @@ namespace jank::nrepl_server::asio
   inline thread_local bool alt_stack_installed = false;
 
   // Size of alternate stack (128KB should be enough for signal handler + longjmp)
-  constexpr size_t ALT_STACK_SIZE = 128 * 1024;
+  constexpr size_t ALT_STACK_SIZE = static_cast<size_t>(128) * 1024;
 
   inline void ensure_alt_stack()
   {
@@ -36,6 +36,7 @@ namespace jank::nrepl_server::asio
     }
 
     // Allocate alternate stack memory
+    // NOLINTNEXTLINE(cppcoreguidelines-no-malloc): signal stack needs raw memory
     alt_stack_memory = std::malloc(ALT_STACK_SIZE);
     if(alt_stack_memory == nullptr)
     {
@@ -52,6 +53,7 @@ namespace jank::nrepl_server::asio
     if(sigaltstack(&ss, nullptr) != 0)
     {
       std::cerr << "Failed to install alternate signal stack: " << strerror(errno) << "\n";
+      // NOLINTNEXTLINE(cppcoreguidelines-no-malloc): signal stack needs raw memory
       std::free(alt_stack_memory);
       alt_stack_memory = nullptr;
       return;
@@ -168,15 +170,16 @@ namespace jank::nrepl_server::asio
 
       // Create error response
       char sig_buf[256];
-      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg)
       if(jmp_result == jit::JIT_FATAL_ERROR_SIGNAL)
       {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): signal handler context
         std::snprintf(sig_buf,
                       sizeof(sig_buf),
                       "JIT/LLVM fatal error during eval (check stderr for details)");
       }
       else if(jmp_result == SIGSEGV)
       {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): signal handler context
         std::snprintf(sig_buf,
                       sizeof(sig_buf),
                       "Stack overflow or segmentation fault during eval (signal %d). This can "
@@ -185,6 +188,7 @@ namespace jank::nrepl_server::asio
       }
       else
       {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg): signal handler context
         std::snprintf(sig_buf, sizeof(sig_buf), "Caught signal %d during eval", jmp_result);
       }
 
