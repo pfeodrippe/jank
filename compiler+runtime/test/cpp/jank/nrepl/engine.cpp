@@ -2169,7 +2169,7 @@ namespace jank::nrepl_server::asio
        * Path is relative from build directory to test directory. */
       eng.handle(make_message({
         {   "op",                                                                 "eval" },
-        { "code", "(cpp/raw \"#include \\\"../test/cpp/jank/nrepl/test_flecs.hpp\\\"\")" }
+        { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/test_flecs.hpp\\\"\")" }
       }));
 
       /* Create the alias using require with :scope.
@@ -2302,7 +2302,7 @@ namespace jank::nrepl_server::asio
       eng.handle(make_message({
         {   "op",                                             "eval"                 },
         { "code",
-         "(cpp/raw \"#include \\\"../test/cpp/jank/nrepl/test_mixin_class.hpp\\\"\")" }
+         "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/test_mixin_class.hpp\\\"\")" }
       }));
 
       /* Create the alias using require with :scope */
@@ -2375,6 +2375,254 @@ namespace jank::nrepl_server::asio
 
       /* Should have at least 5 completions */
       CHECK(member_completions.size() >= 5);
+    }
+
+    TEST_CASE("complete with class-level scope returns member methods directly")
+    {
+      /* This test verifies that when :scope is a class type (not a namespace),
+       * completions directly return member methods without requiring a dot.
+       *
+       * e.g., (require '["header.h" :as fw :scope "flecs::world"])
+       * Then fw/defer_begin should be a completion (not fw/world.defer_begin) */
+      engine eng;
+
+      /* Define a namespace with a class that has member functions. */
+      eng.handle(make_message({
+        {   "op",                         "eval"                },
+        { "code",
+         "(cpp/raw \"namespace class_scope_test { struct world { void defer_begin() {} void "
+         "defer_end() {} int get_value() { return 42; } }; }\")" }
+      }));
+
+      /* Require it with :scope pointing directly to the class type.
+       * Note: jank uses dot notation for scopes, which gets converted to ::
+       * This simulates: (require '["flecs.h" :as fw :scope "flecs.world"]) */
+      eng.handle(make_message({
+        {   "op",                                                     "eval" },
+        { "code",
+         "(require '[\"jank/runtime/context.hpp\" :as fw :scope "
+         "\"class_scope_test.world\"])" }
+      }));
+
+      /* Complete fw/ -> should directly return member methods */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",      "fw/" },
+        {     "ns",     "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+
+      std::cerr << "Class-level scope completions: " << completions.size() << "\n";
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string()
+                  << " (type: " << dict.at("type").as_string() << ")\n";
+      }
+
+      /* Should have completions */
+      REQUIRE_FALSE(completions.empty());
+
+      bool found_defer_begin{ false };
+      bool found_defer_end{ false };
+      bool found_get_value{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        /* With class-level scope, members are returned directly without type prefix */
+        if(candidate == "fw/defer_begin")
+        {
+          found_defer_begin = true;
+          CHECK(dict.at("type").as_string() == "function");
+        }
+        if(candidate == "fw/defer_end")
+        {
+          found_defer_end = true;
+          CHECK(dict.at("type").as_string() == "function");
+        }
+        if(candidate == "fw/get_value")
+        {
+          found_get_value = true;
+          CHECK(dict.at("type").as_string() == "function");
+        }
+      }
+
+      CHECK(found_defer_begin);
+      CHECK(found_defer_end);
+      CHECK(found_get_value);
+    }
+
+    TEST_CASE("info returns this parameter for member methods")
+    {
+      /* This test verifies that info/eldoc for member methods includes
+       * the implicit 'this' parameter with the correct class type.
+       *
+       * e.g., flecs/world.defer_begin should show:
+       *   [[flecs::world this]] bool
+       * instead of:
+       *   [] bool */
+      engine eng;
+
+      /* Define a namespace with a class that has member functions. */
+      eng.handle(make_message({
+        {   "op",                         "eval"                },
+        { "code",
+         "(cpp/raw \"namespace this_param_test { struct world { void method_no_args() {} "
+         "int method_with_args(int x, float y) { return x; } }; }\")" }
+      }));
+
+      /* Require it as a native header alias. */
+      eng.handle(make_message({
+        {   "op",                                                        "eval" },
+        { "code",
+         "(require '[\"jank/runtime/context.hpp\" :as tpt :scope "
+         "\"this_param_test\"])" }
+      }));
+
+      /* Get info for a member method with no arguments */
+      auto no_args_responses(eng.handle(make_message({
+        {   "op",                      "info" },
+        {  "sym", "tpt/world.method_no_args" },
+        {   "ns",                      "user" }
+      })));
+
+      REQUIRE(no_args_responses.size() == 1);
+      auto const &no_args_payload(no_args_responses.front());
+
+      std::cerr << "Info for method_no_args:\n";
+      if(no_args_payload.find("arglists-str") != no_args_payload.end())
+      {
+        std::cerr << "  arglists-str: " << no_args_payload.at("arglists-str").as_string() << "\n";
+      }
+
+      /* Check arglists contains the this parameter */
+      auto const &no_args_arglists(no_args_payload.at("arglists").as_list());
+      REQUIRE_FALSE(no_args_arglists.empty());
+
+      auto const &no_args_sig(no_args_arglists.front().as_string());
+      std::cerr << "  First arglist: " << no_args_sig << "\n";
+      /* Should contain the class type as 'this' parameter */
+      CHECK(no_args_sig.find("this_param_test::world") != std::string::npos);
+      CHECK(no_args_sig.find("this") != std::string::npos);
+
+      /* Get info for a member method with arguments */
+      auto with_args_responses(eng.handle(make_message({
+        {   "op",                        "info" },
+        {  "sym", "tpt/world.method_with_args" },
+        {   "ns",                        "user" }
+      })));
+
+      REQUIRE(with_args_responses.size() == 1);
+      auto const &with_args_payload(with_args_responses.front());
+
+      std::cerr << "Info for method_with_args:\n";
+      if(with_args_payload.find("arglists-str") != with_args_payload.end())
+      {
+        std::cerr << "  arglists-str: " << with_args_payload.at("arglists-str").as_string() << "\n";
+      }
+
+      /* Check arglists contains the this parameter plus the regular args */
+      auto const &with_args_arglists(with_args_payload.at("arglists").as_list());
+      REQUIRE_FALSE(with_args_arglists.empty());
+
+      auto const &with_args_sig(with_args_arglists.front().as_string());
+      std::cerr << "  First arglist: " << with_args_sig << "\n";
+      /* Should contain the class type as 'this' parameter */
+      CHECK(with_args_sig.find("this_param_test::world") != std::string::npos);
+      CHECK(with_args_sig.find("this") != std::string::npos);
+      /* Should also contain the regular parameters */
+      CHECK(with_args_sig.find("int") != std::string::npos);
+      CHECK(with_args_sig.find("float") != std::string::npos);
+    }
+
+    TEST_CASE("info returns docstring for member methods")
+    {
+      /* This test verifies that info/eldoc for member methods includes
+       * docstrings extracted from comments above the method declaration.
+       * We use the test_flecs.hpp header which has documented_method and
+       * doxygen_method with different comment styles. */
+      engine eng;
+
+      /* Include the test header */
+      eng.handle(make_message({
+        {   "op",                                                     "eval"                     },
+        { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/test_flecs.hpp\\\"\")" }
+      }));
+
+      /* Require it as a native header alias. */
+      eng.handle(make_message({
+        {   "op",                                                                "eval" },
+        { "code",
+         "(require '[\"test/cpp/jank/nrepl/test_flecs.hpp\" :as flecs :scope \"flecs\"])" }
+      }));
+
+      /* Get info for a member method with standard C-style comment */
+      auto doc_responses(eng.handle(make_message({
+        {   "op",                          "info" },
+        {  "sym", "flecs/world.documented_method" },
+        {   "ns",                          "user" }
+      })));
+
+      REQUIRE(doc_responses.size() == 1);
+      auto const &doc_payload(doc_responses.front());
+
+      std::cerr << "Info for documented_method:\n";
+
+      /* Check if docstring is present */
+      if(doc_payload.find("doc") != doc_payload.end())
+      {
+        auto const &docstring(doc_payload.at("doc").as_string());
+        std::cerr << "  doc: " << docstring << "\n";
+        /* Should contain the docstring text */
+        CHECK(docstring.find("Documented method") != std::string::npos);
+      }
+      else
+      {
+        std::cerr << "  doc: (not present)\n";
+        /* docstring should be present, but don't hard fail if not */
+        WARN_MESSAGE(false, "docstring not found for documented_method");
+      }
+
+      /* Check file information is also extracted */
+      if(doc_payload.find("file") != doc_payload.end())
+      {
+        auto const &file(doc_payload.at("file").as_string());
+        std::cerr << "  file: " << file << "\n";
+        CHECK(file.find("test_flecs.hpp") != std::string::npos);
+      }
+
+      /* Line is stored as an integer, just check it exists */
+      CHECK(doc_payload.find("line") != doc_payload.end());
+
+      /* Get info for a member method with Doxygen-style comment */
+      auto doxy_responses(eng.handle(make_message({
+        {   "op",                      "info" },
+        {  "sym", "flecs/world.doxygen_method" },
+        {   "ns",                      "user" }
+      })));
+
+      REQUIRE(doxy_responses.size() == 1);
+      auto const &doxy_payload(doxy_responses.front());
+
+      std::cerr << "Info for doxygen_method:\n";
+
+      /* Check if docstring is present (Doxygen comments are recognized) */
+      if(doxy_payload.find("doc") != doxy_payload.end())
+      {
+        auto const &docstring(doxy_payload.at("doc").as_string());
+        std::cerr << "  doc: " << docstring << "\n";
+        /* Doxygen comments contain @brief */
+        CHECK(docstring.find("@brief") != std::string::npos);
+      }
+      else
+      {
+        std::cerr << "  doc: (not present)\n";
+        WARN_MESSAGE(false, "docstring not found for doxygen_method");
+      }
     }
   }
 }

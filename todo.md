@@ -17,8 +17,7 @@
   - [x] static
   - [ ] autocompletion
     - [x] global
-    - [ ] nested
-      - [ ] see if we can precompute info about a header
+    - [x] nested
     - [ ] (require '["flecs.h" :as f-w :scope "world"])
   - [ ] wasm
 - [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`

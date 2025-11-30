@@ -240,6 +240,94 @@ namespace jank::nrepl_server::asio
     }
   }
 
+  /* Enumerate class members directly (for class-level scopes).
+   * This is used when the scope itself is a class like "flecs::world",
+   * allowing `fw/defer_begin` to directly refer to members. */
+  std::vector<std::string> enumerate_class_members_directly(void *class_scope,
+                                                            std::string const &prefix)
+  {
+    std::vector<std::string> matches;
+
+    if(!class_scope)
+    {
+      return matches;
+    }
+
+    /* Check if the type is complete. Incomplete types (forward declarations,
+     * uninstantiated templates) can cause crashes when iterating declarations. */
+    if(!Cpp::IsComplete(class_scope))
+    {
+      return matches;
+    }
+
+    /* Get all member names using our safe implementation.
+     * This uses noload_lookups() instead of GetAllCppNames or decls(),
+     * avoiding crashes caused by corrupted declaration chains in complex
+     * classes like flecs::world that use #include inside the class body. */
+    std::set<std::string> member_names;
+    if(!safe_get_class_members(class_scope, member_names))
+    {
+      return matches;
+    }
+
+    std::unordered_set<std::string> seen;
+    seen.reserve(member_names.size());
+
+    for(auto const &name : member_names)
+    {
+      /* Filter by prefix if provided */
+      if(!prefix.empty() && !name.starts_with(prefix))
+      {
+        continue;
+      }
+
+      /* Skip compiler-generated names and special members */
+      if(name.empty() || name[0] == '~')
+      {
+        continue;
+      }
+
+      /* Check if it's a member function */
+      auto const overloads = Cpp::GetFunctionsUsingName(class_scope, name);
+      if(!overloads.empty())
+      {
+        /* Skip constructors (they have the same name as the type) */
+        bool is_ctor = false;
+        for(auto const fn : overloads)
+        {
+          if(Cpp::IsConstructor(fn))
+          {
+            is_ctor = true;
+            break;
+          }
+        }
+        if(is_ctor)
+        {
+          continue;
+        }
+
+        if(seen.insert(name).second)
+        {
+          /* Return just the member name (no type path prefix) */
+          matches.emplace_back(name);
+        }
+        continue;
+      }
+
+      /* Check if it's a nested type (class, struct, or enum) */
+      auto const child_scope = Cpp::GetScope(name, class_scope);
+      if(child_scope && (Cpp::IsClass(child_scope) || Cpp::IsEnumScope(child_scope)))
+      {
+        if(seen.insert(name).second)
+        {
+          matches.emplace_back(name);
+        }
+      }
+    }
+
+    return matches;
+  }
+
   std::vector<std::string>
   enumerate_native_header_symbols(ns::native_alias const &alias, std::string const &prefix)
   {
@@ -254,6 +342,28 @@ namespace jank::nrepl_server::asio
       if(!scope_handle)
       {
         return matches;
+      }
+
+      /* Check if the scope itself is a class (not a namespace).
+       * This supports class-level scopes like "flecs::world" where
+       * fw/defer_begin directly refers to member methods. */
+      if(Cpp::IsClass(scope_handle))
+      {
+        /* Check if the prefix contains a dot - this indicates nested member access.
+         * e.g., "inner." means we want members of the nested "inner" type */
+        auto const dot_pos = prefix_name.find('.');
+        if(dot_pos != std::string::npos)
+        {
+          /* Split into type path and member prefix.
+           * For "inner.foo": type_path="inner", member_prefix="foo" */
+          auto const type_path = prefix_name.substr(0, dot_pos);
+          auto const member_prefix = prefix_name.substr(dot_pos + 1);
+
+          return enumerate_type_members(scope_name, type_path, member_prefix);
+        }
+
+        /* No dot - enumerate class members directly */
+        return enumerate_class_members_directly(scope_handle, prefix_name);
       }
 
       /* Check if the prefix contains a dot - this indicates nested member access.

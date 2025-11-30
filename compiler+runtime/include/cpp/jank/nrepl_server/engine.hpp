@@ -2273,6 +2273,10 @@ namespace jank::nrepl_server::asio
       void *lookup_scope = scope.data;
       std::string function_name = symbol_name;
 
+      /* Check if the scope itself is a class (class-level scope like "flecs::world").
+       * In this case, symbol_name directly refers to a member method. */
+      bool const is_class_scope = Cpp::IsClass(scope.data);
+
       if(last_dot != std::string::npos)
       {
         /* Split into type path and function name.
@@ -2302,6 +2306,12 @@ namespace jank::nrepl_server::asio
 
         lookup_scope = type_scope;
       }
+      else if(is_class_scope)
+      {
+        /* No dot in symbol_name but scope is a class - symbol_name directly
+         * refers to a member method (e.g., fw/defer_begin where fw has scope "flecs::world"). */
+        lookup_scope = scope.data;
+      }
 
       auto const fns(Cpp::GetFunctionsUsingName(lookup_scope, function_name));
       if(fns.empty())
@@ -2321,9 +2331,28 @@ namespace jank::nrepl_server::asio
         auto const return_type(Cpp::GetFunctionReturnType(fn));
         signature.return_type = Cpp::GetTypeAsString(return_type);
 
-        auto const num_args(Cpp::GetFunctionNumArgs(fn));
         std::string rendered_signature{ "[" };
         bool first_arg{ true };
+
+        /* For non-static member methods, add the implicit 'this' parameter.
+         * This shows users what type the method expects to be called on. */
+        bool const is_member_method = Cpp::IsMethod(fn) && !Cpp::IsStaticMethod(fn);
+        if(is_member_method && lookup_scope)
+        {
+          var_documentation::cpp_argument this_arg;
+          this_arg.type = Cpp::GetQualifiedName(lookup_scope);
+          this_arg.name = "this";
+          signature.arguments.emplace_back(this_arg);
+
+          rendered_signature.push_back('[');
+          rendered_signature += this_arg.type;
+          rendered_signature.push_back(' ');
+          rendered_signature += this_arg.name;
+          rendered_signature.push_back(']');
+          first_arg = false;
+        }
+
+        auto const num_args(Cpp::GetFunctionNumArgs(fn));
         for(size_t idx{}; idx < num_args; ++idx)
         {
           var_documentation::cpp_argument arg_doc;
@@ -2353,6 +2382,25 @@ namespace jank::nrepl_server::asio
         rendered_signature.push_back(']');
         info.arglists.emplace_back(std::move(rendered_signature));
         info.cpp_signatures.emplace_back(std::move(signature));
+      }
+
+      /* Extract metadata (docstring, location) from the first function declaration */
+      auto const metadata(extract_cpp_decl_metadata(fns.front()));
+      if(metadata.doc.has_value())
+      {
+        info.doc = metadata.doc;
+      }
+      if(metadata.file.has_value())
+      {
+        info.file = metadata.file;
+      }
+      if(metadata.line.has_value())
+      {
+        info.line = metadata.line;
+      }
+      if(metadata.column.has_value())
+      {
+        info.column = metadata.column;
       }
 
       if(!info.cpp_signatures.empty())

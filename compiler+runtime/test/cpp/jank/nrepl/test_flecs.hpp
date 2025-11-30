@@ -61,6 +61,21 @@ namespace flecs
     {
       return nullptr;
     }
+
+    /* Documented method for testing docstring extraction.
+     * This docstring should appear in info/eldoc results. */
+    int documented_method(int x)
+    {
+      return x * 2;
+    }
+
+    /// @brief Doxygen-style documented method
+    /// @param value The input value
+    /// @return The doubled value
+    int doxygen_method(int value)
+    {
+      return value * 2;
+    }
   };
 
   /* Another type in the flecs namespace */
