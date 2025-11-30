@@ -22,7 +22,7 @@ if [[ -z "${base_ref}" ]]; then
   exit 1
 fi
 
-git diff --name-only "${base_ref}"... -- '*.cpp' '*.hpp' '*.h' | \
+git diff --name-only "${base_ref}"... -- '*.cpp' '*.hpp' '*.inl' '*.h' | \
   while IFS= read -r file || [[ -n "${file}" ]]; do
     if [[ -z "${file}" ]]; then
       continue

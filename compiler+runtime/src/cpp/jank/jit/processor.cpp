@@ -256,6 +256,12 @@ namespace jank::jit
     {
       throw error::system_failure(load_result.expect_err().c_str());
     }
+
+    /* Load object files from --obj CLI option. */
+    for(auto const &obj_path : util::cli::opts.object_files)
+    {
+      load_object(obj_path);
+    }
   }
 
   processor::~processor()

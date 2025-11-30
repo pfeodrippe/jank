@@ -318,7 +318,25 @@ namespace jank::runtime
               cpp_out << "#include <jank/runtime/convert/builtin.hpp>\n";
               cpp_out << "#include <boost/multiprecision/cpp_int.hpp>\n";
               /* Include scope_exit for finally blocks */
-              cpp_out << "#include <jank/util/scope_exit.hpp>\n\n";
+              cpp_out << "#include <jank/util/scope_exit.hpp>\n";
+
+              /* Include native headers from (:require ["header.h" :as alias]) */
+              auto const curr_ns{ current_ns() };
+              auto const native_aliases{ curr_ns->native_aliases_snapshot() };
+              if(!native_aliases.empty())
+              {
+                cpp_out << "\n/* Native headers from :require directives */\n";
+                native_set<jtl::immutable_string> seen_includes;
+                for(auto const &alias : native_aliases)
+                {
+                  /* Deduplicate includes - same header may be required with different aliases */
+                  if(seen_includes.insert(alias.include_directive).second)
+                  {
+                    cpp_out << "#include " << alias.include_directive.c_str() << "\n";
+                  }
+                }
+              }
+              cpp_out << "\n";
             }
 
             cpp_out << code << "\n\n";

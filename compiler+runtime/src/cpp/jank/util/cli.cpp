@@ -85,6 +85,10 @@ namespace jank::util::cli
                    opts.libs,
                    "Library identifiers, absolute or relative paths eg. -lfoo for libfoo.so or "
                    "foo.dylib. Can be specified multiple times.");
+    cli.add_option("--obj",
+                   opts.object_files,
+                   "Absolute or relative path to object files (.o) to load into JIT. "
+                   "Can be specified multiple times.");
 
     /* Run subcommand. */
     auto &cli_run(*cli.add_subcommand("run", "Load and run a file."));

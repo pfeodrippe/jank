@@ -19,9 +19,11 @@
     - [x] global
     - [x] nested
     - [x] (require '["flecs.h" :as fw :scope "flecs.world"])
+- [ ] when native and external header, get info about the location
+  - [ ] go to working?
 - [ ] wasm
   - [x] no require
-  - [ ] with require (do the AOT instead of JIT when generating code for WASM)
+  - [x] with require (do the AOT instead of JIT when generating code for WASM)
   - [ ] export symbols automatically using malli schema-like format
 - [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`
 - [ ] Fix implicit conversion

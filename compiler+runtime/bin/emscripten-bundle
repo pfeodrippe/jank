@@ -30,6 +30,7 @@ node_args=()
 verbose=false
 extra_include_paths=()
 extra_libs=()
+native_obj_files=()
 
 usage() {
   cat <<'USAGE'
@@ -54,6 +55,8 @@ Options:
   -I DIR                  Add include directory for C++ compilation (can be used multiple times)
   --lib FILE              Add extra library/object file to link (can be used multiple times)
                           Supports .bc (bitcode), .a (static lib), .c/.cpp (sources)
+  --native-obj FILE       Add native object file (.o) to load in JIT during AOT compilation
+                          (use when native code needs symbols during codegen)
   -v, --verbose           Enable verbose output (shows compilation commands)
 
 Any arguments after -- are forwarded directly to the emcmake configure invocation.
@@ -151,6 +154,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       extra_libs+=("$2")
+      shift 2
+      ;;
+    --native-obj)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --native-obj expects a file path" >&2
+        exit 1
+      fi
+      native_obj_files+=("$2")
       shift 2
       ;;
     --)
@@ -394,6 +405,17 @@ if [[ -n "${jank_source}" ]]; then
           inc_path="$(cd "${inc_path}" 2>/dev/null && pwd || echo "${inc_path}")"
         fi
         jank_cmd+=(-I "${inc_path}")
+      done
+    fi
+
+    # Add native object files (for JIT during AOT compilation)
+    if [[ ${#native_obj_files[@]} -gt 0 ]]; then
+      for obj_file in "${native_obj_files[@]}"; do
+        # Resolve to absolute path if relative
+        if [[ "${obj_file:0:1}" != "/" ]]; then
+          obj_file="$(cd "$(dirname "${obj_file}")" 2>/dev/null && pwd)/$(basename "${obj_file}")"
+        fi
+        jank_cmd+=(--obj "${obj_file}")
       done
     fi
 
