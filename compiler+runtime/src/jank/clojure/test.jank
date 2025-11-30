@@ -308,7 +308,8 @@
     (str
      ;; Uncomment to include namespace in failure report:
      ;;(ns-name (:ns (meta (first *testing-vars*)))) "/ "
-     (reverse (map #(:name (meta %)) *testing-vars*))
+     ;; jank: use (symbol v) and extract name since vars don't have :name in meta
+     (reverse (map #(-> % symbol name symbol) *testing-vars*))
      " (" file ":" line ")")))
 
 (defn testing-contexts-str

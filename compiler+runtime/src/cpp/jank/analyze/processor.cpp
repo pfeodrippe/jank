@@ -1,9 +1,14 @@
 #include <ranges>
 #include <set>
+#include <cstdlib>
+#include <stdexcept>
 
-#include <Interpreter/Compatibility.h>
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <Interpreter/Compatibility.h>
+  #include <clang/Basic/Diagnostic.h>
+#endif
 
-#include <cpptrace/from_current.hpp>
+#include <jank/util/cpptrace.hpp>
 
 #include <jank/read/reparse.hpp>
 #include <jank/runtime/visit.hpp>
@@ -18,6 +23,7 @@
 #include <jank/runtime/core/seq.hpp>
 #include <jank/analyze/processor.hpp>
 #include <jank/analyze/step/force_boxed.hpp>
+#include <jank/jit/interpreter.hpp>
 #include <jank/evaluate.hpp>
 #include <jtl/result.hpp>
 #include <jank/util/scope_exit.hpp>
@@ -777,7 +783,7 @@ namespace jank::analyze
        * Nothing else could have an unresolved template up until now. */
       for(size_t i{}; i < arg_types.size(); ++i)
       {
-        if(auto const value = llvm::dyn_cast<expr::cpp_value>(arg_exprs[i].data))
+        if(auto const value = expr_dyn_cast<expr::cpp_value>(arg_exprs[i].data))
         {
           /* Just adding a reference to the same type is not worthy of change.
            * For some situations, this would fuck up codegen. For example, with enum constants. */
@@ -1266,11 +1272,37 @@ namespace jank::analyze
     auto const sym_obj(l->data.rest().first().unwrap());
     if(sym_obj->type != runtime::object_type::symbol)
     {
-      return error::analyze_invalid_def("The var name in a 'def' must be a symbol.",
-                                        object_source(sym_obj),
-                                        "A symbol is needed for the name here.",
-                                        latest_expansion(macro_expansions))
-        ->add_usage(read::parse::reparse_nth(l, 1));
+      auto usage_source(read::parse::reparse_nth(l, 1));
+      if(std::getenv("JANK_DEBUG_DEF"))
+      {
+        auto const list_source(meta_source(l->meta));
+        auto const sym_source_debug(object_source(sym_obj));
+        util::println(
+          "JANK_DEBUG_DEF list_source_unknown={} usage_unknown={} sym_source_unknown={} "
+          "list_file={} usage_file={} sym_file={} sym_line={} sym_col={}",
+          list_source == read::source::unknown,
+          usage_source == read::source::unknown,
+          sym_source_debug == read::source::unknown,
+          list_source.file,
+          usage_source.file,
+          sym_source_debug.file,
+          sym_source_debug.start.line,
+          sym_source_debug.start.col);
+      }
+      auto sym_source(object_source(sym_obj));
+      if(sym_source == read::source::unknown || sym_source.file == read::no_source_path)
+      {
+        sym_source = usage_source;
+      }
+      auto err(error::analyze_invalid_def("The var name in a 'def' must be a symbol.",
+                                          sym_source,
+                                          "A symbol is needed for the name here.",
+                                          latest_expansion(macro_expansions)));
+      if(usage_source != read::source::unknown && usage_source != sym_source)
+      {
+        err = err->add_usage(usage_source);
+      }
+      return err;
     }
 
     auto const sym(runtime::expect_object<runtime::obj::symbol>(sym_obj));
@@ -1500,6 +1532,53 @@ namespace jank::analyze
                             jtl::option<expr::function_context_ref> const &fc,
                             bool needs_box)
   {
+    auto const rewrite_native_symbol
+      = [&](runtime::obj::symbol_ref const alias_sym,
+            jtl::immutable_string const &member_name,
+            runtime::obj::symbol_ref const origin_sym) -> expression_result {
+      auto const native_alias(runtime::__rt_ctx->current_ns()->find_native_alias(alias_sym));
+      if(native_alias.is_none())
+      {
+        throw std::runtime_error(
+          util::format("Native alias '{}' is not registered in namespace '{}'",
+                       alias_sym->to_string(),
+                       runtime::__rt_ctx->current_ns()->to_string()));
+      }
+      auto const &alias_info(native_alias.unwrap());
+      native_transient_string scoped(alias_info.scope.data(), alias_info.scope.size());
+      if(!member_name.empty())
+      {
+        if(member_name[0] != '.')
+        {
+          scoped.push_back('.');
+        }
+        scoped.append(member_name.data(), member_name.size());
+      }
+      auto const cpp_sym(make_box<runtime::obj::symbol>("cpp", scoped));
+      cpp_sym->meta = origin_sym->meta;
+      return analyze_cpp_symbol(cpp_sym, current_frame, position, fc, needs_box);
+    };
+
+    if(sym->ns.empty())
+    {
+      auto const native_refer(runtime::__rt_ctx->current_ns()->find_native_refer(sym));
+      if(native_refer.is_some())
+      {
+        auto const refer_info(native_refer.unwrap());
+        return rewrite_native_symbol(refer_info.alias, refer_info.member->name, sym);
+      }
+    }
+
+    if(!sym->ns.empty() && sym->ns != "cpp")
+    {
+      auto const alias_sym(make_box<runtime::obj::symbol>(sym->ns));
+      auto const native_alias(runtime::__rt_ctx->current_ns()->find_native_alias(alias_sym));
+      if(native_alias.is_some())
+      {
+        return rewrite_native_symbol(alias_sym, sym->name, sym);
+      }
+    }
+
     if(sym->ns == "cpp" && sym->name != "raw")
     {
       return analyze_cpp_symbol(sym, current_frame, position, fc, needs_box);
@@ -1586,7 +1665,17 @@ namespace jank::analyze
     }
 
     auto const qualified_sym(__rt_ctx->qualify_symbol(sym));
-    auto const var(__rt_ctx->find_var(qualified_sym));
+    auto var(__rt_ctx->find_var(qualified_sym));
+
+    /* If the var isn't found in the current namespace and the symbol is unqualified,
+     * try to find it in clojure.core as a fallback. This is especially important for
+     * AOT/WASM mode where namespace referring doesn't happen until runtime. */
+    if(var.is_nil() && sym->ns.empty())
+    {
+      auto const core_sym(runtime::make_box<runtime::obj::symbol>("clojure.core", sym->name));
+      var = __rt_ctx->find_var(core_sym);
+    }
+
     if(var.is_nil())
     {
       return error::analyze_unresolved_symbol(
@@ -1595,13 +1684,19 @@ namespace jank::analyze
         latest_expansion(macro_expansions));
     }
 
+    /* Use the var's actual namespace for the qualified symbol, not the current namespace.
+     * This is important for referred vars - e.g. when clojure.set uses 'reduce', we want
+     * to generate code that looks up clojure.core/reduce, not clojure.set/reduce. */
+    auto const var_qualified_sym(
+      make_box<runtime::obj::symbol>(var->n->name->name, var->name->name));
+
     /* Macros aren't lifted, since they're not used during runtime. */
     auto const macro_kw(__rt_ctx->intern_keyword("", "macro", true).expect_ok());
     if(var->meta.is_none() || get(var->meta.unwrap(), macro_kw).is_nil())
     {
-      current_frame->lift_var(qualified_sym);
+      current_frame->lift_var(var_qualified_sym);
     }
-    return jtl::make_ref<expr::var_deref>(position, current_frame, true, qualified_sym, var);
+    return jtl::make_ref<expr::var_deref>(position, current_frame, true, var_qualified_sym, var);
   }
 
   jtl::result<expr::function_arity, error_ref>
@@ -1632,7 +1727,7 @@ namespace jank::analyze
 
     native_vector<runtime::obj::symbol_ref> param_symbols;
     param_symbols.reserve(params->data.size());
-    std::set<runtime::obj::symbol> unique_param_symbols;
+    native_set<runtime::obj::symbol> unique_param_symbols;
 
     bool is_variadic{};
     for(auto it(params->data.begin()); it != params->data.end(); ++it)
@@ -2259,7 +2354,7 @@ namespace jank::analyze
 
     /* All bindings in a letfn appear simultaneously and may be mutually recursive.
      * This makes creating a letfn locals frame a bit more involved than let, where locals
-     * are introduced left-to-right. For example, each binding in (letfn [(a [] b) (b [] a)]) 
+     * are introduced left-to-right. For example, each binding in (letfn [(a [] b) (b [] a)])
      * requires the other to be in scope in order to be analyzed.
      *
      * We tackle this in two steps. First, we create empty local bindings for all names.
@@ -2308,7 +2403,7 @@ namespace jank::analyze
 
       /* Populate the local frame we prepared for sym in the previous loop with its binding. */
       auto it(ret->pairs.emplace_back(sym, fexpr));
-      auto local(ret->frame->locals.find(sym)->second);
+      auto &local(ret->frame->locals.find(sym)->second);
       local.value_expr = some(it.second);
       local.needs_box = it.second->needs_box;
     }
@@ -2884,27 +2979,12 @@ namespace jank::analyze
     /* TODO: Detect literal and act accordingly. */
     return visit_map_like(
       [&](auto const typed_o) -> processor::expression_result {
-        using T = typename decltype(typed_o)::value_type;
-
         native_vector<std::pair<expression_ref, expression_ref>> exprs;
         exprs.reserve(typed_o->data.size());
 
         for(auto const &kv : typed_o->data)
         {
-          /* The two maps (hash and sorted) have slightly different iterators, so we need to
-           * pull out the entries differently. */
-          object_ref first{}, second{};
-          if constexpr(std::same_as<T, obj::persistent_sorted_map>)
-          {
-            auto const &entry(kv.get());
-            first = entry.first;
-            second = entry.second;
-          }
-          else
-          {
-            first = kv.first;
-            second = kv.second;
-          }
+          object_ref const first{ kv.first }, second{ kv.second };
 
           auto k_expr(analyze(first, current_frame, expression_position::value, fn_ctx, true));
           if(k_expr.is_err())
@@ -3089,7 +3169,7 @@ namespace jank::analyze
       }
 
       source = sym_result.expect_ok();
-      auto const var_deref(llvm::dyn_cast<expr::var_deref>(source.data));
+      auto const var_deref(expr_dyn_cast<expr::var_deref>(source.data));
 
       /* If this expression doesn't need to be boxed, based on where it's called, we can dig
        * into the call details itself to see if the function supports unboxed returns. Most don't. */
@@ -3220,7 +3300,7 @@ namespace jank::analyze
                                                        none));
     }
 
-    auto const recursion_ref(llvm::dyn_cast<expr::recursion_reference>(source.data));
+    auto const recursion_ref(expr_dyn_cast<expr::recursion_reference>(source.data));
     if(recursion_ref)
     {
       return jtl::make_ref<expr::named_recursion>(
@@ -3360,17 +3440,9 @@ namespace jank::analyze
     if(Cpp::IsVariable(scope))
     {
       vk = expr::cpp_value::value_kind::variable;
-      /* TODO: A Clang bug prevents us from supporting references to static members.
-       * https://github.com/llvm/llvm-project/issues/146956
-       */
-      if(!Cpp::IsStaticDatamember(scope) && !Cpp::IsPointerType(type))
+      if(!Cpp::IsPointerType(type))
       {
-        /* TODO: Error if it's static and non-primitive. */
         type = Cpp::GetLValueReferenceType(type);
-      }
-      if(Cpp::IsArrayType(Cpp::GetNonReferenceType(type)))
-      {
-        type = Cpp::GetPointerType(Cpp::GetArrayElementType(Cpp::GetNonReferenceType(type)));
       }
     }
     else if(Cpp::IsEnumConstant(scope))
@@ -3532,10 +3604,13 @@ namespace jank::analyze
        *
        * We silence the diagnostics for this because it'll likely fail for any invalid symbols
        * anyway. */
-      auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
-      auto old_client{ diag.takeClient() };
-      diag.setClient(new clang::IgnoringDiagConsumer{}, true);
-      util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
+      if(auto *interp = jit::get_interpreter())
+      {
+        auto &diag{ interp->getCompilerInstance()->getDiagnostics() };
+        auto old_client{ diag.takeClient() };
+        diag.setClient(new clang::IgnoringDiagConsumer{}, true);
+        util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
+      }
 
       /* So just wrap our cpp/foo into a (cpp/value "foo") and analyze that. */
       runtime::detail::native_persistent_list const cpp_value_form{ make_box<obj::symbol>("cpp",
@@ -3597,7 +3672,7 @@ namespace jank::analyze
     for(usize i{}; i < arg_count; ++i, it = it.rest())
     {
       auto arg_expr{
-        analyze(it.first().unwrap(), current_frame, expression_position::value, fn_ctx, needs_box)
+        analyze(it.first().unwrap(), current_frame, expression_position::value, fn_ctx, true)
       };
       if(arg_expr.is_err())
       {
@@ -3662,6 +3737,7 @@ namespace jank::analyze
     }
 
     auto const string_obj(l->data.rest().first().unwrap());
+
     auto const string_expr_res(
       analyze(string_obj, current_frame, expression_position::value, fn_ctx, false));
     if(string_expr_res.is_err())
@@ -4386,8 +4462,18 @@ namespace jank::analyze
           ->add_usage(read::parse::reparse_nth(l, 0));
       }
 
+      if(Cpp::IsStaticDatamember(member_scope))
+      {
+        return error::analyze_known_issue(
+                 "A blocking Clang bug prevents access to static members in some scenarios. See "
+                 "https://github.com/llvm/llvm-project/issues/146956 for details.",
+                 object_source(member),
+                 latest_expansion(macro_expansions))
+          ->add_usage(read::parse::reparse_nth(l, 0));
+      }
+
       val->val_kind = expr::cpp_value::value_kind::variable;
-      val->type = Cpp::GetTypeFromScope(member_scope);
+      val->type = Cpp::GetLValueReferenceType(Cpp::GetTypeFromScope(member_scope));
       val->scope = member_scope;
       return val;
     }

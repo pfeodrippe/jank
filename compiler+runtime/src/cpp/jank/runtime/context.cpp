@@ -1,33 +1,41 @@
 #include <exception>
+#include <fstream>
 
-#include <Interpreter/Compatibility.h>
-#include <clang/Interpreter/CppInterOp.h>
-#include <llvm/ExecutionEngine/Orc/LLJIT.h>
-#include <llvm/Bitcode/BitcodeWriter.h>
-#include <llvm/Target/TargetMachine.h>
-#include <llvm/IR/LegacyPassManager.h>
-#include <llvm/MC/TargetRegistry.h>
-#include <llvm/TargetParser/Host.h>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <Interpreter/Compatibility.h>
+  #include <clang/Interpreter/CppInterOp.h>
+  #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+  #include <llvm/Bitcode/BitcodeWriter.h>
+  #include <llvm/Target/TargetMachine.h>
+  #include <llvm/IR/LegacyPassManager.h>
+  #include <llvm/MC/TargetRegistry.h>
+  #include <llvm/TargetParser/Host.h>
+#endif
 
 #include <jank/read/lex.hpp>
 #include <jank/read/parse.hpp>
+#include <jank/read/source.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/munge.hpp>
 #include <jank/runtime/core/meta.hpp>
-#include <jank/analyze/processor.hpp>
-#include <jank/analyze/expr/primitive_literal.hpp>
-#include <jank/analyze/pass/optimize.hpp>
-#include <jank/evaluate.hpp>
-#include <jank/jit/processor.hpp>
-#include <jank/util/clang.hpp>
-#include <jank/util/clang_format.hpp>
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+  #include <jank/analyze/processor.hpp>
+  #include <jank/analyze/expr/primitive_literal.hpp>
+  #include <jank/analyze/pass/optimize.hpp>
+  #include <jank/evaluate.hpp>
+  #include <jank/jit/processor.hpp>
+#endif
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <jank/util/clang.hpp>
+  #include <jank/util/clang_format.hpp>
+  #include <jank/codegen/llvm_processor.hpp>
+  #include <jank/codegen/processor.hpp>
+#endif
 #include <jank/util/environment.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/scope_exit.hpp>
-#include <jank/codegen/llvm_processor.hpp>
-#include <jank/codegen/processor.hpp>
 #include <jank/error/codegen.hpp>
 #include <jank/error/runtime.hpp>
 #include <jank/profile/time.hpp>
@@ -35,7 +43,7 @@
 namespace jank::runtime
 {
   /* NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) */
-  thread_local decltype(context::thread_binding_frames) context::thread_binding_frames{};
+  decltype(context::thread_binding_frames) context::thread_binding_frames{};
 
   /* NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) */
   context *__rt_ctx{};
@@ -44,7 +52,9 @@ namespace jank::runtime
     /* We want to initialize __rt_ctx ASAP so other code can start using it. */
     : binary_version{ (__rt_ctx = this, util::binary_version()) }
     , binary_cache_dir{ util::binary_cache_dir(binary_version) }
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     , jit_prc{ binary_version }
+#endif
   {
     intern_ns(make_box<obj::symbol>("cpp"));
     auto const core(intern_ns(make_box<obj::symbol>("clojure.core")));
@@ -92,11 +102,6 @@ namespace jank::runtime
     push_thread_bindings(obj::persistent_hash_map::create_unique(
                            std::make_pair(current_ns_var, current_ns_var->deref())))
       .expect_ok();
-  }
-
-  context::~context()
-  {
-    thread_binding_frames.erase(this);
   }
 
   obj::symbol_ref context::qualify_symbol(obj::symbol_ref const &sym) const
@@ -169,6 +174,11 @@ namespace jank::runtime
     native_vector<object_ref> forms{};
     for(auto const &form : p_prc)
     {
+#ifdef JANK_TARGET_WASM
+      /* WASM doesn't support JIT - just return the parsed form */
+      ret = form.expect_ok().unwrap().ptr;
+      forms.emplace_back(ret);
+#else
       analyze::processor an_prc;
       auto const expr(analyze::pass::optimize(
         an_prc.analyze(form.expect_ok().unwrap().ptr, analyze::expression_position::statement)
@@ -176,8 +186,19 @@ namespace jank::runtime
       ret = evaluate::eval(expr);
 
       forms.emplace_back(form.expect_ok().unwrap().ptr);
+#endif
     }
 
+#ifdef JANK_TARGET_WASM
+    /* WASM doesn't support module compilation */
+    (void)forms;
+#elif defined(JANK_TARGET_EMSCRIPTEN)
+    if(truthy(compile_files_var->deref()))
+    {
+      throw error::internal_codegen_failure(
+        "Module compilation is unavailable when targeting emscripten.");
+    }
+#else
     /* When compiling, we analyze twice. This is because eval will modify its expression
      * in order to wrap it in a function. Undoing this is arduous and error prone, so
      * we just don't bother.
@@ -190,7 +211,7 @@ namespace jank::runtime
       auto const name{ module::module_to_load_function(module) };
 
       auto const form{ runtime::conj(
-        runtime::conj(runtime::conj(make_box<obj::native_vector_sequence>(std::move(forms)),
+        runtime::conj(runtime::conj(make_box<obj::native_vector_sequence>(jtl::move(forms)),
                                     obj::persistent_vector::empty()),
                       make_box<obj::symbol>(name)),
         make_box<obj::symbol>("fn*")) };
@@ -204,34 +225,167 @@ namespace jank::runtime
         codegen::llvm_processor const cg_prc{ fn, module, codegen::compilation_target::module };
         cg_prc.gen().expect_ok();
         cg_prc.optimize();
+
+        /* Save LLVM IR to a file if requested */
+        if(util::cli::opts.save_llvm_ir || !util::cli::opts.save_llvm_ir_path.empty())
+        {
+          jtl::immutable_string ll_path;
+          if(!util::cli::opts.save_llvm_ir_path.empty())
+          {
+            ll_path = util::cli::opts.save_llvm_ir_path;
+          }
+          else
+          {
+            ll_path = util::format("{}/{}.ll", binary_cache_dir, module::module_to_path(module));
+          }
+          auto const parent_path = std::filesystem::path{ ll_path.c_str() }.parent_path();
+          if(!parent_path.empty())
+          {
+            std::filesystem::create_directories(parent_path);
+          }
+
+          std::error_code ec;
+          llvm::raw_fd_ostream ll_out(ll_path.c_str(), ec, llvm::sys::fs::OF_Text);
+          if(!ec)
+          {
+            cg_prc.get_module().getModuleUnlocked()->print(ll_out, nullptr);
+            std::cerr << "[jank] Saved LLVM IR to: " << ll_path << "\n";
+          }
+          else
+          {
+            std::cerr << "[jank] Failed to save LLVM IR to: " << ll_path << ": " << ec.message()
+                      << "\n";
+          }
+        }
+
         write_module(cg_prc.get_module_name(), cg_prc.get_module().getModuleUnlocked()).expect_ok();
       }
       else
       {
-        codegen::processor cg_prc{ fn, module, codegen::compilation_target::module };
-        //util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
+        /* For WASM AOT, use the wasm_aot target; otherwise use module target */
+        auto const cg_target = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
+          ? codegen::compilation_target::wasm_aot
+          : codegen::compilation_target::module;
+        codegen::processor cg_prc{ fn, module, cg_target };
         auto const code{ cg_prc.declaration_str() };
-        auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
-        if(!parse_res)
+
+        /* Save generated C++ to a file for inspection/WASM compilation. */
+        if(util::cli::opts.save_cpp || !util::cli::opts.save_cpp_path.empty()
+           || util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
         {
-          /* TODO: Helper to turn an llvm::Error into a string. */
-          jtl::immutable_string const res{ "Unable to compile generated C++ source." };
-          llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "error: ");
-          throw error::internal_codegen_failure(res);
+          jtl::immutable_string cpp_path;
+          if(!util::cli::opts.save_cpp_path.empty())
+          {
+            cpp_path = util::cli::opts.save_cpp_path;
+          }
+          else
+          {
+            cpp_path = util::format("{}/{}.cpp", binary_cache_dir, module::module_to_path(module));
+          }
+          auto const parent_path = std::filesystem::path{ cpp_path.c_str() }.parent_path();
+          if(!parent_path.empty())
+          {
+            std::filesystem::create_directories(parent_path);
+          }
+
+          /* For WASM AOT, we need to add includes at the top of the file. */
+          bool const is_wasm_aot = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
+
+          /* Use truncate mode to overwrite the file each time, not append */
+          std::ofstream cpp_out(cpp_path.c_str(), std::ios::trunc);
+          if(cpp_out.is_open())
+          {
+            /* Write WASM AOT includes at the start of file */
+            if(is_wasm_aot)
+            {
+              cpp_out << "// WASM AOT generated code - requires jank runtime headers\n";
+              cpp_out << "#include <jank/runtime/context.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/jit_function.hpp>\n";
+              cpp_out << "#include <jank/runtime/core.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_hash_set.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_array_map.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_hash_map.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_sorted_map.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_sorted_set.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/persistent_vector.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/range.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/integer_range.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/ratio.hpp>\n";
+              /* Include keyword and symbol for static_cast conversions in vectors */
+              cpp_out << "#include <jank/runtime/obj/keyword.hpp>\n";
+              cpp_out << "#include <jank/runtime/obj/symbol.hpp>\n";
+              /* Include convert for type conversions (bool, int, etc.) */
+              cpp_out << "#include <jank/runtime/convert/builtin.hpp>\n";
+              cpp_out << "#include <boost/multiprecision/cpp_int.hpp>\n";
+              /* Include scope_exit for finally blocks */
+              cpp_out << "#include <jank/util/scope_exit.hpp>\n";
+
+              /* Include native headers from (:require ["header.h" :as alias]) */
+              auto const curr_ns{ current_ns() };
+              auto const native_aliases{ curr_ns->native_aliases_snapshot() };
+              if(!native_aliases.empty())
+              {
+                cpp_out << "\n/* Native headers from :require directives */\n";
+                native_set<jtl::immutable_string> seen_includes;
+                for(auto const &alias : native_aliases)
+                {
+                  /* Deduplicate includes - same header may be required with different aliases */
+                  if(seen_includes.insert(alias.include_directive).second)
+                  {
+                    cpp_out << "#include " << alias.include_directive.c_str() << "\n";
+                  }
+                }
+              }
+              cpp_out << "\n";
+            }
+
+            cpp_out << code << "\n\n";
+            cpp_out.close();
+            std::cerr << "[jank] Saved generated C++ to: " << cpp_path << "\n";
+          }
         }
-        auto &partial_tu{ parse_res.get() };
-        auto module_name{ runtime::to_string(current_module_var->deref()) };
-        write_module(module_name, partial_tu.TheModule.get()).expect_ok();
+
+        /* For WASM AOT, we only generate C++ code - skip JIT compilation.
+         * The generated C++ will be compiled by emscripten separately. */
+        if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
+        {
+          /* Don't JIT compile for WASM AOT - just save the C++ file */
+          std::cerr << "[jank] WASM AOT mode: skipping JIT compilation\n";
+        }
+        else
+        {
+          auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
+          if(!parse_res)
+          {
+            jtl::immutable_string const res{ "Unable to compile generated C++ source." };
+            llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "error: ");
+            throw error::internal_codegen_failure(res);
+          }
+          auto &partial_tu{ parse_res.get() };
+          auto module_name{ runtime::to_string(current_module_var->deref()) };
+          write_module(module_name, partial_tu.TheModule.get()).expect_ok();
+        }
       }
     }
+#endif
 
     return ret;
   }
 
+#ifdef JANK_TARGET_EMSCRIPTEN
+  jtl::result<void, error_ref> context::eval_cpp_string(jtl::immutable_string_view const &) const
+  {
+    return error::runtime_invalid_cpp_eval();
+  }
+#else
   jtl::result<void, error_ref>
   context::eval_cpp_string(jtl::immutable_string_view const &code) const
   {
     profile::timer const timer{ "rt eval_cpp_string" };
+
+    /* Capture stderr output (C++ compilation errors) and forward them through
+     * the output redirection system so they appear in the IDE REPL. */
+    scoped_stderr_redirect const stderr_redirect{};
 
     auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
     if(!parse_res)
@@ -258,6 +412,7 @@ namespace jank::runtime
     }
     return ok();
   }
+#endif
 
   object_ref context::read_string(jtl::immutable_string_view const &code)
   {
@@ -266,7 +421,7 @@ namespace jank::runtime
     /* When reading an arbitrary string, we don't want the last *current-file* to
      * be set as source file, so we need to bind it to nil. */
     binding_scope const preserve{ obj::persistent_hash_map::create_unique(
-      std::make_pair(current_file_var, jank_nil)) };
+      std::make_pair(current_file_var, make_box(read::no_source_path))) };
 
     read::lex::processor l_prc{ code };
     read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
@@ -280,6 +435,7 @@ namespace jank::runtime
     return ret;
   }
 
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   native_vector<analyze::expression_ref>
   context::analyze_string(jtl::immutable_string_view const &code, bool const eval)
   {
@@ -309,6 +465,7 @@ namespace jank::runtime
 
     return ret;
   }
+#endif
 
   jtl::result<void, error_ref>
   context::load_module(jtl::immutable_string_view const &module, module::origin const ori)
@@ -355,16 +512,38 @@ namespace jank::runtime
     binding_scope const preserve{ obj::persistent_hash_map::create_unique(
       std::make_pair(compile_files_var, jank_true)) };
 
-    return load_module(util::format("/{}", module), module::origin::latest);
+    /* For WASM AOT compilation, we need to force loading from source to recompile
+     * the module rather than using cached object files. */
+    auto const ori = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
+      ? module::origin::source
+      : module::origin::latest;
+
+    return load_module(util::format("/{}", module), ori);
   }
 
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   object_ref context::eval(object_ref const o)
   {
     auto const expr(
       analyze::pass::optimize(an_prc.analyze(o, analyze::expression_position::value).expect_ok()));
     return evaluate::eval(expr);
   }
+#else
+  object_ref context::eval(object_ref const o)
+  {
+    /* WASM doesn't support JIT evaluation - just return the object */
+    return o;
+  }
+#endif
 
+#ifdef JANK_TARGET_EMSCRIPTEN
+  jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
+                                                 jtl::ref<llvm::Module> const &) const
+  {
+    return err(
+      util::format("Writing modules is unsupported on emscripten (module '{}').", module_name));
+  }
+#else
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
                                                  jtl::ref<llvm::Module> const &module) const
   {
@@ -415,6 +594,7 @@ namespace jank::runtime
 
     return ok();
   }
+#endif
 
   jtl::immutable_string context::unique_namespaced_string() const
   {
@@ -535,10 +715,14 @@ namespace jank::runtime
 
     auto locked_namespaces(namespaces.wlock());
     obj::symbol const ns_sym{ qualified_sym->ns };
-    auto const found_ns(locked_namespaces->find(&ns_sym));
+    auto found_ns(locked_namespaces->find(&ns_sym));
     if(found_ns == locked_namespaces->end())
     {
-      return err(util::format("Can't intern var. Namespace doesn't exist: {}", qualified_sym->ns));
+      /* Auto-create namespace if it doesn't exist - needed for AOT/WASM mode
+       * where vars may be interned in constructors before in-ns is called */
+      auto const ns_sym_boxed(make_box<obj::symbol>(qualified_sym->ns));
+      auto const result(locked_namespaces->emplace(ns_sym_boxed, make_box<ns>(ns_sym_boxed)));
+      found_ns = result.first;
     }
 
     return ok(found_ns->second->intern_var(qualified_sym));
@@ -705,7 +889,7 @@ namespace jank::runtime
   jtl::string_result<void> context::push_thread_bindings()
   {
     auto bindings(obj::persistent_hash_map::empty());
-    auto &tbfs(thread_binding_frames[this]);
+    auto &tbfs(thread_binding_frames[std::this_thread::get_id()]);
     if(!tbfs.empty())
     {
       bindings = tbfs.front().bindings;
@@ -734,7 +918,7 @@ namespace jank::runtime
   context::push_thread_bindings(obj::persistent_hash_map_ref const bindings)
   {
     thread_binding_frame frame{ obj::persistent_hash_map::empty() };
-    auto &tbfs(thread_binding_frames[this]);
+    auto &tbfs(thread_binding_frames[std::this_thread::get_id()]);
     if(!tbfs.empty())
     {
       frame.bindings = tbfs.front().bindings;
@@ -777,7 +961,7 @@ namespace jank::runtime
 
   jtl::string_result<void> context::pop_thread_bindings()
   {
-    auto &tbfs(thread_binding_frames[this]);
+    auto &tbfs(thread_binding_frames[std::this_thread::get_id()]);
     if(tbfs.empty())
     {
       return err("Mismatched thread binding pop");
@@ -790,7 +974,7 @@ namespace jank::runtime
 
   obj::persistent_hash_map_ref context::get_thread_bindings() const
   {
-    auto const &tbfs(thread_binding_frames[this]);
+    auto const &tbfs(thread_binding_frames[std::this_thread::get_id()]);
     if(tbfs.empty())
     {
       return obj::persistent_hash_map::empty();
@@ -800,7 +984,7 @@ namespace jank::runtime
 
   jtl::option<thread_binding_frame> context::current_thread_binding_frame()
   {
-    auto &tbfs(thread_binding_frames[this]);
+    auto &tbfs(thread_binding_frames[std::this_thread::get_id()]);
     if(tbfs.empty())
     {
       return none;

@@ -869,6 +869,18 @@ namespace jank::read::lex
                                  { denominator.expect_ok().start, denominator.expect_ok().end } });
                 }
                 auto const &denominator_token(denominator.expect_ok());
+#ifdef JANK_TARGET_EMSCRIPTEN
+                // For WASM, native_big_integer is just long long - use strtoll
+                native_big_integer numerator{};
+                if(radix == 8 && *(file.data() + token_start) == '0')
+                {
+                  numerator = std::strtoll(file.data() + token_start + 1, nullptr, radix);
+                }
+                else
+                {
+                  numerator = std::strtoll(file.data() + token_start, nullptr, radix);
+                }
+#else
                 native_big_integer numerator{};
                 if(radix == 8 && *(file.data() + token_start) == '0')
                 {
@@ -880,6 +892,7 @@ namespace jank::read::lex
                   numerator.assign(
                     std::string_view{ file.data() + token_start, slash_pos - token_start });
                 }
+#endif
                 if(denominator.expect_ok().kind == token_kind::integer)
                 {
                   return ok(token(
@@ -891,6 +904,20 @@ namespace jank::read::lex
                 }
                 if(denominator.expect_ok().kind == token_kind::big_integer)
                 {
+#ifdef JANK_TARGET_EMSCRIPTEN
+                  // For WASM, native_big_integer is just long long - parse from string
+                  auto const &big_int_data = std::get<lex::big_integer>(denominator_token.data);
+                  auto denom_val
+                    = std::strtoll(big_int_data.number_literal.data(), nullptr, big_int_data.radix);
+                  if(big_int_data.is_negative)
+                  {
+                    denom_val = -denom_val;
+                  }
+                  return ok(token(token_start,
+                                  pos,
+                                  token_kind::ratio,
+                                  { .numerator = numerator, .denominator = denom_val }));
+#else
                   return ok(token(
                     token_start,
                     pos,
@@ -900,6 +927,7 @@ namespace jank::read::lex
                        * some weird shit with our number.  */
                       .denominator = native_big_integer(std::string_view{
                         std::get<lex::big_integer>(denominator_token.data).number_literal }) }));
+#endif
                 }
               }
               return denominator.expect_err();
@@ -1040,7 +1068,7 @@ namespace jank::read::lex
             auto number_start{ token_start.offset };
             if(file[token_start] == '-' || file[token_start] == '+')
             {
-              number_start = token_start + 1llu;
+              number_start = token_start + static_cast<usize>(1);
               found_beginning_negative = file[token_start] == '-';
             }
             if(found_r)
@@ -1059,7 +1087,7 @@ namespace jank::read::lex
                     radix),
                   { token_start, pos });
               }
-              number_start = r_pos + 1llu;
+              number_start = r_pos + static_cast<usize>(1);
             }
             else if(radix == 16)
             {
@@ -1081,7 +1109,7 @@ namespace jank::read::lex
               return error::lex_invalid_number(
                 util::format(
                   "Characters '{}' are invalid for a base {} number.",
-                  jtl::immutable_string_view{ invalid_digits.begin(), invalid_digits.end() },
+                  jtl::immutable_string_view{ invalid_digits.data(), invalid_digits.size() },
                   radix),
                 { token_start, pos });
             }
@@ -1366,7 +1394,7 @@ namespace jank::read::lex
                 }
 
                 ++pos;
-                if(pos == token_start + 2llu)
+                if(pos == token_start + static_cast<usize>(2))
                 {
                   return ok(token{ token_start, pos, token_kind::comment, ""sv });
                 }

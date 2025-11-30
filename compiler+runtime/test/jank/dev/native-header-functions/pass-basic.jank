@@ -1,0 +1,13 @@
+(require '[clojure.string :as str])
+(require '["clojure/string_native.hpp"
+           :as str-native
+           :scope clojure.string_native])
+
+(let [all-fns (clojure.core/native-header-functions 'str-native)
+      rev-fns (clojure.core/native-header-functions 'str-native "rev")]
+  (if (and (seq all-fns)
+           (some #(= % "reverse") all-fns)
+           (seq rev-fns)
+           (every? #(str/starts-with? % "rev") rev-fns))
+    :success
+    :failure))

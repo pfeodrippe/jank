@@ -136,7 +136,11 @@ namespace jank::runtime::module
 
   static native_set<jtl::immutable_string> const &core_modules()
   {
-    static native_set<jtl::immutable_string> const modules{ "clojure.core" };
+    static native_set<jtl::immutable_string> const modules{
+      "clojure.core",
+      // This module is compiled into libjank and does not ship a standalone object file.
+      "jank.nrepl-server.asio",
+    };
     return modules;
   }
 
@@ -605,7 +609,7 @@ namespace jank::runtime::module
       return error::runtime_unable_to_open_file(util::format("Unable to map file '{}'.", path));
     }
 
-    return ok(file_view{ path, fd, head, file_size });
+    return ok(file_view{ path, fd, head, static_cast<usize>(file_size) });
   }
 
   jtl::result<file_view, error_ref> loader::read_file(jtl::immutable_string const &path)
@@ -946,7 +950,7 @@ namespace jank::runtime::module
         break;
       default:
         res = error::internal_runtime_failure(
-          util::format("Unknown module type '{}'.", module_type_to_load));
+          util::format("Unknown module type '{}'.", static_cast<int>(module_type_to_load)));
     }
 
     if(res.is_err())
@@ -965,6 +969,11 @@ namespace jank::runtime::module
   jtl::result<void, error_ref>
   loader::load_o(jtl::immutable_string const &module, file_entry const &entry) const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return error::runtime_unable_to_load_module(
+      util::format("Loading precompiled object modules is unsupported on emscripten (module '{}').",
+                   module));
+#else
     profile::timer const timer{ util::format("load object {}", module) };
 
     /* While loading an object, if the main ns loading symbol exists, then
@@ -996,11 +1005,16 @@ namespace jank::runtime::module
     reinterpret_cast<object *(*)()>(load)();
 
     return ok();
+#endif
   }
 
   jtl::result<void, error_ref>
   loader::load_cpp(jtl::immutable_string const &module, file_entry const &entry) const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return error::runtime_unable_to_load_module(
+      util::format("Loading C++ modules is unsupported on emscripten (module '{}').", module));
+#else
     if(entry.archive_path.is_some())
     {
       jtl::result<void, error_ref> res{ ok() };
@@ -1046,10 +1060,15 @@ namespace jank::runtime::module
     reinterpret_cast<object *(*)()>(load)();
 
     return ok();
+#endif
   }
 
   jtl::result<void, error_ref> loader::load_jank(file_entry const &entry) const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return error::runtime_unable_to_load_module("Loading source modules at runtime is unsupported "
+                                                "on emscripten; precompile modules on the host.");
+#else
     if(entry.archive_path.is_some())
     {
       auto const res{ visit_jar_entry(
@@ -1079,6 +1098,7 @@ namespace jank::runtime::module
     }
 
     return ok();
+#endif
   }
 
   jtl::result<void, error_ref> loader::load_cljc(file_entry const &entry) const

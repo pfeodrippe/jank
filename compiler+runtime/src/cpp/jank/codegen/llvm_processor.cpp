@@ -1,10 +1,14 @@
+#include <algorithm>
 #include <list>
+#include <ranges>
 
 #include <Interpreter/Compatibility.h>
+#include <clang/AST/DeclCXX.h>
 #include <clang/Interpreter/CppInterOp.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/IRBuilder.h>
@@ -14,6 +18,7 @@
 #include <llvm/Linker/Linker.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/StandardInstrumentations.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/Scalar/GVN.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 
@@ -28,12 +33,33 @@
 #include <jank/runtime/visit.hpp>
 #include <jank/util/clang.hpp>
 #include <jank/util/fmt/print.hpp>
+#include <jank/util/string.hpp>
 #include <jank/util/scope_exit.hpp>
 
 /* TODO: Remove exceptions. */
 namespace jank::codegen
 {
   using namespace jank::analyze;
+
+  namespace
+  {
+    std::string normalize_cpp_entity_name(std::string qualified)
+    {
+      std::string normalized;
+      normalized.reserve(qualified.size());
+      for(size_t idx{}; idx < qualified.size(); ++idx)
+      {
+        if(qualified[idx] == ':' && idx + 1 < qualified.size() && qualified[idx + 1] == ':')
+        {
+          normalized.push_back('.');
+          ++idx;
+          continue;
+        }
+        normalized.push_back(qualified[idx]);
+      }
+      return normalized;
+    }
+  }
 
   struct deferred_init
   {
@@ -82,7 +108,7 @@ namespace jank::codegen
          compilation_target target);
     /* For this ctor, we're inheriting the context from another function, which means
      * we're building a nested function. */
-    impl(analyze::expr::function_ref expr, std::unique_ptr<reusable_context> ctx);
+    impl(analyze::expr::function_ref expr, jtl::ref<reusable_context> ctx);
 
     jtl::string_result<void> gen();
     llvm::Value *gen(analyze::expression_ref, analyze::expr::function_arity const &);
@@ -173,13 +199,17 @@ namespace jank::codegen
     llvm::StructType *get_or_insert_struct_type(std::string const &name,
                                                 std::vector<llvm::Type *> const &fields) const;
 
+    util::scope_exit gen_stack_save();
+    void gen_stack_restore();
+    jtl::ptr<llvm::Value> gen_ret(jtl::ptr<llvm::Value> const value);
+    jtl::ptr<llvm::Value> gen_ret();
+
     compilation_target target{};
     analyze::expr::function_ref root_fn;
     jtl::ptr<llvm::Function> llvm_fn{};
-    std::unique_ptr<reusable_context> ctx;
+    jtl::ref<reusable_context> ctx;
     native_unordered_map<obj::symbol_ref, jtl::ptr<llvm::Value>> locals;
-    /* TODO: Use gc allocator to avoid leaks. */
-    std::list<deferred_init> deferred_inits{};
+    native_list<deferred_init> deferred_inits{};
     jtl::ref<llvm::LLVMContext> llvm_ctx;
     jtl::ref<llvm::Module> llvm_module;
     jtl::ptr<llvm::BasicBlock> current_loop;
@@ -196,6 +226,7 @@ namespace jank::codegen
      * We don't use this within the current fn, but it's passed upward to
      * the fn gen which is above us, all the way up to the module level. */
     native_unordered_map<jtl::immutable_string, Cpp::AotCall> global_rtti;
+    native_vector<jtl::ptr<llvm::Value>> stack_saves;
   };
 
   struct llvm_type_info
@@ -487,9 +518,8 @@ namespace jank::codegen
 
   /* Whenever we have an object in an `alloca`, we need to load it before using. This fn only
    * makes sense to use with jank objects, as opposed to native values. */
-  static llvm::Value *load_if_needed(std::unique_ptr<reusable_context> const &ctx,
-                                     llvm::Value *arg,
-                                     jtl::ptr<void> const type)
+  static llvm::Value *
+  load_if_needed(jtl::ref<reusable_context> const ctx, llvm::Value *arg, jtl::ptr<void> const type)
   {
     if(!arg)
     {
@@ -503,8 +533,7 @@ namespace jank::codegen
     return arg;
   }
 
-  static llvm::Value *
-  load_if_needed(std::unique_ptr<reusable_context> const &ctx, llvm::Value * const arg)
+  static llvm::Value *load_if_needed(jtl::ref<reusable_context> const ctx, llvm::Value * const arg)
   {
     return load_if_needed(ctx, arg, cpp_util::untyped_object_ptr_type());
   }
@@ -584,8 +613,8 @@ namespace jank::codegen
   }
 
   llvm_processor::llvm_processor(expr::function_ref const expr,
-                                 std::unique_ptr<reusable_context> ctx)
-    : _impl{ make_ref<impl>(expr, jtl::move(ctx)) }
+                                 jtl::ref<reusable_context> const ctx)
+    : _impl{ make_ref<impl>(expr, ctx) }
   {
   }
 
@@ -594,13 +623,13 @@ namespace jank::codegen
                              compilation_target const target)
     : target{ target }
     , root_fn{ expr }
-    , ctx{ std::make_unique<reusable_context>(module_name, std::make_unique<llvm::LLVMContext>()) }
+    , ctx{ make_ref<reusable_context>(module_name, std::make_unique<llvm::LLVMContext>()) }
     , llvm_ctx{ extract_context(ctx->module) }
     , llvm_module{ ctx->module.getModuleUnlocked() }
   {
   }
 
-  llvm_processor::impl::impl(expr::function_ref const expr, std::unique_ptr<reusable_context> ctx)
+  llvm_processor::impl::impl(expr::function_ref const expr, jtl::ref<reusable_context> ctx)
     : target{ compilation_target::function }
     , root_fn{ expr }
     , ctx{ std::move(ctx) }
@@ -759,7 +788,7 @@ namespace jank::codegen
         continue;
       }
 
-      ctx->builder->CreateRet(gen_global(jank_nil));
+      gen_ret(gen_global(jank_nil));
     }
 
     if(target != compilation_target::function)
@@ -777,7 +806,7 @@ namespace jank::codegen
           { gen_c_string(util::format("global ctor for {}", root_fn->name)) });
       }
 
-      ctx->builder->CreateRetVoid();
+      gen_ret();
     }
 
     /* For modules, we need to make sure to define RTTI symbols manually. Since
@@ -859,7 +888,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(ref);
+      return gen_ret(ref);
     }
 
     return ref;
@@ -900,7 +929,7 @@ namespace jank::codegen
     }
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return call;
@@ -913,7 +942,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(var);
+      return gen_ret(var);
     }
 
     return var;
@@ -990,7 +1019,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return call;
@@ -1037,7 +1066,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(ret);
+      return gen_ret(ret);
     }
 
     return ret;
@@ -1064,7 +1093,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return call;
@@ -1091,7 +1120,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return call;
@@ -1119,7 +1148,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return call;
@@ -1146,7 +1175,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return call;
@@ -1163,7 +1192,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(load_if_needed(ctx, ret));
+      return gen_ret(load_if_needed(ctx, ret));
     }
 
     return ret;
@@ -1175,27 +1204,13 @@ namespace jank::codegen
     {
       llvm::IRBuilder<>::InsertPointGuard const guard{ *ctx->builder };
 
-      llvm_processor nested{ expr, std::move(ctx) };
-
-      /* We need to make sure to transfer ownership of the context back, even if an exception
-       * is thrown. */
-      util::scope_exit const finally{ [&]() {
-        if(nested._impl->ctx)
-        {
-          ctx = std::move(nested._impl->ctx);
-        }
-      } };
-
+      llvm_processor const nested{ expr, ctx };
       auto const res{ nested.gen() };
       if(res.is_err())
       {
         /* TODO: Return error. */
         res.expect_ok();
       }
-
-      /* This is covered by finally, but clang-tidy can't figure that out, so we have
-       * to make this more clear. */
-      ctx = std::move(nested._impl->ctx);
 
       global_rtti.insert(nested._impl->global_rtti.begin(), nested._impl->global_rtti.end());
     }
@@ -1204,7 +1219,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(fn_obj);
+      return gen_ret(fn_obj);
     }
 
     return fn_obj;
@@ -1246,6 +1261,7 @@ namespace jank::codegen
         ctx->builder->CreateStore(store.first, store.second);
       }
 
+      gen_stack_restore();
       return ctx->builder->CreateBr(current_loop.data);
     }
     else
@@ -1295,7 +1311,7 @@ namespace jank::codegen
 
       if(expr->position == expression_position::tail)
       {
-        return ctx->builder->CreateRet(call);
+        return gen_ret(call);
       }
 
       return call;
@@ -1315,7 +1331,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(fn_obj);
+      return gen_ret(fn_obj);
     }
 
     return fn_obj;
@@ -1393,7 +1409,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return call;
@@ -1447,6 +1463,8 @@ namespace jank::codegen
       ctx->builder->CreateBr(loop_block);
       ctx->builder->SetInsertPoint(loop_block);
 
+      auto const stack_save{ gen_stack_save() };
+
       auto const ret(gen(expr->body, arity));
       locals = std::move(old_locals);
 
@@ -1456,6 +1474,7 @@ namespace jank::codegen
         auto const postloop_block(llvm::BasicBlock::Create(*llvm_ctx, "postloop", current_fn));
         if(!ctx->builder->GetInsertBlock()->getTerminator())
         {
+          gen_stack_restore();
           ctx->builder->CreateBr(postloop_block);
         }
         ctx->builder->SetInsertPoint(postloop_block);
@@ -1590,7 +1609,7 @@ namespace jank::codegen
       else_ = gen_global(jank_nil);
       if(expr->position == expression_position::tail)
       {
-        else_ = ctx->builder->CreateRet(else_);
+        else_ = gen_ret(else_);
       }
     }
 
@@ -1664,7 +1683,7 @@ namespace jank::codegen
     auto const ret{ gen_global(jank_nil) };
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(ret);
+      return gen_ret(ret);
     }
     return ret;
   }
@@ -2071,7 +2090,7 @@ namespace jank::codegen
 
     if(is_return)
     {
-      ctx->builder->CreateRet(final_val);
+      gen_ret(final_val);
     }
     return final_val;
   }
@@ -2148,17 +2167,324 @@ namespace jank::codegen
   /* NOLINTNEXTLINE(readability-make-member-function-const): Affects overload resolution. */
   llvm::Value *llvm_processor::impl::gen(expr::cpp_raw_ref const expr, expr::function_arity const &)
   {
+    /* Capture stderr output (C++ compilation errors) so they appear in output. */
+    runtime::scoped_stderr_redirect const stderr_redirect{};
+
     auto parse_res{ __rt_ctx->jit_prc.interpreter->Parse(expr->code.c_str()) };
     if(!parse_res)
     {
       throw std::runtime_error{ "Unable to parse 'cpp/raw' expression." };
     }
+
+    auto stringify_type = [](llvm::Type const *type) {
+      std::string buffer;
+      llvm::raw_string_ostream stream{ buffer };
+      type->print(stream);
+      return stream.str();
+    };
+
+    auto same_signature = [](runtime::context::cpp_function_metadata const &lhs,
+                             runtime::context::cpp_function_metadata const &rhs) {
+      if(lhs.return_type != rhs.return_type)
+      {
+        return false;
+      }
+      if(lhs.arguments.size() != rhs.arguments.size())
+      {
+        return false;
+      }
+      for(usize i{}; i < lhs.arguments.size(); ++i)
+      {
+        auto const &lhs_arg(lhs.arguments[i]);
+        auto const &rhs_arg(rhs.arguments[i]);
+        if(lhs_arg.type != rhs_arg.type)
+        {
+          return false;
+        }
+        if(lhs_arg.name != rhs_arg.name)
+        {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    /* Extract function parameter names from Clang AST before LLVM optimization strips them */
+    std::unordered_map<std::string, std::vector<std::string>> ast_param_names;
+    auto const translation_unit_early{ parse_res->TUPart };
+    if(translation_unit_early != nullptr)
+    {
+      auto &compiler_instance{ *(__rt_ctx->jit_prc.interpreter->getCompilerInstance()) };
+      auto &source_manager{ compiler_instance.getSourceManager() };
+
+      for(auto const *decl : translation_unit_early->decls())
+      {
+        if(auto const *func_decl = llvm::dyn_cast<clang::FunctionDecl>(decl))
+        {
+          if(!func_decl->hasBody() || !func_decl->hasExternalFormalLinkage())
+          {
+            continue;
+          }
+
+          auto loc(func_decl->getBeginLoc());
+          if(!loc.isValid())
+          {
+            continue;
+          }
+          loc = source_manager.getSpellingLoc(loc);
+          auto const file_name(source_manager.getFilename(loc));
+          auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+          if(!in_main_file && !file_name.empty())
+          {
+            continue;
+          }
+
+          auto qualified_name(func_decl->getQualifiedNameAsString());
+          auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+          std::vector<std::string> param_names;
+          for(auto const *param : func_decl->parameters())
+          {
+            param_names.push_back(param->getNameAsString());
+          }
+          ast_param_names[normalized_name] = std::move(param_names);
+        }
+      }
+    }
+
+    for(auto const &f : parse_res->TheModule->functions())
+    {
+      if(!f.isDeclaration() && f.hasExternalLinkage())
+      {
+        auto demangled{ llvm::demangle(f.getName().str()) };
+        auto const open_paren{ demangled.find('(') };
+        std::string prefix{ demangled.substr(0, open_paren) };
+        util::trim(prefix);
+
+        std::string fn_name{ prefix };
+        auto const space{ prefix.rfind(' ') };
+        if(space != std::string::npos)
+        {
+          fn_name = prefix.substr(space + 1);
+        }
+        util::trim(fn_name);
+        if(fn_name.empty())
+        {
+          continue;
+        }
+
+        auto normalized_fn_name(normalize_cpp_entity_name(fn_name));
+        runtime::context::cpp_function_metadata metadata;
+        metadata.name
+          = jtl::immutable_string{ normalized_fn_name.data(), normalized_fn_name.size() };
+        auto const return_type_string(stringify_type(f.getReturnType()));
+        metadata.return_type
+          = jtl::immutable_string{ return_type_string.data(), return_type_string.size() };
+
+        /* Try to get parameter names from AST first, fall back to LLVM IR names */
+        auto const ast_names_it = ast_param_names.find(normalized_fn_name);
+        std::vector<std::string> const *param_names_ptr = nullptr;
+        if(ast_names_it != ast_param_names.end())
+        {
+          param_names_ptr = &ast_names_it->second;
+        }
+
+        usize arg_index{};
+        for(auto const &arg : f.args())
+        {
+          std::string arg_name;
+          /* First, try AST parameter names */
+          if(param_names_ptr != nullptr && arg_index < param_names_ptr->size()
+             && !(*param_names_ptr)[arg_index].empty())
+          {
+            arg_name = (*param_names_ptr)[arg_index];
+          }
+          /* Fall back to LLVM IR names */
+          else if(arg.hasName() && !arg.getName().empty())
+          {
+            arg_name = arg.getName().str();
+          }
+          /* Last resort: generate synthetic names */
+          else
+          {
+            arg_name = util::format("arg{}", arg_index);
+          }
+          auto const arg_type_string(stringify_type(arg.getType()));
+
+          runtime::context::cpp_function_argument_metadata argument;
+          argument.name = jtl::immutable_string{ arg_name.data(), arg_name.size() };
+          argument.type = jtl::immutable_string{ arg_type_string.data(), arg_type_string.size() };
+          metadata.arguments.emplace_back(std::move(argument));
+          ++arg_index;
+        }
+
+        auto locked_globals{ __rt_ctx->global_cpp_functions.wlock() };
+        auto &bucket((*locked_globals)[metadata.name]);
+        auto const existing(std::ranges::find_if(bucket, [&](auto const &entry) {
+          return same_signature(entry, metadata);
+        }));
+        if(existing == bucket.end())
+        {
+          bucket.emplace_back(std::move(metadata));
+        }
+        else
+        {
+          *existing = std::move(metadata);
+        }
+      }
+    }
+
+    std::vector<runtime::context::cpp_type_metadata> discovered_types;
+    auto const translation_unit{ parse_res->TUPart };
+    if(translation_unit != nullptr)
+    {
+      auto &compiler_instance{ *(__rt_ctx->jit_prc.interpreter->getCompilerInstance()) };
+      auto &source_manager{ compiler_instance.getSourceManager() };
+      auto &ast_context{ compiler_instance.getASTContext() };
+      clang::PrintingPolicy printing_policy{ ast_context.getPrintingPolicy() };
+      printing_policy.adjustForCPlusPlus();
+
+      auto const process_record = [&](clang::CXXRecordDecl const *record) -> void {
+        if(record == nullptr)
+        {
+          return;
+        }
+        if(!record->isCompleteDefinition() || record->isImplicit() || record->isLambda()
+           || record->isAnonymousStructOrUnion())
+        {
+          return;
+        }
+
+        auto loc(record->getBeginLoc());
+        if(!loc.isValid())
+        {
+          return;
+        }
+        loc = source_manager.getSpellingLoc(loc);
+        auto const file_name(source_manager.getFilename(loc));
+        auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+        // For cpp/raw expressions, code is parsed inline and may not be considered "main file"
+        // by Clang's source manager. We include records with empty filenames (inline code)
+        // and those in the main file, but exclude standard library and external headers.
+        if(!in_main_file && !file_name.empty())
+        {
+          return;
+        }
+
+        auto qualified_name(record->getQualifiedNameAsString());
+        if(qualified_name.empty())
+        {
+          return;
+        }
+        auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+        runtime::context::cpp_type_metadata metadata;
+        metadata.name = jtl::immutable_string{ normalized_name.data(), normalized_name.size() };
+        metadata.qualified_cpp_name
+          = jtl::immutable_string{ qualified_name.data(), qualified_name.size() };
+        if(record->isUnion())
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Union;
+        }
+        else if(record->isClass())
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Class;
+        }
+        else
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Struct;
+        }
+
+        for(auto const *field : record->fields())
+        {
+          if(field == nullptr)
+          {
+            continue;
+          }
+          auto field_name(field->getNameAsString());
+          if(field_name.empty())
+          {
+            continue;
+          }
+          auto const field_type_string(field->getType().getAsString(printing_policy));
+          runtime::context::cpp_type_field_metadata field_metadata;
+          field_metadata.name = jtl::immutable_string{ field_name.data(), field_name.size() };
+          field_metadata.type
+            = jtl::immutable_string{ field_type_string.data(), field_type_string.size() };
+          metadata.fields.emplace_back(std::move(field_metadata));
+        }
+
+        for(auto const *ctor : record->ctors())
+        {
+          if(ctor == nullptr || ctor->isDeleted() || ctor->isImplicit())
+          {
+            continue;
+          }
+          runtime::context::cpp_function_metadata ctor_metadata;
+          ctor_metadata.name = jtl::immutable_string{ "constructor" };
+          ctor_metadata.return_type = metadata.qualified_cpp_name;
+
+          for(auto const *param : ctor->parameters())
+          {
+            if(param == nullptr)
+            {
+              continue;
+            }
+            auto param_name(param->getNameAsString());
+            if(param_name.empty())
+            {
+              param_name = "arg" + std::to_string(metadata.constructors.size());
+            }
+            auto const param_type_string(param->getType().getAsString(printing_policy));
+            runtime::context::cpp_function_argument_metadata arg_metadata;
+            arg_metadata.name = jtl::immutable_string{ param_name.data(), param_name.size() };
+            arg_metadata.type
+              = jtl::immutable_string{ param_type_string.data(), param_type_string.size() };
+            ctor_metadata.arguments.emplace_back(std::move(arg_metadata));
+          }
+          metadata.constructors.emplace_back(std::move(ctor_metadata));
+        }
+
+        discovered_types.emplace_back(std::move(metadata));
+      };
+
+      std::vector<clang::DeclContext const *> contexts;
+      contexts.reserve(8);
+      contexts.emplace_back(translation_unit);
+      while(!contexts.empty())
+      {
+        auto const *ctx(contexts.back());
+        contexts.pop_back();
+        for(auto const *decl : ctx->decls())
+        {
+          if(auto const *record = llvm::dyn_cast<clang::CXXRecordDecl>(decl))
+          {
+            process_record(record);
+          }
+
+          if(auto const *inner_ctx = llvm::dyn_cast<clang::DeclContext>(decl))
+          {
+            contexts.emplace_back(inner_ctx);
+          }
+        }
+      }
+    }
+
+    if(!discovered_types.empty())
+    {
+      auto locked_types{ __rt_ctx->global_cpp_types.wlock() };
+      for(auto &metadata : discovered_types)
+      {
+        (*locked_types)[metadata.name] = std::move(metadata);
+      }
+    }
+
     link_module(*ctx, parse_res->TheModule.get());
 
     auto const ret{ gen_global(jank_nil) };
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(ret);
+      return gen_ret(ret);
     }
     return ret;
   }
@@ -2182,7 +2508,7 @@ namespace jank::codegen
       ctx->builder->CreateStore(null, alloc);
       if(expr->position == expression_position::tail)
       {
-        return ctx->builder->CreateRet(alloc);
+        return gen_ret(alloc);
       }
       return alloc;
     }
@@ -2197,7 +2523,7 @@ namespace jank::codegen
       ctx->builder->CreateStore(ir_val, alloc);
       if(expr->position == expression_position::tail)
       {
-        return ctx->builder->CreateRet(alloc);
+        return gen_ret(alloc);
       }
       return alloc;
     }
@@ -2215,7 +2541,7 @@ namespace jank::codegen
       ctx->builder->CreateStore(ir_val, alloc);
       if(expr->position == expression_position::tail)
       {
-        return ctx->builder->CreateRet(alloc);
+        return gen_ret(alloc);
       }
       return alloc;
     }
@@ -2243,7 +2569,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(alloc);
+      return gen_ret(alloc);
     }
 
     return alloc;
@@ -2264,7 +2590,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(load_if_needed(ctx, converted));
+      return gen_ret(load_if_needed(ctx, converted));
     }
 
     return converted;
@@ -2440,11 +2766,11 @@ namespace jank::codegen
     {
       if(is_void)
       {
-        return ctx->builder->CreateRet(gen_global(jank_nil));
+        return gen_ret(gen_global(jank_nil));
       }
 
       auto const ret_load{ ctx->builder->CreateLoad(ctx->builder->getPtrTy(), ret_alloc, "ret") };
-      return ctx->builder->CreateRet(ret_load);
+      return gen_ret(ret_load);
     }
 
     if(is_void)
@@ -2709,7 +3035,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return call;
@@ -2736,7 +3062,7 @@ namespace jank::codegen
 
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(call);
+      return gen_ret(call);
     }
 
     return alloc;
@@ -2834,7 +3160,7 @@ namespace jank::codegen
     auto const ret{ gen_global(jank_nil) };
     if(expr->position == expression_position::tail)
     {
-      return ctx->builder->CreateRet(ret);
+      return gen_ret(ret);
     }
 
     return ret;
@@ -3737,6 +4063,63 @@ namespace jank::codegen
     std::vector<llvm::Type *> const field_types{ fields.size(), ctx->builder->getPtrTy() };
     auto const struct_type(llvm::StructType::create(field_types, name));
     return struct_type;
+  }
+
+  util::scope_exit llvm_processor::impl::gen_stack_save()
+  {
+    /* In some cases, such as loops, we use LLVM's stack preservation intrinsics.
+     * These will help us reset the stack on each iteration so that each new alloc
+     * doesn't actually keep grabbing more stack space.
+     *
+     * However, there is some tricky logic in balancing each save/restore, since we
+     * can have multiple terminators in an IR function and we need to make sure that
+     * each of them gets a restore. Also, we can have nested saves and we need to
+     * make sure they get restored in the correct order. */
+    auto const stack_ptr{ ctx->builder->CreateStackSave() };
+    stack_saves.emplace_back(stack_ptr);
+
+    /* The main logic here is to pop the back of the stack, but we add some error handling
+     * as well, to detect cases where we're not restoring in the correct order. */
+    return { [stack_ptr, this]() {
+      ssize found{ -1 };
+      for(ssize i{}; std::cmp_not_equal(i, stack_saves.size()); ++i)
+      {
+        if(stack_saves[i].data == stack_ptr)
+        {
+          found = i;
+        }
+      }
+
+      jank_debug_assert(found == -1 || found == static_cast<ssize>(stack_saves.size()) - 1);
+      if(found != -1)
+      {
+        stack_saves.erase(stack_saves.begin() + found);
+      }
+    } };
+  }
+
+  void llvm_processor::impl::gen_stack_restore()
+  {
+    jank_debug_assert(!stack_saves.empty());
+    ctx->builder->CreateStackRestore(stack_saves.back());
+  }
+
+  jtl::ptr<llvm::Value> llvm_processor::impl::gen_ret(jtl::ptr<llvm::Value> const value)
+  {
+    for(auto it{ stack_saves.rbegin() }; it != stack_saves.rend(); ++it)
+    {
+      ctx->builder->CreateStackRestore(*it);
+    }
+    return ctx->builder->CreateRet(value);
+  }
+
+  jtl::ptr<llvm::Value> llvm_processor::impl::gen_ret()
+  {
+    for(auto it{ stack_saves.rbegin() }; it != stack_saves.rend(); ++it)
+    {
+      ctx->builder->CreateStackRestore(*it);
+    }
+    return ctx->builder->CreateRetVoid();
   }
 
   void llvm_processor::optimize() const

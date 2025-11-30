@@ -4,6 +4,9 @@
 
 namespace jank::runtime
 {
+// These operator overloads are only needed when native_big_decimal/native_big_integer are class types
+// For WASM where they are primitive types (double/long long), the built-in operators work fine
+#ifndef JANK_TARGET_EMSCRIPTEN
   native_big_decimal operator+(native_big_decimal const &l, native_big_integer const &r);
   native_big_decimal operator+(native_big_integer const &l, native_big_decimal const &r);
   native_big_decimal operator-(native_big_decimal const &l, native_big_integer const &r);
@@ -24,6 +27,7 @@ namespace jank::runtime
   bool operator>(native_big_integer const &l, native_big_decimal const &r);
   bool operator>=(native_big_decimal const &l, native_big_integer const &r);
   bool operator>=(native_big_integer const &l, native_big_decimal const &r);
+#endif
 }
 
 namespace jank::runtime::obj
@@ -67,6 +71,7 @@ namespace jank::runtime::obj
     native_big_decimal data{};
   };
 
+#ifndef JANK_TARGET_EMSCRIPTEN
   using jank::runtime::operator+;
   using jank::runtime::operator-;
   using jank::runtime::operator*;
@@ -77,4 +82,5 @@ namespace jank::runtime::obj
   using jank::runtime::operator<=;
   using jank::runtime::operator>;
   using jank::runtime::operator>=;
+#endif
 }

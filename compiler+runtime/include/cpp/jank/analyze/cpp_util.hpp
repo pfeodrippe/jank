@@ -1,6 +1,26 @@
 #pragma once
 
-#include <clang/Interpreter/CppInterOp.h>
+// Include real CppInterOp when:
+// 1. Not on emscripten (native build), OR
+// 2. On emscripten but with CppInterOp available (WASM with eval support)
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <clang/Interpreter/CppInterOp.h>
+#else
+// Stub definitions for WASM without CppInterOp
+namespace Cpp
+{
+  struct TemplateArgInfo
+  {
+  };
+
+  using TCppScope_t = void *;
+
+  enum class Operator : int
+  {
+    Invalid = 0
+  };
+}
+#endif
 
 #include <jtl/ptr.hpp>
 #include <jtl/result.hpp>
@@ -28,6 +48,7 @@ namespace jank::analyze::cpp_util
   native_vector<jtl::ptr<void>> find_adl_scopes(native_vector<jtl::ptr<void>> const &starters);
 
   jtl::immutable_string get_qualified_name(jtl::ptr<void> scope);
+  jtl::immutable_string get_qualified_type_name(jtl::ptr<void> type);
   void register_rtti(jtl::ptr<void> type);
 
   jtl::ptr<void> expression_type(expression_ref expr);

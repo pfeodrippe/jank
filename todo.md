@@ -1,0 +1,49 @@
+- [x] compile it to a standalone and check the nREPL server
+  - [x] compile
+- [x] wasm
+  - [x] compile
+  - [x] source mapping to cpp
+  - [x] source mapping to jank
+  - [x] cpp/raw
+- [x] cpp integration
+  - [x] :as
+  - [x] :refer
+  - [x] autocompletion
+  - [x] if a function has a docstring, can we show it?
+- [x] add flecs to something as a test
+  - [x] include
+    - (cpp/raw "#include <flecs.h>")
+  - [x] call `ecs_init`
+  - [x] static
+  - [x] autocompletion
+    - [x] global
+    - [x] nested
+    - [x] (require '["flecs.h" :as fw :scope "flecs.world"])
+- [ ] when native and external header, get info about the location
+  - [ ] go to working?
+- [ ] wasm
+  - [x] no require
+  - [x] with require (do the AOT instead of JIT when generating code for WASM)
+  - [ ] export symbols automatically using malli schema-like format
+- [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`
+- [ ] Fix implicit conversion
+  - Unknown implicit conversion from ecs_world_t * to jank::runtime::object *. {:jank/error-kind "internal/analysis-failure" :jank/error-message "Unknown implicit conversion from ecs_world_t * to jank::runtime::object *."}
+- [ ] fix tests at `./bin/compile && bin/jank/compiler+runtime/bash_test.clj > grep -v "missing from root"`
+- [ ] use it to hotreload in SC
+  - [x] dylib from SC
+  - [x] ability to export symbol from jank
+  - [x] ability to receive, return pointers
+  - [-] test dynamic symbol
+  - [ ] call my_multiplier
+    - [ ] create a way to read/parse plugin_interface, making it available into jank
+- [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
+  - [x] get globals defined from cpp/raw
+  - [x] list globals in nREPL
+  - [ ] get existing globals ?
+- [ ] accept/return structs ?
+- [ ] combine the entities in the root level namespaces (and the functions without a ns)
+  - functions, namespaces
+  - [ ] gather
+  - [ ] complain if trying to use something ambiguous (e.g. aliasing or refering to a fn that has the same name in 2 namespaces)
+- [ ] vybe
+- [ ] jank bootstrapping

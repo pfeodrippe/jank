@@ -24,7 +24,7 @@
 
 namespace Cpp
 {
-  std::string DetectResourceDir(char const *ClangBinaryName = "clang");
+  std::string DetectResourceDir(char const *ClangBinaryName);
 }
 
 namespace jank::util
@@ -320,8 +320,12 @@ namespace jank::util
       return result;
     }
 
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return result = "wasm32-unknown-emscripten";
+#else
     jank_debug_assert(runtime::__rt_ctx);
     return result
       = runtime::__rt_ctx->jit_prc.interpreter->getExecutionEngine()->getTargetTriple().str();
+#endif
   }
 }

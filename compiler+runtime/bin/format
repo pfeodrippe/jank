@@ -2,7 +2,31 @@
 
 set -euo pipefail
 
-for i in $(git status | grep -E "modified:.*[hc]pp" | sed 's/modified:\s*//'); do
-  clang-format -i "${i}"
-  echo "formatted" "${i}"
+repo_root=$(git rev-parse --show-toplevel)
+cd "${repo_root}"
+
+base_ref=""
+for candidate in master main; do
+  if git show-ref --verify --quiet "refs/heads/${candidate}"; then
+    base_ref="${candidate}"
+    break
+  fi
+  if git show-ref --verify --quiet "refs/remotes/origin/${candidate}"; then
+    base_ref="origin/${candidate}"
+    break
+  fi
 done
+
+if [[ -z "${base_ref}" ]]; then
+  echo "Base ref 'master' or 'main' not found" >&2
+  exit 1
+fi
+
+git diff --name-only "${base_ref}"... -- '*.cpp' '*.hpp' '*.inl' '*.h' | \
+  while IFS= read -r file || [[ -n "${file}" ]]; do
+    if [[ -z "${file}" ]]; then
+      continue
+    fi
+    clang-format -i "${file}"
+    echo "formatted" "${file}"
+  done
