@@ -77,7 +77,11 @@ namespace jank
         if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot
            && !util::cli::opts.save_cpp_path.empty())
         {
-          auto const ns(__rt_ctx->find_ns(make_box<obj::symbol>(module_name)));
+          /* Demunge the module name: convert underscores to hyphens for namespace lookup.
+           * File names use underscores (my_flecs_wasm.jank) but namespaces use hyphens (my-flecs-wasm). */
+          std::string ns_name{ module_name };
+          std::replace(ns_name.begin(), ns_name.end(), '_', '-');
+          auto const ns(__rt_ctx->find_ns(make_box<obj::symbol>(ns_name)));
           if(!ns.is_nil())
           {
             std::ofstream cpp_out(util::cli::opts.save_cpp_path.c_str(), std::ios::app);
@@ -112,7 +116,6 @@ namespace jank
 
                   auto const var_name(sym->name);
                   auto const munged_name(munge(var_name));
-                  auto const &ns_name(module_name);
 
                   /* Generate an extern "C" wrapper that takes a double argument
                    * and boxes it as a jank integer before calling the function.

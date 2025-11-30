@@ -10,7 +10,7 @@
   - [x] :refer
   - [x] autocompletion
   - [x] if a function has a docstring, can we show it?
-- [ ] add flecs to something as a test
+- [x] add flecs to something as a test
   - [x] include
     - (cpp/raw "#include <flecs.h>")
   - [x] call `ecs_init`
@@ -19,7 +19,10 @@
     - [x] global
     - [x] nested
     - [x] (require '["flecs.h" :as fw :scope "flecs.world"])
-  - [ ] wasm
+- [ ] wasm
+  - [x] no require
+  - [ ] with require (do the AOT instead of JIT when generating code for WASM)
+  - [ ] export symbols automatically using malli schema-like format
 - [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`
 - [ ] Fix implicit conversion
   - Unknown implicit conversion from ecs_world_t * to jank::runtime::object *. {:jank/error-kind "internal/analysis-failure" :jank/error-message "Unknown implicit conversion from ecs_world_t * to jank::runtime::object *."}

@@ -13,6 +13,7 @@ The `llvm-install` folder contains the pre-built LLVM/Clang toolchain and takes 
 
 Always added what you learned to new .md files in the compiler+runtime/ai folder in this project!
 Put them in the `20251129-001-some-time.md` format.
+Increment the number for the same date, then restart on 001 in the next day!
 
 ## Building
 
