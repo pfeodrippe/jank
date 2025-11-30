@@ -872,7 +872,7 @@ namespace jank::nrepl_server::asio
         {
           found = true;
           CHECK(dict.at("type").as_string() == "function");
-          CHECK(dict.at("ns").as_string() == "str-native");
+          CHECK(dict.at("ns").as_string() == "cpp");
 
           // Check that arglists contain parameter name from header
           auto const arglists_it(dict.find("arglists"));
@@ -1003,7 +1003,7 @@ namespace jank::nrepl_server::asio
         {
           found_reverse = true;
           CHECK(dict.at("type").as_string() == "function");
-          CHECK(dict.at("ns").as_string() == "str-native");
+          CHECK(dict.at("ns").as_string() == "cpp");
 
           // Check that arglists are present
           auto const arglists_it(dict.find("arglists"));
@@ -1024,8 +1024,8 @@ namespace jank::nrepl_server::asio
 
       REQUIRE(eldoc_responses.size() == 1);
       auto const &eldoc_payload(eldoc_responses.front());
-      CHECK(eldoc_payload.at("name").as_string() == "reverse");
-      CHECK(eldoc_payload.at("ns").as_string() == "str-native");
+      CHECK(eldoc_payload.at("name").as_string() == "clojure.string_native.reverse");
+      CHECK(eldoc_payload.at("ns").as_string() == "cpp");
       // Native functions show as "native-function" type
       auto const &type_str = eldoc_payload.at("type").as_string();
       CHECK((type_str == "function" || type_str == "native-function"));
@@ -1058,7 +1058,7 @@ namespace jank::nrepl_server::asio
         {
           found_starts_with = true;
           CHECK(dict.at("type").as_string() == "function");
-          CHECK(dict.at("ns").as_string() == "str-native");
+          CHECK(dict.at("ns").as_string() == "cpp");
           break;
         }
       }
@@ -1073,8 +1073,8 @@ namespace jank::nrepl_server::asio
 
       REQUIRE(starts_eldoc_responses.size() == 1);
       auto const &starts_eldoc_payload(starts_eldoc_responses.front());
-      CHECK(starts_eldoc_payload.at("name").as_string() == "starts_with");
-      CHECK(starts_eldoc_payload.at("ns").as_string() == "str-native");
+      CHECK(starts_eldoc_payload.at("name").as_string() == "clojure.string_native.starts_with");
+      CHECK(starts_eldoc_payload.at("ns").as_string() == "cpp");
       // Native functions show as "native-function" type
       auto const &starts_type_str = starts_eldoc_payload.at("type").as_string();
       CHECK((starts_type_str == "function" || starts_type_str == "native-function"));
@@ -1093,8 +1093,8 @@ namespace jank::nrepl_server::asio
 
       REQUIRE(info_responses.size() == 1);
       auto const &info_payload(info_responses.front());
-      CHECK(info_payload.at("name").as_string() == "reverse");
-      CHECK(info_payload.at("ns").as_string() == "str-native");
+      CHECK(info_payload.at("name").as_string() == "clojure.string_native.reverse");
+      CHECK(info_payload.at("ns").as_string() == "cpp");
       auto const statuses(extract_status(info_payload));
       CHECK(std::ranges::find(statuses, "done") != statuses.end());
     }
@@ -1130,7 +1130,7 @@ namespace jank::nrepl_server::asio
         auto const &candidate(dict.at("candidate").as_string());
         CHECK(candidate.rfind("str-native/", 0) == 0);
         auto const ns(dict.at("ns").as_string());
-        if(ns == "str-native")
+        if(ns == "cpp")
         {
           found_native = true;
         }
@@ -1165,8 +1165,8 @@ namespace jank::nrepl_server::asio
       std::cerr << "Info name: " << payload.at("name").as_string() << "\n";
       std::cerr << "Info ns: " << payload.at("ns").as_string() << "\n";
 
-      CHECK(payload.at("name").as_string() == "reverse");
-      CHECK(payload.at("ns").as_string() == "str-native");
+      CHECK(payload.at("name").as_string() == "clojure.string_native.reverse");
+      CHECK(payload.at("ns").as_string() == "cpp");
 
       auto const arglists_it(payload.find("arglists"));
       REQUIRE(arglists_it != payload.end());
@@ -1940,7 +1940,7 @@ namespace jank::nrepl_server::asio
         {
           found_reverse = true;
           CHECK(dict.at("type").as_string() == "function");
-          CHECK(dict.at("ns").as_string() == "native-str-test");
+          CHECK(dict.at("ns").as_string() == "cpp");
 
           /* Functions should have arglists with type and parameter info */
           auto const arglists_it(dict.find("arglists"));
@@ -1978,7 +1978,7 @@ namespace jank::nrepl_server::asio
       /* Require it as a native header alias with :scope pointing to our namespace.
        * This simulates: (require ["flecs.h" :as flecs]) where flecs::world exists */
       eng.handle(make_message({
-        {   "op","eval"                 },
+        {   "op","eval"                },
         { "code",
          "(require '[\"jank/runtime/context.hpp\" :as nested-alias :scope "
          "\"nested_alias_test\"])" }
@@ -2103,7 +2103,7 @@ namespace jank::nrepl_server::asio
 
       /* Require it as a native header alias */
       eng.handle(make_message({
-        {   "op","eval"                 },
+        {   "op","eval"                },
         { "code",
          "(require '[\"jank/runtime/context.hpp\" :as tmpl-test :scope "
          "\"template_base_test\"])" }
@@ -2168,7 +2168,7 @@ namespace jank::nrepl_server::asio
        * - Non-template methods (like progress(), defer_begin())
        * Path is relative from build directory to test directory. */
       eng.handle(make_message({
-        {   "op",                                                                 "eval" },
+        {   "op",                                                              "eval" },
         { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/test_flecs.hpp\\\"\")" }
       }));
 
@@ -2300,9 +2300,8 @@ namespace jank::nrepl_server::asio
 
       /* Include the test header with #include inside class body */
       eng.handle(make_message({
-        {   "op",                                             "eval"                 },
-        { "code",
-         "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/test_mixin_class.hpp\\\"\")" }
+        {   "op",                                                                    "eval" },
+        { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/test_mixin_class.hpp\\\"\")" }
       }));
 
       /* Create the alias using require with :scope */
@@ -2398,7 +2397,7 @@ namespace jank::nrepl_server::asio
        * Note: jank uses dot notation for scopes, which gets converted to ::
        * This simulates: (require '["flecs.h" :as fw :scope "flecs.world"]) */
       eng.handle(make_message({
-        {   "op",                                                     "eval" },
+        {   "op","eval"                },
         { "code",
          "(require '[\"jank/runtime/context.hpp\" :as fw :scope "
          "\"class_scope_test.world\"])" }
@@ -2469,7 +2468,7 @@ namespace jank::nrepl_server::asio
 
       /* Define a namespace with a class that has member functions. */
       eng.handle(make_message({
-        {   "op",                         "eval"                },
+        {   "op",                              "eval"                },
         { "code",
          "(cpp/raw \"namespace this_param_test { struct world { void method_no_args() {} "
          "int method_with_args(int x, float y) { return x; } }; }\")" }
@@ -2477,7 +2476,7 @@ namespace jank::nrepl_server::asio
 
       /* Require it as a native header alias. */
       eng.handle(make_message({
-        {   "op",                                                        "eval" },
+        {   "op","eval"                },
         { "code",
          "(require '[\"jank/runtime/context.hpp\" :as tpt :scope "
          "\"this_param_test\"])" }
@@ -2485,9 +2484,9 @@ namespace jank::nrepl_server::asio
 
       /* Get info for a member method with no arguments */
       auto no_args_responses(eng.handle(make_message({
-        {   "op",                      "info" },
-        {  "sym", "tpt/world.method_no_args" },
-        {   "ns",                      "user" }
+        {  "op",                     "info" },
+        { "sym", "tpt/world.method_no_args" },
+        {  "ns",                     "user" }
       })));
 
       REQUIRE(no_args_responses.size() == 1);
@@ -2511,9 +2510,9 @@ namespace jank::nrepl_server::asio
 
       /* Get info for a member method with arguments */
       auto with_args_responses(eng.handle(make_message({
-        {   "op",                        "info" },
-        {  "sym", "tpt/world.method_with_args" },
-        {   "ns",                        "user" }
+        {  "op",                       "info" },
+        { "sym", "tpt/world.method_with_args" },
+        {  "ns",                       "user" }
       })));
 
       REQUIRE(with_args_responses.size() == 1);
@@ -2549,22 +2548,22 @@ namespace jank::nrepl_server::asio
 
       /* Include the test header */
       eng.handle(make_message({
-        {   "op",                                                     "eval"                     },
+        {   "op",                                                              "eval" },
         { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/test_flecs.hpp\\\"\")" }
       }));
 
       /* Require it as a native header alias. */
       eng.handle(make_message({
-        {   "op",                                                                "eval" },
+        {   "op",                                                 "eval"                 },
         { "code",
          "(require '[\"test/cpp/jank/nrepl/test_flecs.hpp\" :as flecs :scope \"flecs\"])" }
       }));
 
       /* Get info for a member method with standard C-style comment */
       auto doc_responses(eng.handle(make_message({
-        {   "op",                          "info" },
-        {  "sym", "flecs/world.documented_method" },
-        {   "ns",                          "user" }
+        {  "op",                          "info" },
+        { "sym", "flecs/world.documented_method" },
+        {  "ns",                          "user" }
       })));
 
       REQUIRE(doc_responses.size() == 1);
@@ -2600,9 +2599,9 @@ namespace jank::nrepl_server::asio
 
       /* Get info for a member method with Doxygen-style comment */
       auto doxy_responses(eng.handle(make_message({
-        {   "op",                      "info" },
-        {  "sym", "flecs/world.doxygen_method" },
-        {   "ns",                      "user" }
+        {  "op",                       "info" },
+        { "sym", "flecs/world.doxygen_method" },
+        {  "ns",                       "user" }
       })));
 
       REQUIRE(doxy_responses.size() == 1);

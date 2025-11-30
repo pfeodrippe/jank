@@ -1792,7 +1792,7 @@ namespace jank::nrepl_server::asio
     }
 
     std::optional<var_documentation>
-    describe_var(ns_ref target_ns, var_ref var, std::string const &display_name) const
+    describe_var(var_ref var, std::string const &display_name) const
     {
       if(var.is_nil())
       {
@@ -1800,7 +1800,9 @@ namespace jank::nrepl_server::asio
       }
 
       var_documentation info;
-      info.ns_name = current_ns_name(target_ns);
+      /* Use the var's actual namespace, not the lookup namespace.
+       * This way clojure.core/map shows as clojure.core/map, not my-ns/map */
+      info.ns_name = to_std_string(var->n->name->to_string());
       if(!display_name.empty())
       {
         info.name = display_name;
@@ -2255,8 +2257,7 @@ namespace jank::nrepl_server::asio
     }
 
     std::optional<var_documentation>
-    describe_native_header_function(std::string const &alias_name,
-                                    ns::native_alias const &alias,
+    describe_native_header_function(ns::native_alias const &alias,
                                     std::string const &symbol_name) const
     {
       auto const scope_res(analyze::cpp_util::resolve_scope(alias.scope));
@@ -2320,8 +2321,17 @@ namespace jank::nrepl_server::asio
       }
 
       var_documentation info;
-      info.ns_name = alias_name;
-      info.name = symbol_name;
+      /* Use "cpp" as namespace and include the full C++ path in the name.
+       * e.g., cpp/flecs.world.get instead of flecs/world.get */
+      info.ns_name = "cpp";
+      if(alias.scope.empty())
+      {
+        info.name = symbol_name;
+      }
+      else
+      {
+        info.name = to_std_string(alias.scope) + "." + symbol_name;
+      }
       info.is_function = true;
       info.is_cpp_function = true;
 
@@ -2421,9 +2431,7 @@ namespace jank::nrepl_server::asio
     }
 
     std::optional<var_documentation>
-    describe_native_header_type(std::string const &alias_name,
-                                ns::native_alias const &alias,
-                                std::string const &symbol_name) const
+    describe_native_header_type(ns::native_alias const &alias, std::string const &symbol_name) const
     {
       /* Try to find the type using CppInterOp's scope resolution. The symbol_name
        * is just the base name (e.g., "world"), but we need to look it up within
@@ -2442,8 +2450,17 @@ namespace jank::nrepl_server::asio
       }
 
       var_documentation info;
-      info.ns_name = alias_name;
-      info.name = symbol_name;
+      /* Use "cpp" as namespace and include the full C++ path in the name.
+       * e.g., cpp/flecs.world instead of flecs/world */
+      info.ns_name = "cpp";
+      if(alias.scope.empty())
+      {
+        info.name = symbol_name;
+      }
+      else
+      {
+        info.name = to_std_string(alias.scope) + "." + symbol_name;
+      }
       info.is_cpp_type = true;
 
       /* Get the fully qualified type name */
@@ -2523,16 +2540,15 @@ namespace jank::nrepl_server::asio
     }
 
     std::optional<var_documentation>
-    describe_native_header_entity(std::string const &alias_name,
-                                  ns::native_alias const &alias,
+    describe_native_header_entity(ns::native_alias const &alias,
                                   std::string const &symbol_name) const
     {
       /* Try function first, then fall back to type */
-      if(auto fn_info = describe_native_header_function(alias_name, alias, symbol_name))
+      if(auto fn_info = describe_native_header_function(alias, symbol_name))
       {
         return fn_info;
       }
-      return describe_native_header_type(alias_name, alias, symbol_name);
+      return describe_native_header_type(alias, symbol_name);
     }
 
     bencode::value::list serialize_cpp_signatures(var_documentation const &info) const

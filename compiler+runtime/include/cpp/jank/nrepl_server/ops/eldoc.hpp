@@ -55,12 +55,10 @@ namespace jank::nrepl_server::asio
         {
           auto const &refer_info = native_refer.unwrap();
           // Get the alias to look up the native header info
-          auto const alias_name = to_std_string(refer_info.alias->name);
           auto const native_alias_opt = target_ns->find_native_alias(refer_info.alias);
           if(native_alias_opt.is_some())
           {
-            info = describe_native_header_entity(alias_name,
-                                                 native_alias_opt.unwrap(),
+            info = describe_native_header_entity(native_alias_opt.unwrap(),
                                                  to_std_string(refer_info.member->name));
           }
         }
@@ -71,7 +69,7 @@ namespace jank::nrepl_server::asio
         auto const var(target_ns->find_var(symbol));
         if(!var.is_nil())
         {
-          info = describe_var(target_ns, var, parts.name);
+          info = describe_var(var, parts.name);
         }
       }
 
@@ -83,8 +81,7 @@ namespace jank::nrepl_server::asio
 
     if(!info.has_value() && requested_native_alias.has_value())
     {
-      info
-        = describe_native_header_entity(alias_display, requested_native_alias.value(), parts.name);
+      info = describe_native_header_entity(requested_native_alias.value(), parts.name);
     }
     if(!info.has_value())
     {

@@ -243,8 +243,8 @@ namespace jank::nrepl_server::asio
   /* Enumerate class members directly (for class-level scopes).
    * This is used when the scope itself is a class like "flecs::world",
    * allowing `fw/defer_begin` to directly refer to members. */
-  std::vector<std::string> enumerate_class_members_directly(void *class_scope,
-                                                            std::string const &prefix)
+  std::vector<std::string>
+  enumerate_class_members_directly(void *class_scope, std::string const &prefix)
   {
     std::vector<std::string> matches;
 
@@ -253,12 +253,11 @@ namespace jank::nrepl_server::asio
       return matches;
     }
 
-    /* Check if the type is complete. Incomplete types (forward declarations,
-     * uninstantiated templates) can cause crashes when iterating declarations. */
-    if(!Cpp::IsComplete(class_scope))
-    {
-      return matches;
-    }
+    /* Note: We don't check IsComplete() here because:
+     * 1. safe_get_class_members() has its own exception handling
+     * 2. Complex classes like flecs::world may report as incomplete
+     *    even when fully included due to template complexity
+     * 3. noload_lookups() is safe to call on any CXXRecordDecl */
 
     /* Get all member names using our safe implementation.
      * This uses noload_lookups() instead of GetAllCppNames or decls(),
