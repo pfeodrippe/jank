@@ -2623,5 +2623,294 @@ namespace jank::nrepl_server::asio
         WARN_MESSAGE(false, "docstring not found for doxygen_method");
       }
     }
+
+    TEST_CASE("info arglists do not contain NULL TYPE")
+    {
+      /* This test verifies that type information in arglists does not contain
+       * "NULL TYPE" which indicates CppInterOp failed to stringify the type.
+       * Instead, we should fall back to qualified names or "auto". */
+      engine eng;
+
+      /* Define a struct with template-like patterns that might cause NULL TYPE issues */
+      eng.handle(make_message({
+        {   "op","eval"           },
+        { "code",
+         "(cpp/raw \"namespace null_type_test { "
+         "struct entity { "
+         "  template<typename T> entity& set(T val) { return *this; } "
+         "  entity child(const char* name) { return *this; } "
+         "}; }\")" }
+      }));
+
+      /* Require it as a native header alias */
+      eng.handle(make_message({
+        {   "op","eval"                },
+        { "code",
+         "(require '[\"jank/runtime/context.hpp\" :as ntt :scope "
+         "\"null_type_test\"])" }
+      }));
+
+      /* Get info for the child method */
+      auto responses(eng.handle(make_message({
+        {  "op",             "info" },
+        { "sym", "ntt/entity.child" },
+        {  "ns",             "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      /* Check that arglists exist and don't contain NULL TYPE */
+      auto const arglists_it(payload.find("arglists"));
+      if(arglists_it != payload.end())
+      {
+        auto const &arglists(arglists_it->second.as_list());
+        for(auto const &arglist : arglists)
+        {
+          auto const &sig(arglist.as_string());
+          std::cerr << "Arglist: " << sig << "\n";
+          /* Verify no NULL TYPE appears in the signature */
+          CHECK(sig.find("NULL TYPE") == std::string::npos);
+        }
+      }
+
+      /* Also check arglists-str if present */
+      auto const arglists_str_it(payload.find("arglists-str"));
+      if(arglists_str_it != payload.end())
+      {
+        auto const &arglists_str(arglists_str_it->second.as_string());
+        std::cerr << "Arglists-str: " << arglists_str << "\n";
+        CHECK(arglists_str.find("NULL TYPE") == std::string::npos);
+      }
+
+      /* Check return-type if present */
+      auto const return_type_it(payload.find("return-type"));
+      if(return_type_it != payload.end())
+      {
+        auto const &return_type(return_type_it->second.as_string());
+        std::cerr << "Return type: " << return_type << "\n";
+        CHECK(return_type.find("NULL TYPE") == std::string::npos);
+      }
+    }
+
+    TEST_CASE("info returns absolute file paths for C++ declarations")
+    {
+      /* This test verifies that file paths returned for C++ declarations
+       * are absolute paths, not relative paths. */
+      engine eng;
+
+      /* Use clojure/string_native.hpp which is a real header that jank includes */
+      eng.handle(make_message({
+        {   "op",                                                         "eval" },
+        { "code", "(require '[\"clojure/string_native.hpp\" :as abs-path-test])" }
+      }));
+
+      /* Get info for a function from the header */
+      auto responses(eng.handle(make_message({
+        {  "op",                  "info" },
+        { "sym", "abs-path-test/reverse" },
+        {  "ns",                  "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      /* Check if file path is present and is absolute */
+      auto const file_it(payload.find("file"));
+      if(file_it != payload.end())
+      {
+        auto const &file_path(file_it->second.as_string());
+        std::cerr << "File path: " << file_path << "\n";
+        /* On Unix-like systems, absolute paths start with / */
+        CHECK(file_path.front() == '/');
+        /* Should not be just a relative path like "clojure/string_native.hpp" */
+        CHECK(file_path.find("clojure/string_native.hpp") != 0);
+      }
+      else
+      {
+        /* File path might not be available in all environments, just warn */
+        WARN_MESSAGE(false, "file path not present in info response");
+      }
+    }
+  }
+
+  TEST_CASE("info returns proper types for template functions, not auto")
+  {
+    SUBCASE("non-template method works to verify header loading")
+    {
+      engine eng;
+
+      /* First include the header via cpp/raw so the JIT can compile it */
+      eng.handle(make_message({
+        {   "op",                                                                  "eval" },
+        { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/template_types.hpp\\\"\")" }
+      }));
+
+      /* Then require it with :scope to get the namespace alias */
+      eng.handle(make_message({
+        {   "op","eval"                 },
+        { "code",
+         "(require '[\"test/cpp/jank/nrepl/template_types.hpp\" :as tmpl-test :scope "
+         "\"template_type_test\"])" }
+      }));
+
+      /* Get info for a non-template method to verify header loading */
+      auto responses(eng.handle(make_message({
+        {  "op",                    "info" },
+        { "sym", "tmpl-test/entity.get_id" },
+        {  "ns",                    "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      auto const arglists_str_it(payload.find("arglists-str"));
+      REQUIRE(arglists_str_it != payload.end());
+      auto const &arglists_str(arglists_str_it->second.as_string());
+
+      /* Should have the this pointer with proper type */
+      CHECK_MESSAGE(arglists_str.find("template_type_test::entity") != std::string::npos,
+                    "arglists should contain 'template_type_test::entity', got: " << arglists_str);
+    }
+
+    SUBCASE("variadic template member function shows Args types")
+    {
+      engine eng;
+
+      /* First include the header via cpp/raw so the JIT can compile it */
+      eng.handle(make_message({
+        {   "op",                                                                  "eval" },
+        { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/template_types.hpp\\\"\")" }
+      }));
+
+      /* Then require it with :scope to get the namespace alias */
+      eng.handle(make_message({
+        {   "op","eval"                 },
+        { "code",
+         "(require '[\"test/cpp/jank/nrepl/template_types.hpp\" :as tmpl-test :scope "
+         "\"template_type_test\"])" }
+      }));
+
+      /* Get info for the variadic template method - similar to flecs::entity::child */
+      auto responses(eng.handle(make_message({
+        {  "op",                   "info" },
+        { "sym", "tmpl-test/entity.child" },
+        {  "ns",                   "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      /* Check arglists-str doesn't contain "auto" */
+      auto const arglists_str_it(payload.find("arglists-str"));
+      REQUIRE(arglists_str_it != payload.end());
+      auto const &arglists_str(arglists_str_it->second.as_string());
+
+      /* Should not contain "auto" - should show actual template parameter types */
+      CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
+                    "arglists should not contain 'auto', got: " << arglists_str);
+
+      /* Should contain "Args" or the actual parameter pack type */
+      bool const has_args_param = arglists_str.find("Args") != std::string::npos
+        || arglists_str.find("args") != std::string::npos;
+      CHECK_MESSAGE(
+        has_args_param,
+        "arglists should contain template parameter name 'Args' or 'args', got: " << arglists_str);
+
+      /* Also check return type is not "auto" */
+      auto const return_type_it(payload.find("return-type"));
+      REQUIRE(return_type_it != payload.end());
+      auto const &return_type(return_type_it->second.as_string());
+
+      /* Return type should be "entity" not "auto" */
+      CHECK_MESSAGE(return_type.find("auto") == std::string::npos,
+                    "return-type should not be 'auto', got: " << return_type);
+    }
+
+    SUBCASE("simple template function with T parameter")
+    {
+      engine eng;
+
+      /* First include the header via cpp/raw so the JIT can compile it */
+      eng.handle(make_message({
+        {   "op",                                                                  "eval" },
+        { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/template_types.hpp\\\"\")" }
+      }));
+
+      /* Then require it with :scope to get the namespace alias */
+      eng.handle(make_message({
+        {   "op","eval"                 },
+        { "code",
+         "(require '[\"test/cpp/jank/nrepl/template_types.hpp\" :as tmpl-test :scope "
+         "\"template_type_test\"])" }
+      }));
+
+      /* Get info for a simple template function */
+      auto responses(eng.handle(make_message({
+        {  "op",               "info" },
+        { "sym", "tmpl-test/identity" },
+        {  "ns",               "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      auto const arglists_str_it(payload.find("arglists-str"));
+      REQUIRE(arglists_str_it != payload.end());
+      auto const &arglists_str(arglists_str_it->second.as_string());
+
+      /* Should not contain "auto" */
+      CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
+                    "arglists should not contain 'auto', got: " << arglists_str);
+
+      /* Should contain "T" for the template parameter */
+      CHECK_MESSAGE(arglists_str.find("T ") != std::string::npos,
+                    "arglists should contain template parameter 'T', got: " << arglists_str);
+    }
+
+    SUBCASE("template method with mixed parameters")
+    {
+      engine eng;
+
+      /* First include the header via cpp/raw so the JIT can compile it */
+      eng.handle(make_message({
+        {   "op",                                                                  "eval" },
+        { "code", "(cpp/raw \"#include \\\"test/cpp/jank/nrepl/template_types.hpp\\\"\")" }
+      }));
+
+      /* Then require it with :scope to get the namespace alias */
+      eng.handle(make_message({
+        {   "op","eval"                 },
+        { "code",
+         "(require '[\"test/cpp/jank/nrepl/template_types.hpp\" :as tmpl-test :scope "
+         "\"template_type_test\"])" }
+      }));
+
+      /* Get info for template method with const char* and T&& params */
+      auto responses(eng.handle(make_message({
+        {  "op",                 "info" },
+        { "sym", "tmpl-test/entity.set" },
+        {  "ns",                 "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+
+      auto const arglists_str_it(payload.find("arglists-str"));
+      REQUIRE(arglists_str_it != payload.end());
+      auto const &arglists_str(arglists_str_it->second.as_string());
+
+      /* Should not contain "auto" */
+      CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
+                    "arglists should not contain 'auto', got: " << arglists_str);
+
+      /* Should contain the const char* type */
+      CHECK_MESSAGE(arglists_str.find("char") != std::string::npos,
+                    "arglists should contain 'char' for const char* param, got: " << arglists_str);
+
+      /* Should contain "T" for the template parameter */
+      CHECK_MESSAGE(arglists_str.find("T ") != std::string::npos,
+                    "arglists should contain template parameter 'T', got: " << arglists_str);
+    }
   }
 }

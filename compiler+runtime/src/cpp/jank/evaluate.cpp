@@ -546,7 +546,7 @@ namespace jank::evaluate
     auto const size(expr->data_exprs.size());
     if(size <= obj::persistent_array_map::max_size)
     {
-      auto const array_box(make_array_box<object_ref>(static_cast<usize>(size * 2)));
+      auto const array_box(make_array_box<object_ref>(static_cast<usize>(size) * 2));
       usize i{};
       for(auto const &e : expr->data_exprs)
       {

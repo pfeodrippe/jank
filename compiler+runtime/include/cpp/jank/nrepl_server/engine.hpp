@@ -50,6 +50,7 @@
 
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/Decl.h>
+#include <clang/AST/DeclTemplate.h>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/RawCommentList.h>
 #include <clang/Basic/SourceManager.h>
@@ -1997,12 +1998,15 @@ namespace jank::nrepl_server::asio
               else
               {
                 auto const type_scope = Cpp::GetScopeFromType(arg_type);
-                arg_doc.type = type_scope ? Cpp::GetQualifiedName(type_scope) : "auto";
+                // Use Clang AST directly for template types
+                arg_doc.type = type_scope ? Cpp::GetQualifiedName(type_scope)
+                                          : get_function_arg_type_string(fn, idx);
               }
             }
             else
             {
-              arg_doc.type = "auto";
+              // Use Clang AST directly for template types
+              arg_doc.type = get_function_arg_type_string(fn, idx);
             }
             auto const arg_name(Cpp::GetFunctionArgName(fn, idx));
             if(arg_name.empty())
@@ -2308,6 +2312,67 @@ namespace jank::nrepl_server::asio
       return result;
     }
 
+    /* Get FunctionDecl from a CppInterOp function pointer.
+     * Handles both FunctionDecl and FunctionTemplateDecl (extracts templated decl). */
+    clang::FunctionDecl const *get_function_decl(void *fn) const
+    {
+      if(!fn)
+      {
+        return nullptr;
+      }
+      auto const *decl = static_cast<clang::Decl const *>(fn);
+      /* Try FunctionDecl first */
+      if(auto const *func_decl = llvm::dyn_cast<clang::FunctionDecl>(decl))
+      {
+        return func_decl;
+      }
+      /* For function templates, get the templated FunctionDecl */
+      if(auto const *tmpl_decl = llvm::dyn_cast<clang::FunctionTemplateDecl>(decl))
+      {
+        return tmpl_decl->getTemplatedDecl();
+      }
+      return nullptr;
+    }
+
+    /* Get argument type as string using Clang AST directly.
+     * This handles template parameter types that CppInterOp fails to stringify. */
+    std::string get_function_arg_type_string(void *fn, size_t idx) const
+    {
+      auto const *func_decl = get_function_decl(fn);
+      if(!func_decl || idx >= func_decl->getNumParams())
+      {
+        return "auto";
+      }
+      auto const *param = func_decl->getParamDecl(idx);
+      if(!param)
+      {
+        return "auto";
+      }
+      auto type_str = param->getType().getAsString();
+      if(type_str.empty() || type_str.find("NULL TYPE") != std::string::npos)
+      {
+        return "auto";
+      }
+      return type_str;
+    }
+
+    /* Get return type as string using Clang AST directly.
+     * This handles template return types that CppInterOp fails to stringify. */
+    std::string get_function_return_type_string(void *fn) const
+    {
+      auto const *func_decl = get_function_decl(fn);
+      if(!func_decl)
+      {
+        return "auto";
+      }
+      auto type_str = func_decl->getReturnType().getAsString();
+      if(type_str.empty() || type_str.find("NULL TYPE") != std::string::npos)
+      {
+        return "auto";
+      }
+      return type_str;
+    }
+
     std::optional<var_documentation>
     describe_native_header_function(ns::native_alias const &alias,
                                     std::string const &symbol_name) const
@@ -2409,7 +2474,8 @@ namespace jank::nrepl_server::asio
             }
             else
             {
-              signature.return_type = "auto";
+              // Use Clang AST directly for template types
+              signature.return_type = get_function_return_type_string(fn);
             }
           }
         }
@@ -2462,13 +2528,15 @@ namespace jank::nrepl_server::asio
               }
               else
               {
-                arg_doc.type = "auto";
+                // Use Clang AST directly for template types
+                arg_doc.type = get_function_arg_type_string(fn, idx);
               }
             }
           }
           else
           {
-            arg_doc.type = "auto";
+            // Use Clang AST directly for template types
+            arg_doc.type = get_function_arg_type_string(fn, idx);
           }
           arg_doc.name = Cpp::GetFunctionArgName(fn, idx);
           if(arg_doc.name.empty())
@@ -2622,12 +2690,15 @@ namespace jank::nrepl_server::asio
                 else
                 {
                   auto const type_scope = Cpp::GetScopeFromType(arg_type);
-                  signature += type_scope ? Cpp::GetQualifiedName(type_scope) : "auto";
+                  // Use Clang AST directly for template types
+                  signature += type_scope ? Cpp::GetQualifiedName(type_scope)
+                                          : get_function_arg_type_string(ctor, idx);
                 }
               }
               else
               {
-                signature += "auto";
+                // Use Clang AST directly for template types
+                signature += get_function_arg_type_string(ctor, idx);
               }
               auto const arg_name(Cpp::GetFunctionArgName(ctor, idx));
               if(!arg_name.empty())

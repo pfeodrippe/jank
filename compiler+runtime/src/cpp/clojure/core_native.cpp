@@ -451,7 +451,7 @@ namespace clojure::core_native
 #endif
   }
 
-  object_ref all_ns()
+  static object_ref all_ns()
   {
     native_vector<object_ref> namespaces;
     __rt_ctx->namespaces.withRLock([&](auto const &ns_map) {
