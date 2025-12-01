@@ -1067,8 +1067,16 @@ namespace jank::codegen
        *
        * Also, bindings are references to their value expression, rather than a copy.
        * This is important for C++ interop, since the we don't want to, and we may not
-       * be able to, just copy stack-allocated C++ objects around willy nilly. */
-      if(expr->is_loop)
+       * be able to, just copy stack-allocated C++ objects around willy nilly.
+       *
+       * If the value expression doesn't produce a value (e.g., throw), we still need
+       * to declare the variable (even though the code is unreachable after the throw)
+       * because the rest of the let body may reference it and C++ requires declarations. */
+      if(val_tmp.is_none())
+      {
+        util::format_to(body_buffer, "{{ object_ref {}(jank_nil); ", munged_name);
+      }
+      else if(expr->is_loop)
       {
         if(cpp_util::is_any_object(local_type))
         {

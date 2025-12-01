@@ -81,13 +81,27 @@ namespace jank::util::cli
     cli.add_option("-D,--define-macro",
                    opts.define_macros,
                    "Defines macro value, sets to 1 if omitted. Can be specified multiple times.");
-    cli.add_option("-l",
+    cli.add_option("-l,--lib",
                    opts.libs,
                    "Library identifiers, absolute or relative paths eg. -lfoo for libfoo.so or "
                    "foo.dylib. Can be specified multiple times.");
+    cli.add_option("--jit-lib",
+                   opts.jit_libs,
+                   "Libraries to load into JIT only (not passed to AOT linker). "
+                   "Use for symbol resolution during compilation without creating runtime dependency. "
+                   "Can be specified multiple times.");
+    cli.add_option("--link-lib",
+                   opts.link_libs,
+                   "Libraries to pass to AOT linker only (not loaded into JIT). "
+                   "Use for static libraries (.a) or libraries only needed at link time. "
+                   "Can be specified multiple times.");
     cli.add_option("--obj",
                    opts.object_files,
                    "Absolute or relative path to object files (.o) to load into JIT. "
+                   "Can be specified multiple times.");
+    cli.add_option("--framework",
+                   opts.frameworks,
+                   "macOS framework to link (e.g., --framework Cocoa). "
                    "Can be specified multiple times.");
 
     /* Run subcommand. */

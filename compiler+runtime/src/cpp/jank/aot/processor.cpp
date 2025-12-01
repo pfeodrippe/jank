@@ -1107,6 +1107,57 @@ namespace
       compiler_args.push_back(strdup(lib));
     }
 
+    /* Add user-specified libraries from -l flags.
+     * If the library is an absolute path, pass it directly.
+     * Otherwise, add the -l prefix for library name lookup. */
+    for(auto const &lib : util::cli::opts.libs)
+    {
+      if(lib.size() > 0 && lib[0] == '/')
+      {
+        /* Absolute path - pass directly. */
+        compiler_args.push_back(strdup(lib.c_str()));
+      }
+      else
+      {
+        /* Library name - add -l prefix. */
+        compiler_args.push_back(strdup(util::format("-l{}", lib).c_str()));
+      }
+    }
+
+    /* Add user-specified link-only libraries from --link-lib flags.
+     * These are not loaded into JIT, only passed to the AOT linker.
+     * For absolute paths, use -Wl, prefix to pass directly to linker,
+     * avoiding clang treating them as source files. */
+    for(auto const &lib : util::cli::opts.link_libs)
+    {
+      if(lib.size() > 0 && lib[0] == '/')
+      {
+        /* Absolute path - pass directly to linker via -Wl. */
+        compiler_args.push_back(strdup(util::format("-Wl,{}", lib).c_str()));
+      }
+      else
+      {
+        /* Library name - add -l prefix. */
+        compiler_args.push_back(strdup(util::format("-l{}", lib).c_str()));
+      }
+    }
+
+    /* Add user-specified object files from --obj flags. */
+    for(auto const &obj : util::cli::opts.object_files)
+    {
+      compiler_args.push_back(strdup(obj.c_str()));
+    }
+
+    /* Add user-specified macOS frameworks. */
+    if constexpr(jtl::current_platform == jtl::platform::macos_like)
+    {
+      for(auto const &framework : util::cli::opts.frameworks)
+      {
+        compiler_args.push_back(strdup("-framework"));
+        compiler_args.push_back(strdup(framework.c_str()));
+      }
+    }
+
     for(auto const &define : util::cli::opts.define_macros)
     {
       compiler_args.push_back(strdup(util::format("-D{}", define).c_str()));

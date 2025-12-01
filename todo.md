@@ -20,6 +20,9 @@
     - [x] nested
     - [x] (require '["flecs.h" :as fw :scope "flecs.world"])
 - [x] when native and external header, get info about the location
+- [ ] raylib
+  - [x] static
+  - [ ] start on the first thread
 - [ ] vybe
 - [ ] wasm
   - [x] no require

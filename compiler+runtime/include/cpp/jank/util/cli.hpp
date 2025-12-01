@@ -55,7 +55,10 @@ namespace jank::util::cli
     native_vector<jtl::immutable_string> library_dirs;
     native_vector<jtl::immutable_string> define_macros;
     native_vector<jtl::immutable_string> libs;
+    native_vector<jtl::immutable_string> jit_libs;  /* Libraries for JIT only (not AOT linker) */
+    native_vector<jtl::immutable_string> link_libs; /* Libraries for AOT linker only (not JIT) */
     native_vector<jtl::immutable_string> object_files;
+    native_vector<jtl::immutable_string> frameworks; /* macOS frameworks */
 
     /* Compilation. */
     bool debug{};

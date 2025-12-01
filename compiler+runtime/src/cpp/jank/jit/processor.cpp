@@ -257,6 +257,14 @@ namespace jank::jit
       throw error::system_failure(load_result.expect_err().c_str());
     }
 
+    /* Load JIT-only libraries from --jit-lib CLI option.
+     * These are loaded for symbol resolution but not passed to AOT linker. */
+    auto const &jit_load_result{ load_dynamic_libs(util::cli::opts.jit_libs) };
+    if(jit_load_result.is_err())
+    {
+      throw error::system_failure(jit_load_result.expect_err().c_str());
+    }
+
     /* Load object files from --obj CLI option. */
     for(auto const &obj_path : util::cli::opts.object_files)
     {
