@@ -1548,7 +1548,11 @@ namespace jank::analyze
       native_transient_string scoped(alias_info.scope.data(), alias_info.scope.size());
       if(!member_name.empty())
       {
-        if(member_name[0] != '.')
+        /* Only add the dot separator if there's a scope prefix.
+         * For empty scope (global C functions), we don't want the dot
+         * because that would make it look like a member access.
+         * e.g., scope="" + member="GetMouseX" -> "GetMouseX" (not ".GetMouseX") */
+        if(!scoped.empty() && member_name[0] != '.')
         {
           scoped.push_back('.');
         }

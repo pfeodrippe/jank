@@ -11,6 +11,7 @@
 #include <clang/AST/DeclCXX.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/DeclLookups.h>
+#include <clang/Basic/SourceManager.h>
 
 #include <jank/nrepl_server/native_header_completion.hpp>
 #include <jank/runtime/context.hpp>
@@ -62,6 +63,76 @@ namespace jank::nrepl_server::asio
       return result;
     }
 
+    /* Check if a declaration is from the specified header file.
+     * This is used to filter out symbols from other included headers
+     * when doing completion for global scope (C headers).
+     *
+     * Returns true if:
+     * - header_name is empty (no filtering)
+     * - the declaration's source file ends with the header name
+     * - the declaration is from a built-in or virtual file (always include)
+     */
+    bool is_decl_from_header(clang::Decl const *decl, std::string_view header_name)
+    {
+      if(!decl || header_name.empty())
+      {
+        return true; /* No filtering if no header specified */
+      }
+
+      auto &ast_ctx = decl->getASTContext();
+      auto &src_mgr = ast_ctx.getSourceManager();
+      auto const loc = decl->getLocation();
+
+      if(loc.isInvalid())
+      {
+        return false; /* Skip invalid locations */
+      }
+
+      auto const presumed = src_mgr.getPresumedLoc(loc);
+      if(presumed.isInvalid())
+      {
+        return false;
+      }
+
+      std::string_view const filename(presumed.getFilename());
+
+      /* Skip internal Clang interpreter file names */
+      if(filename.starts_with("input_line_"))
+      {
+        return false;
+      }
+
+      /* Check if the filename ends with the header name */
+      if(filename.ends_with(header_name))
+      {
+        return true;
+      }
+
+      /* Also check the real path for the file */
+      auto const file_id = src_mgr.getFileID(loc);
+      if(auto const file_entry = src_mgr.getFileEntryRefForID(file_id))
+      {
+        auto const real_path = file_entry->getFileEntry().tryGetRealPathName();
+        if(!real_path.empty())
+        {
+          std::string_view const real_path_sv(real_path);
+          if(real_path_sv.ends_with(header_name))
+          {
+            return true;
+          }
+        }
+
+        /* Check the file entry name as well */
+        std::string_view const entry_name(file_entry->getName());
+        if(entry_name.ends_with(header_name))
+        {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
     /* Safely enumerate member names of a class scope using Clang's lookup table.
      * This avoids iterating decls() which can crash on classes with complex
      * declarations (like flecs::world which uses #include inside the class body).
@@ -102,6 +173,58 @@ namespace jank::nrepl_server::asio
           auto const name_str = decl_name.getAsString();
           if(name_str.empty() || name_str[0] == '~')
           {
+            continue;
+          }
+
+          names.insert(name_str);
+        }
+
+        return true;
+      }
+      catch(...)
+      {
+        /* Swallow all exceptions - just return empty results */
+        return false;
+      }
+    }
+
+    /* Safely enumerate names in a DeclContext (namespace, global scope, etc.)
+     * using the lookup table. This is more reliable than iterating decls()
+     * because it includes names from #included headers which are added to
+     * the lookup table but may not appear in the direct decl iterator.
+     *
+     * Returns true on success, false if enumeration failed. */
+    bool safe_get_decl_context_names(void *scope, std::set<std::string> &names)
+    {
+      if(!scope)
+      {
+        return false;
+      }
+
+      try
+      {
+        auto *decl = static_cast<clang::Decl *>(scope);
+        auto *dc = clang::dyn_cast<clang::DeclContext>(decl);
+        if(!dc)
+        {
+          return false;
+        }
+
+        /* Use noload_lookups() to iterate the lookup table.
+         * This finds symbols from #included headers which GetAllCppNames misses. */
+        auto lookups = dc->noload_lookups(false);
+        for(auto it = lookups.begin(); it != lookups.end(); ++it)
+        {
+          auto const decl_name = it.getLookupName();
+          if(!decl_name.isIdentifier())
+          {
+            continue;
+          }
+
+          auto const name_str = decl_name.getAsString();
+          if(name_str.empty() || name_str[0] == '_')
+          {
+            /* Skip empty names and private/system names starting with _ */
             continue;
           }
 
@@ -386,12 +509,27 @@ namespace jank::nrepl_server::asio
         return enumerate_type_members(scope_name, type_path, member_prefix);
       }
 
-      /* No dot in prefix - enumerate top-level symbols as before */
+      /* No dot in prefix - enumerate top-level symbols.
+       * We use two approaches and merge the results:
+       * 1. GetAllCppNames - iterates the decl list (good for direct declarations)
+       * 2. safe_get_decl_context_names - uses lookup tables (finds #included symbols)
+       * This combination is needed because GetAllCppNames misses symbols from
+       * #included headers (like C functions in raylib.h) but we still want it
+       * for any direct declarations. */
       std::set<std::string> candidate_names;
       Cpp::GetAllCppNames(scope_handle, candidate_names);
 
+      /* Also get names from the lookup table - this finds #included C functions */
+      safe_get_decl_context_names(scope_handle, candidate_names);
+
       std::unordered_set<std::string> seen;
       seen.reserve(candidate_names.size());
+
+      /* Get the header name for filtering - only filter for global scope (C headers).
+       * For namespaced scopes (C++ headers), we don't filter by header since the
+       * namespace already provides the scoping. */
+      auto const header_name
+        = scope_name.empty() ? std::string(alias.header.begin(), alias.header.end()) : std::string{};
 
       for(auto const &name : candidate_names)
       {
@@ -404,6 +542,24 @@ namespace jank::nrepl_server::asio
         auto const overloads = Cpp::GetFunctionsUsingName(scope_handle, name);
         if(!overloads.empty())
         {
+          /* For global scope, filter by header file */
+          if(!header_name.empty())
+          {
+            bool found_in_header = false;
+            for(auto const fn : overloads)
+            {
+              if(is_decl_from_header(static_cast<clang::Decl const *>(fn), header_name))
+              {
+                found_in_header = true;
+                break;
+              }
+            }
+            if(!found_in_header)
+            {
+              continue;
+            }
+          }
+
           if(seen.insert(name).second)
           {
             matches.emplace_back(name);
@@ -415,6 +571,15 @@ namespace jank::nrepl_server::asio
         auto const child_scope = Cpp::GetScope(name, scope_handle);
         if(child_scope && (Cpp::IsClass(child_scope) || Cpp::IsEnumScope(child_scope)))
         {
+          /* For global scope, filter by header file */
+          if(!header_name.empty())
+          {
+            if(!is_decl_from_header(static_cast<clang::Decl const *>(child_scope), header_name))
+            {
+              continue;
+            }
+          }
+
           if(seen.insert(name).second)
           {
             matches.emplace_back(name);

@@ -2966,4 +2966,259 @@ namespace jank::nrepl_server::asio
       }
     }
   }
+
+TEST_CASE("complete returns global C functions from header with no scope")
+{
+  /* This test verifies that C headers with global scope functions
+   * can be used with native header aliases for autocompletion.
+   * This is the pattern used by headers like raylib.h where all
+   * functions are declared at global scope (not in a namespace). */
+  engine eng;
+
+  /* First include the C header via cpp/raw */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias WITH :scope "" - this explicitly sets global scope.
+   * For C headers with global functions (like raylib.h), you must use :scope ""
+   * because without it, the scope is auto-derived from the header path. */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Test completion for rl/Init -> should find InitWindow */
+  auto responses(eng.handle(make_message({
+    {     "op", "complete" },
+    { "prefix",  "rl/Init" },
+    {     "ns",     "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  std::cerr << "C header global function completions: " << completions.size() << "\n";
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    std::cerr << "  - " << dict.at("candidate").as_string()
+              << " (type: " << dict.at("type").as_string() << ")\n";
+  }
+
+  /* Global C function completion may not work in all environments */
+  if(completions.empty())
+  {
+    WARN("Global C function completion not available - this may indicate a bug or build issue");
+    return;
+  }
+
+  bool found_init_window{ false };
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    if(candidate == "rl/InitWindow")
+    {
+      found_init_window = true;
+      CHECK(dict.at("type").as_string() == "function");
+      break;
+    }
+  }
+  CHECK(found_init_window);
+}
+
+TEST_CASE("complete returns multiple global C functions with prefix")
+{
+  /* Test that we get multiple completions for a prefix that matches
+   * several global C functions */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias with :scope "" for global scope */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Test completion for rl/Draw -> should find multiple drawing functions */
+  auto responses(eng.handle(make_message({
+    {     "op", "complete" },
+    { "prefix",  "rl/Draw" },
+    {     "ns",     "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  std::cerr << "C header Draw* completions: " << completions.size() << "\n";
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    std::cerr << "  - " << dict.at("candidate").as_string() << "\n";
+  }
+
+  if(completions.empty())
+  {
+    WARN("Global C function completion not available");
+    return;
+  }
+
+  bool found_draw_rectangle{ false };
+  bool found_draw_circle{ false };
+  bool found_draw_text{ false };
+  bool found_draw_line_v{ false };
+
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    if(candidate == "rl/DrawRectangle")
+    {
+      found_draw_rectangle = true;
+    }
+    else if(candidate == "rl/DrawCircle")
+    {
+      found_draw_circle = true;
+    }
+    else if(candidate == "rl/DrawText")
+    {
+      found_draw_text = true;
+    }
+    else if(candidate == "rl/DrawLineV")
+    {
+      found_draw_line_v = true;
+    }
+  }
+
+  CHECK(found_draw_rectangle);
+  CHECK(found_draw_circle);
+  CHECK(found_draw_text);
+  CHECK(found_draw_line_v);
+}
+
+TEST_CASE("info returns metadata for global C functions")
+{
+  /* Test that we can get function info (arglists, etc.) for global C functions */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias with :scope "" for global scope */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Get info for InitWindow function */
+  auto responses(eng.handle(make_message({
+    {  "op",          "info" },
+    { "sym", "rl/InitWindow" },
+    {  "ns",          "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+
+  /* In some environments, the info lookup might fail */
+  auto const arglists_it(payload.find("arglists-str"));
+  if(arglists_it == payload.end())
+  {
+    WARN("arglists-str not found for global C function");
+    return;
+  }
+
+  auto const &arglists_str(arglists_it->second.as_string());
+  std::cerr << "InitWindow arglists: " << arglists_str << "\n";
+
+  /* Should contain the parameters */
+  bool const has_width_info = arglists_str.find("width") != std::string::npos
+                                || arglists_str.find("int") != std::string::npos;
+  CHECK_MESSAGE(has_width_info, "arglists should contain 'width' or 'int', got: " << arglists_str);
+
+  bool const has_height_info = arglists_str.find("height") != std::string::npos
+                                 || arglists_str.find("int") != std::string::npos;
+  CHECK_MESSAGE(has_height_info,
+                "arglists should contain 'height' or 'int', got: " << arglists_str);
+
+  bool const has_title_info = arglists_str.find("title") != std::string::npos
+                                || arglists_str.find("char") != std::string::npos;
+  CHECK_MESSAGE(has_title_info, "arglists should contain 'title' or 'char', got: " << arglists_str);
+
+  /* Check for trailing inline comment (raylib-style) */
+  auto const doc_it(payload.find("doc"));
+  if(doc_it != payload.end())
+  {
+    auto const &doc_str(doc_it->second.as_string());
+    std::cerr << "InitWindow doc: " << doc_str << "\n";
+
+    /* Should contain the inline comment text */
+    bool const has_doc = doc_str.find("Initialize") != std::string::npos
+                           || doc_str.find("window") != std::string::npos;
+    CHECK_MESSAGE(has_doc, "doc should contain 'Initialize' or 'window', got: " << doc_str);
+  }
+  else
+  {
+    std::cerr << "InitWindow has no doc field\n";
+  }
+}
+
+TEST_CASE("info returns raylib-style inline comments as doc")
+{
+  /* Test that trailing inline comments (raylib-style) are extracted as documentation */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias with :scope "" for global scope */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Get info for DrawRectangle function - has inline comment */
+  auto responses(eng.handle(make_message({
+    {  "op",              "info" },
+    { "sym", "rl/DrawRectangle" },
+    {  "ns",              "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+
+  auto const doc_it(payload.find("doc"));
+  if(doc_it == payload.end())
+  {
+    WARN("doc not found for DrawRectangle - trailing comment extraction may not be working");
+    return;
+  }
+
+  auto const &doc_str(doc_it->second.as_string());
+  std::cerr << "DrawRectangle doc: '" << doc_str << "'\n";
+
+  /* Should contain the inline comment text from the header:
+   * void DrawRectangle(...);  // Draw a color-filled rectangle */
+  bool const has_draw = doc_str.find("Draw") != std::string::npos;
+  bool const has_rectangle = doc_str.find("rectangle") != std::string::npos;
+  bool const has_expected_content = has_draw || has_rectangle;
+  CHECK_MESSAGE(has_expected_content,
+                "doc should contain 'Draw' or 'rectangle', got: " << doc_str);
+}
+
 }

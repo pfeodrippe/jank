@@ -1514,6 +1514,67 @@ namespace jank::nrepl_server::asio
       return result;
     }
 
+    // Helper to extract trailing inline comment on the same line as a declaration
+    // This handles raylib-style comments like:
+    // RLAPI void InitWindow(int w, int h, const char* title);  // Initialize window
+    std::optional<std::string>
+    extract_trailing_comment(clang::SourceManager const &src_mgr, clang::SourceLocation end_loc) const
+    {
+      if(!end_loc.isValid())
+      {
+        return std::nullopt;
+      }
+
+      // Get the file and offset for the end location
+      auto const file_id = src_mgr.getFileID(end_loc);
+      auto const file_offset = src_mgr.getFileOffset(end_loc);
+
+      // Get the buffer for this file
+      bool invalid = false;
+      auto const buffer = src_mgr.getBufferData(file_id, &invalid);
+      if(invalid || buffer.empty() || file_offset >= buffer.size())
+      {
+        return std::nullopt;
+      }
+
+      // Search forward from the end of the declaration to find a // comment on the same line
+      std::string_view const after_decl(buffer.data() + file_offset, buffer.size() - file_offset);
+
+      // Find the end of the current line
+      auto const line_end = after_decl.find('\n');
+      std::string_view const rest_of_line
+        = (line_end == std::string_view::npos) ? after_decl : after_decl.substr(0, line_end);
+
+      // Look for // comment marker
+      auto const comment_start = rest_of_line.find("//");
+      if(comment_start == std::string_view::npos)
+      {
+        return std::nullopt;
+      }
+
+      // Extract the comment text after //
+      auto comment_text = rest_of_line.substr(comment_start + 2);
+
+      // Trim leading whitespace
+      while(!comment_text.empty() && (comment_text.front() == ' ' || comment_text.front() == '\t'))
+      {
+        comment_text.remove_prefix(1);
+      }
+
+      // Trim trailing whitespace
+      while(!comment_text.empty() && (comment_text.back() == ' ' || comment_text.back() == '\t'))
+      {
+        comment_text.remove_suffix(1);
+      }
+
+      if(comment_text.empty())
+      {
+        return std::nullopt;
+      }
+
+      return std::string(comment_text);
+    }
+
     cpp_decl_metadata extract_cpp_decl_metadata(void *fn) const
     {
       cpp_decl_metadata result;
@@ -1533,8 +1594,15 @@ namespace jank::nrepl_server::asio
       }
       else
       {
+        // Try to extract trailing inline comment (raylib-style)
+        // e.g., void InitWindow(int w, int h, const char* title);  // Initialize window
+        result.doc = extract_trailing_comment(src_mgr, decl->getEndLoc());
+
         // Fall back to extracting any comment preceding the declaration
-        result.doc = extract_preceding_comments(src_mgr, decl->getBeginLoc());
+        if(!result.doc.has_value())
+        {
+          result.doc = extract_preceding_comments(src_mgr, decl->getBeginLoc());
+        }
       }
 
       // Extract source location
@@ -2377,13 +2445,27 @@ namespace jank::nrepl_server::asio
     describe_native_header_function(ns::native_alias const &alias,
                                     std::string const &symbol_name) const
     {
-      auto const scope_res(analyze::cpp_util::resolve_scope(alias.scope));
-      if(scope_res.is_err())
+      /* For empty scope (global C functions), use the global scope directly.
+       * resolve_scope("") fails because it tries to look up an empty name. */
+      jtl::ptr<void> scope_ptr;
+      if(alias.scope.empty())
       {
-        return std::nullopt;
+        scope_ptr = Cpp::GetGlobalScope();
+      }
+      else
+      {
+        auto const scope_res(analyze::cpp_util::resolve_scope(alias.scope));
+        if(scope_res.is_err())
+        {
+          return std::nullopt;
+        }
+        scope_ptr = scope_res.expect_ok();
       }
 
-      auto const scope(scope_res.expect_ok());
+      struct
+      {
+        jtl::ptr<void> data;
+      } scope{ scope_ptr };
 
       /* Check if symbol_name contains a dot - this indicates a member function.
        * e.g., "world.defer_begin" means we want defer_begin() method of type "world" */

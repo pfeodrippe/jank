@@ -50,6 +50,7 @@ namespace jank::nrepl_server::asio
     }
 
     auto const &entries(ensure_cache(alias));
+
     if(prefix.empty())
     {
       return entries;
