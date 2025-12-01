@@ -24,8 +24,8 @@
   - [x] static
   - [x] autocompletion
   - [ ] would we be able to get macros?? (e.g. RAYWHITE)
-  - [ ] wasm
-  - [ ] start on the first thread for the nREPL
+  - [ ] wasm fix
+  - [ ] start on the first thread for the nREPL ?
 - [ ] vybe
 - [ ] wasm
   - [x] no require

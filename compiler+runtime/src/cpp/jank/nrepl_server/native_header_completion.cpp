@@ -13,6 +13,11 @@
 #include <clang/AST/DeclLookups.h>
 #include <clang/Basic/SourceManager.h>
 
+/* Include Clang Preprocessor headers for macro support */
+#include <clang/Lex/Preprocessor.h>
+#include <clang/Lex/MacroInfo.h>
+#include <clang/Basic/IdentifierTable.h>
+
 #include <jank/nrepl_server/native_header_completion.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/util/fmt/print.hpp>
@@ -586,6 +591,20 @@ namespace jank::nrepl_server::asio
           }
         }
       }
+
+      /* Also enumerate macros from the header.
+       * Only for global scope (C headers) since that's where macros are relevant. */
+      if(!header_name.empty())
+      {
+        auto macros = enumerate_native_header_macros(alias, prefix_name);
+        for(auto &macro_name : macros)
+        {
+          if(seen.insert(macro_name).second)
+          {
+            matches.emplace_back(std::move(macro_name));
+          }
+        }
+      }
     }
     catch(std::exception const &ex)
     {
@@ -597,5 +616,267 @@ namespace jank::nrepl_server::asio
     }
 
     return matches;
+  }
+
+  namespace
+  {
+    /* Get the Clang Preprocessor from the CppInterOp interpreter.
+     * Returns nullptr if the preprocessor is not available. */
+    clang::Preprocessor *get_preprocessor()
+    {
+      auto *interp = static_cast<compat::Interpreter *>(Cpp::GetInterpreter());
+      if(!interp)
+      {
+        return nullptr;
+      }
+
+      auto *ci = interp->getCI();
+      if(!ci)
+      {
+        return nullptr;
+      }
+
+      return &ci->getPreprocessor();
+    }
+
+    /* Check if a macro was defined in the specified header file.
+     * Returns true if the macro's definition location matches the header. */
+    bool is_macro_from_header(clang::MacroInfo const *mi, std::string_view header_name)
+    {
+      if(!mi || header_name.empty())
+      {
+        return true; /* No filtering if no header specified */
+      }
+
+      auto *pp = get_preprocessor();
+      if(!pp)
+      {
+        return false;
+      }
+
+      auto &src_mgr = pp->getSourceManager();
+      auto const loc = mi->getDefinitionLoc();
+
+      if(loc.isInvalid())
+      {
+        return false;
+      }
+
+      auto const presumed = src_mgr.getPresumedLoc(loc);
+      if(presumed.isInvalid())
+      {
+        return false;
+      }
+
+      std::string_view const filename(presumed.getFilename());
+
+      /* Skip internal Clang interpreter file names */
+      if(filename.starts_with("input_line_"))
+      {
+        return false;
+      }
+
+      /* Check if the filename ends with the header name */
+      if(filename.ends_with(header_name))
+      {
+        return true;
+      }
+
+      /* Also check the real path for the file */
+      auto const file_id = src_mgr.getFileID(loc);
+      if(auto const file_entry = src_mgr.getFileEntryRefForID(file_id))
+      {
+        auto const real_path = file_entry->getFileEntry().tryGetRealPathName();
+        if(!real_path.empty())
+        {
+          std::string_view const real_path_sv(real_path);
+          if(real_path_sv.ends_with(header_name))
+          {
+            return true;
+          }
+        }
+
+        /* Check the file entry name as well */
+        std::string_view const entry_name(file_entry->getName());
+        if(entry_name.ends_with(header_name))
+        {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    /* Get the string expansion of a macro's tokens.
+     * Returns the tokens concatenated with spaces. */
+    std::string get_macro_tokens_string(clang::MacroInfo const *mi, clang::Preprocessor &pp)
+    {
+      std::string result;
+
+      for(auto const &tok : mi->tokens())
+      {
+        if(!result.empty())
+        {
+          result += ' ';
+        }
+        result += pp.getSpelling(tok);
+      }
+
+      return result;
+    }
+  }
+
+  std::vector<std::string>
+  enumerate_native_header_macros(ns::native_alias const &alias, std::string const &prefix)
+  {
+    std::vector<std::string> matches;
+
+    try
+    {
+      auto *pp = get_preprocessor();
+      if(!pp)
+      {
+        return matches;
+      }
+
+      /* Get header name for filtering */
+      std::string const header_name(alias.header.begin(), alias.header.end());
+
+      /* Iterate all macros in the preprocessor */
+      for(auto const &macro_pair : pp->macros())
+      {
+        auto const *identifier = macro_pair.first;
+        if(!identifier)
+        {
+          continue;
+        }
+
+        auto const name = identifier->getName();
+
+        /* Filter by prefix */
+        if(!prefix.empty() && !name.starts_with(prefix))
+        {
+          continue;
+        }
+
+        /* Skip names starting with underscore (internal/system macros) */
+        if(name.starts_with("_"))
+        {
+          continue;
+        }
+
+        /* Get the macro definition */
+        auto *md = pp->getMacroDefinition(identifier).getMacroInfo();
+        if(!md)
+        {
+          continue;
+        }
+
+        /* Skip function-like macros (only include object-like macros) */
+        if(md->isFunctionLike())
+        {
+          continue;
+        }
+
+        /* Filter by header file */
+        if(!is_macro_from_header(md, header_name))
+        {
+          continue;
+        }
+
+        matches.emplace_back(name.str());
+      }
+    }
+    catch(...)
+    {
+      /* Silently ignore errors */
+    }
+
+    return matches;
+  }
+
+  bool is_native_header_macro(ns::native_alias const &alias, std::string const &name)
+  {
+    try
+    {
+      auto *pp = get_preprocessor();
+      if(!pp)
+      {
+        return false;
+      }
+
+      /* Check if macro is defined */
+      auto *identifier = pp->getIdentifierInfo(name);
+      if(!identifier)
+      {
+        return false;
+      }
+
+      auto *md = pp->getMacroDefinition(identifier).getMacroInfo();
+      if(!md)
+      {
+        return false;
+      }
+
+      /* Only object-like macros are supported */
+      if(md->isFunctionLike())
+      {
+        return false;
+      }
+
+      /* Check if the macro is from the specified header */
+      std::string const header_name(alias.header.begin(), alias.header.end());
+      return is_macro_from_header(md, header_name);
+    }
+    catch(...)
+    {
+      return false;
+    }
+  }
+
+  std::optional<std::string>
+  get_native_header_macro_expansion(ns::native_alias const &alias, std::string const &name)
+  {
+    try
+    {
+      auto *pp = get_preprocessor();
+      if(!pp)
+      {
+        return std::nullopt;
+      }
+
+      /* Check if macro is defined */
+      auto *identifier = pp->getIdentifierInfo(name);
+      if(!identifier)
+      {
+        return std::nullopt;
+      }
+
+      auto *md = pp->getMacroDefinition(identifier).getMacroInfo();
+      if(!md)
+      {
+        return std::nullopt;
+      }
+
+      /* Only object-like macros are supported */
+      if(md->isFunctionLike())
+      {
+        return std::nullopt;
+      }
+
+      /* Check if the macro is from the specified header */
+      std::string const header_name(alias.header.begin(), alias.header.end());
+      if(!is_macro_from_header(md, header_name))
+      {
+        return std::nullopt;
+      }
+
+      /* Get the token expansion string */
+      return get_macro_tokens_string(md, *pp);
+    }
+    catch(...)
+    {
+      return std::nullopt;
+    }
   }
 }

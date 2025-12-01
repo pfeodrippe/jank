@@ -99,6 +99,10 @@ namespace jank::nrepl_server::asio
       {
         return std::string{ "native-function" };
       }
+      if(info->is_cpp_macro)
+      {
+        return std::string{ "native-macro" };
+      }
       if(info->is_macro)
       {
         return std::string{ "macro" };

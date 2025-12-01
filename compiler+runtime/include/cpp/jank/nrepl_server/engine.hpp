@@ -47,6 +47,7 @@
 #include <jank/util/string.hpp>
 #include <jank/analyze/cpp_util.hpp>
 #include <jank/nrepl_server/native_header_index.hpp>
+#include <jank/nrepl_server/native_header_completion.hpp>
 
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/Decl.h>
@@ -1365,6 +1366,7 @@ namespace jank::nrepl_server::asio
       bool is_cpp_function{ false };
       bool is_cpp_type{ false };
       bool is_cpp_constructor{ false };
+      bool is_cpp_macro{ false };
     };
 
     std::string completion_type_for(var_documentation const &info) const
@@ -1380,6 +1382,10 @@ namespace jank::nrepl_server::asio
       if(info.is_cpp_function)
       {
         return std::string{ "function" };
+      }
+      if(info.is_cpp_macro)
+      {
+        return std::string{ "macro" };
       }
       if(info.is_macro)
       {
@@ -2810,16 +2816,54 @@ namespace jank::nrepl_server::asio
       return info;
     }
 
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+    std::optional<var_documentation>
+    describe_native_header_macro(ns::native_alias const &alias,
+                                 std::string const &symbol_name) const
+    {
+      if(!asio::is_native_header_macro(alias, symbol_name))
+      {
+        return std::nullopt;
+      }
+
+      var_documentation info;
+      info.ns_name = alias.header;
+      info.name = symbol_name;
+      info.is_cpp_macro = true;
+
+      /* Get the macro expansion as the docstring */
+      auto expansion = get_native_header_macro_expansion(alias, symbol_name);
+      if(expansion.has_value())
+      {
+        info.doc = "#define " + symbol_name + " " + expansion.value();
+      }
+      else
+      {
+        info.doc = "#define " + symbol_name;
+      }
+
+      return info;
+    }
+#endif
+
     std::optional<var_documentation>
     describe_native_header_entity(ns::native_alias const &alias,
                                   std::string const &symbol_name) const
     {
-      /* Try function first, then fall back to type */
+      /* Try function first, then fall back to type, then to macro */
       if(auto fn_info = describe_native_header_function(alias, symbol_name))
       {
         return fn_info;
       }
-      return describe_native_header_type(alias, symbol_name);
+      if(auto type_info = describe_native_header_type(alias, symbol_name))
+      {
+        return type_info;
+      }
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+      return describe_native_header_macro(alias, symbol_name);
+#else
+      return std::nullopt;
+#endif
     }
 
     bencode::value::list serialize_cpp_signatures(var_documentation const &info) const

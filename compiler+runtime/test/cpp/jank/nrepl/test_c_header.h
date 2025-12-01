@@ -3,6 +3,35 @@
  */
 #pragma once
 
+/* Macro for compound literals (like raylib's CLITERAL) */
+#ifndef CLITERAL
+  #ifdef __cplusplus
+    #define CLITERAL(type) type
+  #else
+    #define CLITERAL(type) (type)
+  #endif
+#endif
+
+/* Color type for testing compound literal macros */
+typedef struct Color {
+    unsigned char r;
+    unsigned char g;
+    unsigned char b;
+    unsigned char a;
+} Color;
+
+/* Test macros - mimicking raylib color constants */
+#define TEST_WHITE      CLITERAL(Color){ 255, 255, 255, 255 }   // White color
+#define TEST_BLACK      CLITERAL(Color){ 0, 0, 0, 255 }         // Black color
+#define TEST_RED        CLITERAL(Color){ 255, 0, 0, 255 }       // Red color
+#define TEST_GREEN      CLITERAL(Color){ 0, 255, 0, 255 }       // Green color
+#define TEST_BLUE       CLITERAL(Color){ 0, 0, 255, 255 }       // Blue color
+
+/* Simple constant macros */
+#define TEST_PI         3.14159f                                 // Pi constant
+#define TEST_MAX_VALUE  1000                                     // Maximum value
+#define KEY_ESCAPE      256                                      // Escape key code
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -10,6 +10,10 @@
 
 #include <jank/util/cpptrace.hpp>
 
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <jank/nrepl_server/native_header_completion.hpp>
+#endif
+
 #include <jank/read/reparse.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/context.hpp>
@@ -1545,6 +1549,27 @@ namespace jank::analyze
                        runtime::__rt_ctx->current_ns()->to_string()));
       }
       auto const &alias_info(native_alias.unwrap());
+
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+      /* Check if this is a C preprocessor macro from the header.
+       * Macros are not C++ symbols, so we handle them by evaluating
+       * them as cpp/value expressions. */
+      if(!member_name.empty()
+         && nrepl_server::asio::is_native_header_macro(alias_info, std::string(member_name)))
+      {
+        /* Create (cpp/value "MACRO_NAME") form and analyze it */
+        runtime::detail::native_persistent_list const cpp_value_form{
+          make_box<runtime::obj::symbol>("cpp", "value"),
+          make_box<runtime::obj::persistent_string>(member_name)
+        };
+        return analyze_cpp_value(make_box<runtime::obj::persistent_list>(cpp_value_form),
+                                 current_frame,
+                                 position,
+                                 fc,
+                                 needs_box);
+      }
+#endif
+
       native_transient_string scoped(alias_info.scope.data(), alias_info.scope.size());
       if(!member_name.empty())
       {
@@ -3148,6 +3173,13 @@ namespace jank::analyze
                && source->kind <= expression_kind::cpp_value_max)
               || !cpp_util::is_any_object(cpp_util::expression_type(source.data)))
       {
+        /* If we have a cpp_call with no additional arguments, just return it.
+         * This handles the case where a C macro symbol is used in call position,
+         * like (rl/KEY_ESCAPE) - we just want the evaluated macro value. */
+        if(source->kind == expression_kind::cpp_call && arg_count == 0)
+        {
+          return source.as_ref();
+        }
         return analyze_cpp_call(o, source.data, current_frame, position, fn_ctx, needs_box);
       }
 
@@ -3246,6 +3278,12 @@ namespace jank::analyze
                && source->kind <= expression_kind::cpp_value_max)
               || !cpp_util::is_any_object(cpp_util::expression_type(source.data)))
       {
+        /* If we have a cpp_call with no additional arguments, just return it.
+         * This handles the case where a C macro is used in call position. */
+        if(source->kind == expression_kind::cpp_call && arg_count == 0)
+        {
+          return source.as_ref();
+        }
         return analyze_cpp_call(o, source.data, current_frame, position, fn_ctx, needs_box);
       }
     }

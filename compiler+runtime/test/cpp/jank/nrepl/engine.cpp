@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <jank/nrepl_server/engine.hpp>
+#include <jank/nrepl_server/native_header_completion.hpp>
 
 /* This must go last; doctest and glog both define CHECK and family. */
 #include <doctest/doctest.h>
@@ -3219,6 +3220,219 @@ TEST_CASE("info returns raylib-style inline comments as doc")
   bool const has_expected_content = has_draw || has_rectangle;
   CHECK_MESSAGE(has_expected_content,
                 "doc should contain 'Draw' or 'rectangle', got: " << doc_str);
+}
+
+TEST_CASE("enumerate_native_header_macros returns macros from C header")
+{
+  /* This test verifies that we can enumerate object-like macros from a C header */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias for testing */
+  runtime::ns::native_alias alias;
+  alias.header = "../test/cpp/jank/nrepl/test_c_header.h";
+  alias.scope = "";
+
+  /* Enumerate all macros */
+  auto all_macros = enumerate_native_header_macros(alias, "");
+
+  std::cerr << "Found " << all_macros.size() << " macros:\n";
+  for(auto const &name : all_macros)
+  {
+    std::cerr << "  - " << name << "\n";
+  }
+
+  /* Should find the TEST_* macros from the header */
+  bool found_test_white = std::find(all_macros.begin(), all_macros.end(), "TEST_WHITE") != all_macros.end();
+  bool found_test_pi = std::find(all_macros.begin(), all_macros.end(), "TEST_PI") != all_macros.end();
+  bool found_key_escape = std::find(all_macros.begin(), all_macros.end(), "KEY_ESCAPE") != all_macros.end();
+
+  CHECK_MESSAGE(found_test_white, "Should find TEST_WHITE macro");
+  CHECK_MESSAGE(found_test_pi, "Should find TEST_PI macro");
+  CHECK_MESSAGE(found_key_escape, "Should find KEY_ESCAPE macro");
+}
+
+TEST_CASE("enumerate_native_header_macros filters by prefix")
+{
+  /* Test that prefix filtering works for macros */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias for testing */
+  runtime::ns::native_alias alias;
+  alias.header = "../test/cpp/jank/nrepl/test_c_header.h";
+  alias.scope = "";
+
+  /* Enumerate macros with TEST_ prefix */
+  auto test_macros = enumerate_native_header_macros(alias, "TEST_");
+
+  std::cerr << "Found " << test_macros.size() << " TEST_* macros:\n";
+  for(auto const &name : test_macros)
+  {
+    std::cerr << "  - " << name << "\n";
+  }
+
+  /* Should find TEST_WHITE, TEST_BLACK, TEST_RED, TEST_GREEN, TEST_BLUE, TEST_PI, TEST_MAX_VALUE */
+  CHECK(test_macros.size() >= 7);
+
+  /* All should start with TEST_ */
+  for(auto const &name : test_macros)
+  {
+    CHECK_MESSAGE(name.starts_with("TEST_"), "Macro " << name << " should start with TEST_");
+  }
+
+  /* KEY_ESCAPE should NOT be in this list */
+  bool found_key_escape = std::find(test_macros.begin(), test_macros.end(), "KEY_ESCAPE") != test_macros.end();
+  CHECK_MESSAGE(!found_key_escape, "KEY_ESCAPE should not be in TEST_* filtered results");
+}
+
+TEST_CASE("is_native_header_macro detects macros from header")
+{
+  /* Test that we can check if a name is a macro */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias for testing */
+  runtime::ns::native_alias alias;
+  alias.header = "../test/cpp/jank/nrepl/test_c_header.h";
+  alias.scope = "";
+
+  /* TEST_WHITE should be a macro */
+  CHECK(is_native_header_macro(alias, "TEST_WHITE"));
+  CHECK(is_native_header_macro(alias, "TEST_PI"));
+  CHECK(is_native_header_macro(alias, "KEY_ESCAPE"));
+
+  /* InitWindow is a function, not a macro */
+  CHECK(!is_native_header_macro(alias, "InitWindow"));
+
+  /* Random non-existent name should not be a macro */
+  CHECK(!is_native_header_macro(alias, "NONEXISTENT_MACRO_12345"));
+}
+
+TEST_CASE("get_native_header_macro_expansion returns macro tokens")
+{
+  /* Test that we can get the token expansion of macros */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias for testing */
+  runtime::ns::native_alias alias;
+  alias.header = "../test/cpp/jank/nrepl/test_c_header.h";
+  alias.scope = "";
+
+  /* TEST_PI should expand to 3.14159f */
+  auto pi_expansion = get_native_header_macro_expansion(alias, "TEST_PI");
+  REQUIRE(pi_expansion.has_value());
+  std::cerr << "TEST_PI expansion: '" << pi_expansion.value() << "'\n";
+  CHECK(pi_expansion.value().find("3.14159") != std::string::npos);
+
+  /* KEY_ESCAPE should expand to 256 */
+  auto escape_expansion = get_native_header_macro_expansion(alias, "KEY_ESCAPE");
+  REQUIRE(escape_expansion.has_value());
+  std::cerr << "KEY_ESCAPE expansion: '" << escape_expansion.value() << "'\n";
+  CHECK(escape_expansion.value().find("256") != std::string::npos);
+
+  /* TEST_MAX_VALUE should expand to 1000 */
+  auto max_expansion = get_native_header_macro_expansion(alias, "TEST_MAX_VALUE");
+  REQUIRE(max_expansion.has_value());
+  std::cerr << "TEST_MAX_VALUE expansion: '" << max_expansion.value() << "'\n";
+  CHECK(max_expansion.value().find("1000") != std::string::npos);
+
+  /* TEST_WHITE is a compound literal macro - should have some expansion */
+  auto white_expansion = get_native_header_macro_expansion(alias, "TEST_WHITE");
+  REQUIRE(white_expansion.has_value());
+  std::cerr << "TEST_WHITE expansion: '" << white_expansion.value() << "'\n";
+  /* Should contain CLITERAL or Color or 255 */
+  bool has_expected = white_expansion.value().find("CLITERAL") != std::string::npos
+                        || white_expansion.value().find("Color") != std::string::npos
+                        || white_expansion.value().find("255") != std::string::npos;
+  CHECK_MESSAGE(has_expected, "TEST_WHITE expansion should contain CLITERAL/Color/255");
+
+  /* Non-existent macro should return nullopt */
+  auto nonexistent = get_native_header_macro_expansion(alias, "NONEXISTENT_MACRO_12345");
+  CHECK(!nonexistent.has_value());
+}
+
+TEST_CASE("macro access via native alias syntax")
+{
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Register a native alias for the test header in the current namespace.
+   * This simulates what (:require ["header.h" :as th :scope ""]) does. */
+  auto th_sym = runtime::make_box<runtime::obj::symbol>("th");
+  runtime::ns::native_alias alias;
+  alias.header = "../test/cpp/jank/nrepl/test_c_header.h";
+  alias.scope = "";
+  (void)runtime::__rt_ctx->current_ns()->add_native_alias(th_sym, alias);
+
+  /* Now test that th/KEY_ESCAPE evaluates to the macro value */
+  auto responses = eng.handle(make_message({
+    {   "op", "eval" },
+    { "code",  "th/KEY_ESCAPE" }
+  }));
+  REQUIRE(!responses.empty());
+  auto const value_it(responses.front().find("value"));
+  if(auto const err_it = responses.front().find("err"); err_it != responses.front().end())
+  {
+    INFO("eval error: " << err_it->second.as_string());
+  }
+  REQUIRE(value_it != responses.front().end());
+  CHECK(value_it->second.as_string().find("256") != std::string::npos);
+
+  /* Test th/TEST_MAX_VALUE */
+  responses = eng.handle(make_message({
+    {   "op", "eval" },
+    { "code",  "th/TEST_MAX_VALUE" }
+  }));
+  REQUIRE(!responses.empty());
+  auto const value_it2(responses.front().find("value"));
+  if(auto const err_it = responses.front().find("err"); err_it != responses.front().end())
+  {
+    INFO("eval error: " << err_it->second.as_string());
+  }
+  REQUIRE(value_it2 != responses.front().end());
+  CHECK(value_it2->second.as_string().find("1000") != std::string::npos);
+
+  /* Test parenthesized macro access (th/KEY_ESCAPE) - should return the value.
+   * This tests that macros can be used in call position without arguments,
+   * e.g., (rl/KEY_ESCAPE) just returns the macro value. */
+  responses = eng.handle(make_message({
+    {   "op", "eval" },
+    { "code",  "(th/KEY_ESCAPE)" }
+  }));
+  REQUIRE(!responses.empty());
+  auto const value_it3(responses.front().find("value"));
+  REQUIRE(value_it3 != responses.front().end());
+  CHECK(value_it3->second.as_string().find("256") != std::string::npos);
+
+  /* Clean up the native alias */
+  runtime::__rt_ctx->current_ns()->remove_native_alias(th_sym);
 }
 
 }
