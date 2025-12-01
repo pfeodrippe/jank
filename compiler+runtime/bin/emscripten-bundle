@@ -31,6 +31,9 @@ verbose=false
 extra_include_paths=()
 extra_libs=()
 native_obj_files=()
+native_lib_dirs=()
+native_libs=()
+em_flags=()
 
 usage() {
   cat <<'USAGE'
@@ -57,6 +60,11 @@ Options:
                           Supports .bc (bitcode), .a (static lib), .c/.cpp (sources)
   --native-obj FILE       Add native object file (.o) to load in JIT during AOT compilation
                           (use when native code needs symbols during codegen)
+  --native-lib LIB        Add native dynamic library to load in JIT during AOT compilation
+                          (use for libraries with framework dependencies, e.g., raylib)
+  -L DIR                  Add native library search directory for JIT (can be used multiple times)
+  --em-flag FLAG          Add extra flag to em++ linker (can be used multiple times)
+                          Example: --em-flag "-sUSE_GLFW=3" --em-flag "-sASYNCIFY"
   -v, --verbose           Enable verbose output (shows compilation commands)
 
 Any arguments after -- are forwarded directly to the emcmake configure invocation.
@@ -162,6 +170,35 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       native_obj_files+=("$2")
+      shift 2
+      ;;
+    --native-lib)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --native-lib expects a library name" >&2
+        exit 1
+      fi
+      native_libs+=("$2")
+      shift 2
+      ;;
+    -L)
+      if [[ $# -lt 2 ]]; then
+        echo "error: -L expects a directory path" >&2
+        exit 1
+      fi
+      native_lib_dirs+=("$2")
+      shift 2
+      ;;
+    -L*)
+      # Handle -L/path/to/dir (without space)
+      native_lib_dirs+=("${1:2}")
+      shift
+      ;;
+    --em-flag)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --em-flag expects an argument" >&2
+        exit 1
+      fi
+      em_flags+=("$2")
       shift 2
       ;;
     --)
@@ -359,6 +396,8 @@ if [[ -n "${jank_source}" ]]; then
   jank_source_abs="$(cd "$(dirname "${jank_source}")" && pwd)/$(basename "${jank_source}")"
   jank_source_dir="$(dirname "${jank_source_abs}")"
   module_name="$(basename "${jank_source}" .jank)"
+  # Convert file name to jank module name (underscores -> hyphens)
+  jank_module_name="${module_name//_/-}"
 
   # Read the jank source file for embedding (fallback mode)
   jank_source_content=$(cat "${jank_source}")
@@ -419,21 +458,47 @@ if [[ -n "${jank_source}" ]]; then
       done
     fi
 
-    # Add the subcommand and its options
-    jank_cmd+=(run \
-      --codegen wasm-aot \
-      --module-path src/jank \
-      --save-cpp \
-      --save-cpp-path "${cpp_output}" \
-      "${jank_source}")
+    # Add native library directories (for JIT during AOT compilation)
+    if [[ ${#native_lib_dirs[@]} -gt 0 ]]; then
+      for lib_dir in "${native_lib_dirs[@]}"; do
+        # Resolve to absolute path if relative
+        if [[ "${lib_dir:0:1}" != "/" ]]; then
+          lib_dir="$(cd "${lib_dir}" 2>/dev/null && pwd || echo "${lib_dir}")"
+        fi
+        jank_cmd+=(-L "${lib_dir}")
+      done
+    fi
+
+    # Add native libraries (for JIT during AOT compilation)
+    # Uses --jit-lib to load dylibs for symbol resolution without creating link dependency
+    if [[ ${#native_libs[@]} -gt 0 ]]; then
+      for lib in "${native_libs[@]}"; do
+        jank_cmd+=(--jit-lib "${lib}")
+      done
+    fi
+
+    # Add global options first (before subcommand)
+    jank_cmd+=(
+      --module-path "${jank_source_dir}"
+      --codegen wasm-aot
+      --save-cpp
+      --save-cpp-path "${cpp_output}"
+    )
+
+    # Add the subcommand and its arguments
+    # Use compile-module instead of run to avoid evaluating top-level side effects
+    jank_cmd+=(
+      compile-module
+      "${jank_module_name}"
+    )
 
     if [[ "${verbose}" == "true" ]]; then
       echo "[emscripten-bundle] Running AOT compile command:"
       echo "[emscripten-bundle]   ${jank_cmd[@]}"
     fi
 
-    # Try to compile module with wasm-aot codegen using 'run' command
-    # The 'run' command evaluates the file and generates AOT code
+    # Try to compile module with wasm-aot codegen using 'compile-module' command
+    # This avoids evaluating top-level side effects (like (-main) calls)
     if "${jank_cmd[@]}" 2>&1; then
       echo "[emscripten-bundle] AOT compilation successful!"
       aot_mode=true
@@ -496,6 +561,7 @@ if [[ -n "${jank_source}" ]]; then
 #include <exception>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core/to_string.hpp>
+#include <jank/runtime/behavior/callable.hpp>
 #include <jank/error.hpp>
 
 // jank C API
@@ -600,6 +666,17 @@ $(echo -e "${deps_load}")
       return 1;
     }
     printf("[jank-wasm] Result: %p\\n", result);
+
+    // Call -main if it exists
+    printf("[jank-wasm] Looking for -main function...\\n");
+    auto const main_var = __rt_ctx->find_var("${jank_module_name}", "-main");
+    if(main_var.is_some()) {
+      printf("[jank-wasm] Found -main, calling it...\\n");
+      jank::runtime::dynamic_call(main_var->deref());
+      printf("[jank-wasm] -main completed!\\n");
+    } else {
+      printf("[jank-wasm] No -main function found (this is OK for library modules)\\n");
+    }
 
     printf("\\n[jank-wasm] Done (AOT mode)!\\n");
     return 0;
@@ -1080,6 +1157,14 @@ fi
 em_link_cmd+=(
   -sEXPORT_ES6=1
 )
+
+# Add extra em++ flags from --em-flag arguments
+if [[ ${#em_flags[@]} -gt 0 ]]; then
+  for em_flag in "${em_flags[@]}"; do
+    em_link_cmd+=("${em_flag}")
+    echo "[emscripten-bundle] Added em++ flag: ${em_flag}"
+  done
+fi
 
 # Experimental: Incremental linking support (not compatible with libgc)
 # Set INCREMENTAL_LINK=1 to try Emscripten's experimental incremental linker

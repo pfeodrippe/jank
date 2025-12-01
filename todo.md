@@ -22,7 +22,8 @@
 - [x] when native and external header, get info about the location
 - [ ] raylib
   - [x] static
-  - [ ] start on the first thread
+  - [ ] wasm
+  - [ ] start on the first thread for the nREPL
 - [ ] vybe
 - [ ] wasm
   - [x] no require
