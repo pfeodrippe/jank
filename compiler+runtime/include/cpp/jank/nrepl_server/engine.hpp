@@ -2821,7 +2821,10 @@ namespace jank::nrepl_server::asio
     describe_native_header_macro(ns::native_alias const &alias,
                                  std::string const &symbol_name) const
     {
-      if(!asio::is_native_header_macro(alias, symbol_name))
+      bool const is_object_like = asio::is_native_header_macro(alias, symbol_name);
+      bool const is_function_like = asio::is_native_header_function_like_macro(alias, symbol_name);
+
+      if(!is_object_like && !is_function_like)
       {
         return std::nullopt;
       }
@@ -2835,7 +2838,7 @@ namespace jank::nrepl_server::asio
       auto expansion = get_native_header_macro_expansion(alias, symbol_name);
       if(expansion.has_value())
       {
-        info.doc = "#define " + symbol_name + " " + expansion.value();
+        info.doc = "#define " + expansion.value();
       }
       else
       {

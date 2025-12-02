@@ -30,6 +30,25 @@ namespace jank::nrepl_server::asio
 
   namespace
   {
+    /* Extract a clean suffix from header_name for comparison.
+     * Strips leading ".." and "." path components.
+     * e.g., "../test/foo/bar.h" -> "test/foo/bar.h" */
+    std::string_view get_clean_header_suffix(std::string_view header_name)
+    {
+      while(header_name.starts_with("../") || header_name.starts_with("./"))
+      {
+        if(header_name.starts_with("../"))
+        {
+          header_name.remove_prefix(3);
+        }
+        else if(header_name.starts_with("./"))
+        {
+          header_name.remove_prefix(2);
+        }
+      }
+      return header_name;
+    }
+
     std::string to_cpp_scope(jtl::immutable_string const &value)
     {
       std::string scope;
@@ -107,8 +126,11 @@ namespace jank::nrepl_server::asio
         return false;
       }
 
+      /* Get clean suffix without relative path components like "../" */
+      auto const clean_suffix = get_clean_header_suffix(header_name);
+
       /* Check if the filename ends with the header name */
-      if(filename.ends_with(header_name))
+      if(filename.ends_with(header_name) || filename.ends_with(clean_suffix))
       {
         return true;
       }
@@ -121,7 +143,7 @@ namespace jank::nrepl_server::asio
         if(!real_path.empty())
         {
           std::string_view const real_path_sv(real_path);
-          if(real_path_sv.ends_with(header_name))
+          if(real_path_sv.ends_with(header_name) || real_path_sv.ends_with(clean_suffix))
           {
             return true;
           }
@@ -129,7 +151,7 @@ namespace jank::nrepl_server::asio
 
         /* Check the file entry name as well */
         std::string_view const entry_name(file_entry->getName());
-        if(entry_name.ends_with(header_name))
+        if(entry_name.ends_with(header_name) || entry_name.ends_with(clean_suffix))
         {
           return true;
         }
@@ -676,8 +698,11 @@ namespace jank::nrepl_server::asio
         return false;
       }
 
+      /* Get clean suffix without relative path components like "../" */
+      auto const clean_suffix = get_clean_header_suffix(header_name);
+
       /* Check if the filename ends with the header name */
-      if(filename.ends_with(header_name))
+      if(filename.ends_with(header_name) || filename.ends_with(clean_suffix))
       {
         return true;
       }
@@ -690,7 +715,7 @@ namespace jank::nrepl_server::asio
         if(!real_path.empty())
         {
           std::string_view const real_path_sv(real_path);
-          if(real_path_sv.ends_with(header_name))
+          if(real_path_sv.ends_with(header_name) || real_path_sv.ends_with(clean_suffix))
           {
             return true;
           }
@@ -698,7 +723,7 @@ namespace jank::nrepl_server::asio
 
         /* Check the file entry name as well */
         std::string_view const entry_name(file_entry->getName());
-        if(entry_name.ends_with(header_name))
+        if(entry_name.ends_with(header_name) || entry_name.ends_with(clean_suffix))
         {
           return true;
         }
@@ -772,12 +797,6 @@ namespace jank::nrepl_server::asio
           continue;
         }
 
-        /* Skip function-like macros (only include object-like macros) */
-        if(md->isFunctionLike())
-        {
-          continue;
-        }
-
         /* Filter by header file */
         if(!is_macro_from_header(md, header_name))
         {
@@ -834,6 +853,90 @@ namespace jank::nrepl_server::asio
     }
   }
 
+  bool is_native_header_function_like_macro(ns::native_alias const &alias, std::string const &name)
+  {
+    try
+    {
+      auto *pp = get_preprocessor();
+      if(!pp)
+      {
+        return false;
+      }
+
+      /* Check if macro is defined */
+      auto *identifier = pp->getIdentifierInfo(name);
+      if(!identifier)
+      {
+        return false;
+      }
+
+      auto *md = pp->getMacroDefinition(identifier).getMacroInfo();
+      if(!md)
+      {
+        return false;
+      }
+
+      /* Only function-like macros */
+      if(!md->isFunctionLike())
+      {
+        return false;
+      }
+
+      /* Check if the macro is from the specified header */
+      std::string const header_name(alias.header.begin(), alias.header.end());
+      return is_macro_from_header(md, header_name);
+    }
+    catch(...)
+    {
+      return false;
+    }
+  }
+
+  std::optional<size_t>
+  get_native_header_macro_param_count(ns::native_alias const &alias, std::string const &name)
+  {
+    try
+    {
+      auto *pp = get_preprocessor();
+      if(!pp)
+      {
+        return std::nullopt;
+      }
+
+      /* Check if macro is defined */
+      auto *identifier = pp->getIdentifierInfo(name);
+      if(!identifier)
+      {
+        return std::nullopt;
+      }
+
+      auto *md = pp->getMacroDefinition(identifier).getMacroInfo();
+      if(!md)
+      {
+        return std::nullopt;
+      }
+
+      /* Only function-like macros */
+      if(!md->isFunctionLike())
+      {
+        return std::nullopt;
+      }
+
+      /* Check if the macro is from the specified header */
+      std::string const header_name(alias.header.begin(), alias.header.end());
+      if(!is_macro_from_header(md, header_name))
+      {
+        return std::nullopt;
+      }
+
+      return md->getNumParams();
+    }
+    catch(...)
+    {
+      return std::nullopt;
+    }
+  }
+
   std::optional<std::string>
   get_native_header_macro_expansion(ns::native_alias const &alias, std::string const &name)
   {
@@ -858,12 +961,6 @@ namespace jank::nrepl_server::asio
         return std::nullopt;
       }
 
-      /* Only object-like macros are supported */
-      if(md->isFunctionLike())
-      {
-        return std::nullopt;
-      }
-
       /* Check if the macro is from the specified header */
       std::string const header_name(alias.header.begin(), alias.header.end());
       if(!is_macro_from_header(md, header_name))
@@ -871,8 +968,31 @@ namespace jank::nrepl_server::asio
         return std::nullopt;
       }
 
+      /* Build the expansion string */
+      std::string result;
+
+      /* For function-like macros, include the parameter signature */
+      if(md->isFunctionLike())
+      {
+        result += name;
+        result += "(";
+        bool first = true;
+        for(auto const *param : md->params())
+        {
+          if(!first)
+          {
+            result += ", ";
+          }
+          first = false;
+          result += param->getName().str();
+        }
+        result += ") ";
+      }
+
       /* Get the token expansion string */
-      return get_macro_tokens_string(md, *pp);
+      result += get_macro_tokens_string(md, *pp);
+
+      return result;
     }
     catch(...)
     {

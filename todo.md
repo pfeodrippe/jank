@@ -20,12 +20,18 @@
     - [x] nested
     - [x] (require '["flecs.h" :as fw :scope "flecs.world"])
 - [x] when native and external header, get info about the location
-- [ ] raylib
+- [x] raylib
   - [x] static
   - [x] autocompletion
-  - [ ] would we be able to get macros?? (e.g. RAYWHITE)
-  - [ ] wasm fix
-  - [ ] start on the first thread for the nREPL ?
+  - [x] would we be able to get macros?? (e.g. RAYWHITE)
+  - [x] wasm fix
+  - [x] start on the first thread for the nREPL ?
+- [x] jolt
+  - [x] native
+  - [x] wasm
+- [ ] imgui
+  - [ ] native
+  - [ ] wasm
 - [ ] vybe
 - [ ] wasm
   - [x] no require

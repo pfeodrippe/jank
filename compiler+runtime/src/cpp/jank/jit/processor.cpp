@@ -287,7 +287,16 @@ namespace jank::jit
     if(err)
     {
       llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");
-      throw std::runtime_error{ "Failed to evaluate C++ code." };
+      /* Include the code in the error message for better debugging */
+      auto const preview_len{ std::min<size_t>(formatted.size(), 500) };
+      native_transient_string code_preview{ formatted.data(), preview_len };
+      if(formatted.size() > 500)
+      {
+        code_preview.append("...(truncated)");
+      }
+      throw std::runtime_error{
+        util::format("Failed to evaluate C++ code:\n{}", code_preview)
+      };
     }
     register_jit_stack_frames();
   }

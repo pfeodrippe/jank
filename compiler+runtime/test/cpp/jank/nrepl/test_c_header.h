@@ -32,6 +32,25 @@ typedef struct Color {
 #define TEST_MAX_VALUE  1000                                     // Maximum value
 #define KEY_ESCAPE      256                                      // Escape key code
 
+/* Function-like macros (like ecs_new_w_pair in flecs) */
+#define TEST_ADD(a, b)        ((a) + (b))                        // Add two values
+#define TEST_MUL(a, b)        ((a) * (b))                        // Multiply two values
+#define TEST_CLAMP(x, lo, hi) ((x) < (lo) ? (lo) : ((x) > (hi) ? (hi) : (x)))  // Clamp value
+
+/* Simple inline functions for testing nested calls in macros */
+static inline int test_get_five(void) { return 5; }
+static inline int test_get_ten(void) { return 10; }
+static inline int test_double(int x) { return x * 2; }
+
+/* Functions that return pointers for testing cpp/box scenarios */
+static inline int* test_get_int_ptr(void) {
+    static int value = 42;
+    return &value;
+}
+
+/* Macro that takes a pointer argument (like ecs_new_w_pair) */
+#define TEST_PTR_ADD(ptr, val) (*(ptr) + (val))
+
 #ifdef __cplusplus
 extern "C" {
 #endif

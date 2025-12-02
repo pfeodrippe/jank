@@ -65,6 +65,7 @@ Options:
   -L DIR                  Add native library search directory for JIT (can be used multiple times)
   --em-flag FLAG          Add extra flag to em++ linker (can be used multiple times)
                           Example: --em-flag "-sUSE_GLFW=3" --em-flag "-sASYNCIFY"
+  --prelink-lib FILE      Alias for --lib (for libraries to link into final WASM)
   -v, --verbose           Enable verbose output (shows compilation commands)
 
 Any arguments after -- are forwarded directly to the emcmake configure invocation.
@@ -199,6 +200,15 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       em_flags+=("$2")
+      shift 2
+      ;;
+    --prelink-lib)
+      # Alias for --lib (for libraries that should be linked into the final WASM)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --prelink-lib expects a file path" >&2
+        exit 1
+      fi
+      extra_libs+=("$2")
       shift 2
       ;;
     --)
