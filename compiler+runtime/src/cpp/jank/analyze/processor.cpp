@@ -3683,12 +3683,6 @@ namespace jank::analyze
                && source->kind <= expression_kind::cpp_value_max)
               || !cpp_util::is_any_object(cpp_util::expression_type(source.data)))
       {
-        /* If we have a cpp_call with no additional arguments, just return it.
-         * This handles the case where a C macro is used in call position. */
-        if(source->kind == expression_kind::cpp_call && arg_count == 0)
-        {
-          return source.as_ref();
-        }
         return analyze_cpp_call(o, source.data, current_frame, position, fn_ctx, needs_box);
       }
     }

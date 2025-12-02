@@ -29,9 +29,17 @@
 - [x] jolt
   - [x] native
   - [x] wasm
-- [ ] imgui
-  - [ ] native
-  - [ ] wasm
+- [x] imgui
+  - [x] native
+  - [x] wasm
+- [ ] integrate raylib + flecs + imgui + jolt
+  - [x] raylib + imgui + jolt
+  - [x] + flecs
+  - [x] wasm
+  - [ ] convert more things to jank instead of using cpp/raw
+    - [ ] nREPL
+    - [ ] refactor
+  - [ ] fix nREPL goto info
 - [ ] vybe
 - [ ] wasm
   - [x] no require
@@ -58,3 +66,4 @@
 - [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`
 - [ ] Fix implicit conversion
   - Unknown implicit conversion from ecs_world_t * to jank::runtime::object *. {:jank/error-kind "internal/analysis-failure" :jank/error-message "Unknown implicit conversion from ecs_world_t * to jank::runtime::object *."}
+- [ ] overtone-like

@@ -319,6 +319,8 @@ namespace jank::runtime
               cpp_out << "#include <boost/multiprecision/cpp_int.hpp>\n";
               /* Include scope_exit for finally blocks */
               cpp_out << "#include <jank/util/scope_exit.hpp>\n";
+              /* Include meta for reset_meta used by cpp/box */
+              cpp_out << "#include <jank/runtime/core/meta.hpp>\n";
 
               /* Include native headers from (:require ["header.h" :as alias]) */
               auto const curr_ns{ current_ns() };
