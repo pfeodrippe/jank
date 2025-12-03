@@ -2178,7 +2178,7 @@ namespace jank::nrepl_server::asio
        * Path is relative from build directory to test directory. */
       eng.handle(make_message({
         {   "op",                                                           "eval" },
-        { "code", R"((cpp/raw "#include \"test/cpp/jank/nrepl/test_flecs.hpp\""))" }
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_flecs.hpp\""))" }
       }));
 
       /* Create the alias using require with :scope.
@@ -2310,7 +2310,7 @@ namespace jank::nrepl_server::asio
       /* Include the test header with #include inside class body */
       eng.handle(make_message({
         {   "op",                                                                 "eval" },
-        { "code", R"((cpp/raw "#include \"test/cpp/jank/nrepl/test_mixin_class.hpp\""))" }
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_mixin_class.hpp\""))" }
       }));
 
       /* Create the alias using require with :scope */
@@ -2558,14 +2558,14 @@ namespace jank::nrepl_server::asio
       /* Include the test header */
       eng.handle(make_message({
         {   "op",                                                           "eval" },
-        { "code", R"((cpp/raw "#include \"test/cpp/jank/nrepl/test_flecs.hpp\""))" }
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_flecs.hpp\""))" }
       }));
 
       /* Require it as a native header alias. */
       eng.handle(make_message({
         {   "op",                                                "eval"                 },
         { "code",
-         R"((require '["test/cpp/jank/nrepl/test_flecs.hpp" :as flecs :scope "flecs"]))" }
+         R"((require '["../test/cpp/jank/nrepl/test_flecs.hpp" :as flecs :scope "flecs"]))" }
       }));
 
       /* Get info for a member method with standard C-style comment */
@@ -2752,14 +2752,14 @@ namespace jank::nrepl_server::asio
       /* First include the header via cpp/raw so the JIT can compile it */
       eng.handle(make_message({
         {   "op",                                                               "eval" },
-        { "code", R"((cpp/raw "#include \"test/cpp/jank/nrepl/template_types.hpp\""))" }
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/template_types.hpp\""))" }
       }));
 
       /* Then require it with :scope to get the namespace alias */
       eng.handle(make_message({
         {   "op",                                                                     "eval"                 },
         { "code",
-         R"((require '["test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
+         R"((require '["../test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
       }));
 
       /* Get info for a non-template method to verify header loading */
@@ -2814,14 +2814,14 @@ namespace jank::nrepl_server::asio
       /* First include the header via cpp/raw so the JIT can compile it */
       eng.handle(make_message({
         {   "op",                                                               "eval" },
-        { "code", R"((cpp/raw "#include \"test/cpp/jank/nrepl/template_types.hpp\""))" }
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/template_types.hpp\""))" }
       }));
 
       /* Then require it with :scope to get the namespace alias */
       eng.handle(make_message({
         {   "op",                                                                     "eval"                 },
         { "code",
-         R"((require '["test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
+         R"((require '["../test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
       }));
 
       /* Get info for the variadic template method - similar to flecs::entity::child */
@@ -2881,14 +2881,14 @@ namespace jank::nrepl_server::asio
       /* First include the header via cpp/raw so the JIT can compile it */
       eng.handle(make_message({
         {   "op",                                                               "eval" },
-        { "code", R"((cpp/raw "#include \"test/cpp/jank/nrepl/template_types.hpp\""))" }
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/template_types.hpp\""))" }
       }));
 
       /* Then require it with :scope to get the namespace alias */
       eng.handle(make_message({
         {   "op",                                                                     "eval"                 },
         { "code",
-         R"((require '["test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
+         R"((require '["../test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
       }));
 
       /* Get info for a simple template function */
@@ -2929,14 +2929,14 @@ namespace jank::nrepl_server::asio
       /* First include the header via cpp/raw so the JIT can compile it */
       eng.handle(make_message({
         {   "op",                                                               "eval" },
-        { "code", R"((cpp/raw "#include \"test/cpp/jank/nrepl/template_types.hpp\""))" }
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/template_types.hpp\""))" }
       }));
 
       /* Then require it with :scope to get the namespace alias */
       eng.handle(make_message({
         {   "op",                                                                     "eval"                 },
         { "code",
-         R"((require '["test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
+         R"((require '["../test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
       }));
 
       /* Get info for template method with const char* and T&& params */
@@ -4126,6 +4126,55 @@ TEST_CASE("eldoc shows variadic indicator for C variadic functions")
   }
 
   CHECK_MESSAGE(found_variadic, "eldoc params should contain '...' for variadic function");
+}
+
+TEST_CASE("info shows default parameter values for C++ functions")
+{
+  /* Test that C++ functions with default parameters show {:default ...} in arglists */
+  engine eng;
+
+  /* Include the C header (which has C++ functions with defaults) */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias with :scope "" for global scope */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Get info for DrawTextEx - a function with multiple default parameters */
+  auto responses(eng.handle(make_message({
+    {  "op",          "info" },
+    { "sym", "rl/DrawTextEx" },
+    {  "ns",          "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+
+  auto const arglists_it(payload.find("arglists-str"));
+  if(arglists_it == payload.end())
+  {
+    WARN("arglists-str not found for DrawTextEx");
+    return;
+  }
+
+  auto const &arglists_str(arglists_it->second.as_string());
+  std::cerr << "DrawTextEx arglists: " << arglists_str << "\n";
+
+  /* Should contain {:default ...} for parameters with defaults */
+  bool const has_default = arglists_str.find("{:default") != std::string::npos;
+  CHECK_MESSAGE(has_default, "arglists should contain '{:default' for function with default params, got: " << arglists_str);
+
+  /* Check for specific default values */
+  bool const has_default_0 = arglists_str.find("{:default 0}") != std::string::npos;
+  CHECK_MESSAGE(has_default_0, "arglists should contain '{:default 0}' for posX/posY/color, got: " << arglists_str);
+
+  bool const has_default_20 = arglists_str.find("{:default 20}") != std::string::npos;
+  CHECK_MESSAGE(has_default_20, "arglists should contain '{:default 20}' for fontSize, got: " << arglists_str);
 }
 
 }

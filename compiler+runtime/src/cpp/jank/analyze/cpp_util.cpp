@@ -563,9 +563,21 @@ namespace jank::analyze::cpp_util
      * The user will need to specify the correct type by using a cast. */
     for(usize arg_idx{}; arg_idx < max_arg_count; ++arg_idx)
     {
+      /* If this argument index is beyond what we were given (i.e., the caller is using
+       * default parameters for this position), skip to the next argument. */
+      if(arg_idx + member_offset >= arg_types.size())
+      {
+        continue;
+      }
       /* If our input argument here isn't an object ptr, there's no implicit conversion
        * we're going to consider. Skip to the next argument. */
-      auto const arg_type{ Cpp::GetNonReferenceType(arg_types[arg_idx + member_offset].m_Type) };
+      auto const raw_arg_type{ arg_types[arg_idx + member_offset].m_Type };
+      /* Skip if the arg type is null - this can happen with certain cpp/& expressions. */
+      if(!raw_arg_type)
+      {
+        continue;
+      }
+      auto const arg_type{ Cpp::GetNonReferenceType(raw_arg_type) };
       auto const is_arg_untyped_obj{ is_untyped_object(arg_type) };
       auto const is_arg_typed_obj{ is_typed_object(arg_type) };
       auto const is_arg_obj{ is_arg_untyped_obj || is_arg_typed_obj };

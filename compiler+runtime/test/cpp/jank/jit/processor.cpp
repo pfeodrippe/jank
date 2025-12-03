@@ -61,7 +61,7 @@ namespace jank::jit
       std::string const test_filter{ env_filter ? env_filter : "" };
       bool const filter_enabled{ !test_filter.empty() };
 
-      for(auto const &dir_entry : std::filesystem::recursive_directory_iterator("test/jank"))
+      for(auto const &dir_entry : std::filesystem::recursive_directory_iterator("../test/jank"))
       {
         if(!std::filesystem::is_regular_file(dir_entry.path()))
         {

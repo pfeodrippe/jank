@@ -1,5 +1,5 @@
 ; Test evaluating simple C macros defined in a header
-(cpp/raw "#include \"test/cpp/jank/nrepl/test_c_header.h\"")
+(cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\"")
 (let* [key-escape (cpp/value "KEY_ESCAPE")
        max-value (cpp/value "TEST_MAX_VALUE")]
   (if (and (= key-escape 256) (= max-value 1000))

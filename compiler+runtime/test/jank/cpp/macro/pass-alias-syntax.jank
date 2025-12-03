@@ -1,7 +1,7 @@
 ; Test accessing C macros via cpp/value (prerequisite for alias syntax)
 ; The alias/MACRO_NAME syntax (e.g., rl/RAYWHITE) is tested in the C++ unit tests.
 ; This test verifies that cpp/value can evaluate macros from an included header.
-(cpp/raw "#include \"test/cpp/jank/nrepl/test_c_header.h\"")
+(cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\"")
 (let* [key-escape (cpp/value "KEY_ESCAPE")
        max-value (cpp/value "TEST_MAX_VALUE")
        pi (cpp/value "TEST_PI")]

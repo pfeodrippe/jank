@@ -77,6 +77,12 @@ int GetMouseY(void);                                                            
 /* Variadic functions (like printf, ImGui::Text) */
 void TraceLog(int logLevel, const char *text, ...);                              // Show trace log messages
 
+#ifdef __cplusplus
+/* Functions with default parameters (C++ only) */
+void SetConfigFlags(unsigned int flags = 0);                                     // Setup init configuration flags
+void DrawTextEx(const char *text, int posX = 0, int posY = 0, int fontSize = 20, int color = 0);  // Draw text with defaults
+#endif
+
 /* A struct type */
 typedef struct {
     float x;

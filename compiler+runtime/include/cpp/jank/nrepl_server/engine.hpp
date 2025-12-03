@@ -2104,6 +2104,14 @@ namespace jank::nrepl_server::asio
               rendered_signature.push_back(' ');
               rendered_signature += arg_doc.name;
             }
+            /* Add default value if parameter has one */
+            auto const default_val = get_function_arg_default(fn, idx);
+            if(default_val.has_value())
+            {
+              rendered_signature += " {:default ";
+              rendered_signature += default_val.value();
+              rendered_signature += "}";
+            }
             rendered_signature.push_back(']');
             first_arg = false;
           }
@@ -2457,6 +2465,57 @@ namespace jank::nrepl_server::asio
       return type_str;
     }
 
+    /* Get default argument value as string for a function parameter.
+     * Returns empty optional if the parameter has no default. */
+    std::optional<std::string> get_function_arg_default(void *fn, size_t idx) const
+    {
+      auto const *func_decl = get_function_decl(fn);
+      if(!func_decl || idx >= func_decl->getNumParams())
+      {
+        return std::nullopt;
+      }
+      auto const *param = func_decl->getParamDecl(idx);
+      if(!param || !param->hasDefaultArg())
+      {
+        return std::nullopt;
+      }
+      /* Get the source range for the default argument */
+      auto const range = param->getDefaultArgRange();
+      if(!range.isValid())
+      {
+        return std::nullopt;
+      }
+      /* Extract the source text using SourceManager */
+      auto &ast_ctx = func_decl->getASTContext();
+      auto &src_mgr = ast_ctx.getSourceManager();
+      auto const begin_loc = range.getBegin();
+      auto const end_loc = range.getEnd();
+      auto const begin_offset = src_mgr.getFileOffset(begin_loc);
+      auto const end_offset = src_mgr.getFileOffset(end_loc);
+      auto const file_id = src_mgr.getFileID(begin_loc);
+      bool invalid = false;
+      auto const buffer = src_mgr.getBufferData(file_id, &invalid);
+      if(invalid || buffer.empty() || begin_offset >= buffer.size() || end_offset >= buffer.size())
+      {
+        return std::nullopt;
+      }
+      /* The end location points to the start of the last token, so we need to find the end of that token.
+       * For simple literals, we scan forward to find the end. */
+      size_t actual_end = end_offset;
+      while(actual_end < buffer.size())
+      {
+        char c = buffer[actual_end];
+        /* Stop at whitespace, comma, paren, semicolon */
+        if(c == ' ' || c == '\t' || c == '\n' || c == ',' || c == ')' || c == ';' || c == '/')
+        {
+          break;
+        }
+        ++actual_end;
+      }
+      std::string result(buffer.data() + begin_offset, actual_end - begin_offset);
+      return result;
+    }
+
     std::optional<var_documentation>
     describe_native_header_function(ns::native_alias const &alias,
                                     std::string const &symbol_name) const
@@ -2653,6 +2712,14 @@ namespace jank::nrepl_server::asio
           {
             rendered_signature.push_back(' ');
             rendered_signature += arg_doc.name;
+          }
+          /* Add default value if parameter has one */
+          auto const default_val = get_function_arg_default(fn, idx);
+          if(default_val.has_value())
+          {
+            rendered_signature += " {:default ";
+            rendered_signature += default_val.value();
+            rendered_signature += "}";
           }
           rendered_signature.push_back(']');
           first_arg = false;

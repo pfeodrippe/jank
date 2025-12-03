@@ -81,6 +81,23 @@ The `#cpp` reader macro provides the cleanest syntax for C++ literals:
 2. **Arguments must be C++ types** - Use `cpp/int`, `cpp/float`, `cpp/value`, etc.
 3. **Format strings need escaping** - Use `cpp/value "\"format\\n\""` with escaped quotes
 
+## Important: Jank Values Must Be Unboxed
+
+When passing jank values (not C++ function return values) to variadic functions, you **must** explicitly convert them:
+
+```clojure
+; WRONG - passes pointer, prints garbage like "114546816"
+(cpp/printf #cpp "Value: %d\n" 42)
+
+; CORRECT - passes raw int value
+(cpp/printf #cpp "Value: %d\n" (cpp/int 42))
+
+; CORRECT - C function already returns raw int
+(imgui/Text #cpp "FPS: %d" (rl/GetFPS))
+```
+
+This happens because jank integers are boxed objects (`object*`). Variadic functions have no type information for extra arguments, so they receive the pointer address instead of the integer value.
+
 ## Test Files
 
 - `test/jank/cpp/call/global/variadic/pass-variadic.jank` - Custom variadic function with va_list
