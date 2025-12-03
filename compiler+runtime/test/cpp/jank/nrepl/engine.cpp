@@ -4017,4 +4017,115 @@ TEST_CASE("function-like macro with jank expression arguments via wrapper")
   runtime::__rt_ctx->current_ns()->remove_native_alias(th_sym);
 }
 
+TEST_CASE("info shows variadic indicator for C variadic functions")
+{
+  /* Test that variadic C functions show ... in their arglists */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias with :scope "" for global scope */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Get info for TraceLog - a variadic function */
+  auto responses(eng.handle(make_message({
+    {  "op",         "info" },
+    { "sym", "rl/TraceLog" },
+    {  "ns",         "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+
+  auto const arglists_it(payload.find("arglists-str"));
+  if(arglists_it == payload.end())
+  {
+    WARN("arglists-str not found for TraceLog");
+    return;
+  }
+
+  auto const &arglists_str(arglists_it->second.as_string());
+  std::cerr << "TraceLog arglists: " << arglists_str << "\n";
+
+  /* Should contain the variadic indicator */
+  bool const has_variadic = arglists_str.find("...") != std::string::npos;
+  CHECK_MESSAGE(has_variadic, "arglists should contain '...' for variadic function, got: " << arglists_str);
+
+  /* Should also have the fixed parameters */
+  bool const has_log_level = arglists_str.find("logLevel") != std::string::npos
+                               || arglists_str.find("int") != std::string::npos;
+  CHECK_MESSAGE(has_log_level, "arglists should contain logLevel or int, got: " << arglists_str);
+
+  bool const has_text = arglists_str.find("text") != std::string::npos
+                          || arglists_str.find("char") != std::string::npos;
+  CHECK_MESSAGE(has_text, "arglists should contain text or char, got: " << arglists_str);
+}
+
+TEST_CASE("eldoc shows variadic indicator for C variadic functions")
+{
+  /* Test that variadic C functions show ... in eldoc params */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias with :scope "" for global scope */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Get eldoc for TraceLog - a variadic function */
+  auto responses(eng.handle(make_message({
+    {  "op",        "eldoc" },
+    { "sym", "rl/TraceLog" },
+    {  "ns",         "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+
+  auto const eldoc_it(payload.find("eldoc"));
+  if(eldoc_it == payload.end())
+  {
+    WARN("eldoc not found for TraceLog");
+    return;
+  }
+
+  auto const &eldoc_list(eldoc_it->second.as_list());
+  if(eldoc_list.empty())
+  {
+    WARN("eldoc list is empty for TraceLog");
+    return;
+  }
+
+  /* Get the first (and only) signature */
+  auto const &params(eldoc_list.front().as_list());
+  std::cerr << "TraceLog eldoc params count: " << params.size() << "\n";
+
+  /* Look for ... among the params */
+  bool found_variadic = false;
+  for(auto const &param : params)
+  {
+    auto const param_str = param.as_string();
+    std::cerr << "  param: " << param_str << "\n";
+    if(param_str.find("...") != std::string::npos)
+    {
+      found_variadic = true;
+    }
+  }
+
+  CHECK_MESSAGE(found_variadic, "eldoc params should contain '...' for variadic function");
+}
+
 }

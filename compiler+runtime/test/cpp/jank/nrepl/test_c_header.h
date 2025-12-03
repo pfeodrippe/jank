@@ -74,6 +74,9 @@ int IsKeyDown(int key);                                                         
 int GetMouseX(void);                                                             // Get mouse position X
 int GetMouseY(void);                                                             // Get mouse position Y
 
+/* Variadic functions (like printf, ImGui::Text) */
+void TraceLog(int logLevel, const char *text, ...);                              // Show trace log messages
+
 /* A struct type */
 typedef struct {
     float x;

@@ -2107,6 +2107,16 @@ namespace jank::nrepl_server::asio
             rendered_signature.push_back(']');
             first_arg = false;
           }
+          /* Add variadic indicator if the function takes variable arguments */
+          auto const *func_decl(get_function_decl(fn));
+          if(func_decl && func_decl->isVariadic())
+          {
+            if(!first_arg)
+            {
+              rendered_signature.push_back(' ');
+            }
+            rendered_signature += "...";
+          }
           rendered_signature.push_back(']');
           info.arglists.emplace_back(std::move(rendered_signature));
           info.cpp_signatures.emplace_back(std::move(signature));
@@ -2646,6 +2656,16 @@ namespace jank::nrepl_server::asio
           }
           rendered_signature.push_back(']');
           first_arg = false;
+        }
+        /* Add variadic indicator if the function takes variable arguments */
+        auto const *func_decl(get_function_decl(fn));
+        if(func_decl && func_decl->isVariadic())
+        {
+          if(!first_arg)
+          {
+            rendered_signature.push_back(' ');
+          }
+          rendered_signature += "...";
         }
         rendered_signature.push_back(']');
         info.arglists.emplace_back(std::move(rendered_signature));
