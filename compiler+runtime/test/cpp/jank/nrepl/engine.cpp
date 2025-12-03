@@ -1203,6 +1203,14 @@ namespace jank::nrepl_server::asio
       auto const done(std::ranges::find(statuses, "done"));
       CHECK(done != statuses.end());
 
+      // Check source location metadata
+      auto const line_it(payload.find("line"));
+      auto const column_it(payload.find("column"));
+      REQUIRE(line_it != payload.end());
+      REQUIRE(column_it != payload.end());
+      CHECK(line_it->second.as_integer() > 0);
+      CHECK(column_it->second.as_integer() > 0);
+
       // Test eldoc format for Clojure functions
       auto eldoc_responses(eng.handle(make_message({
         {  "op",     "eldoc" },

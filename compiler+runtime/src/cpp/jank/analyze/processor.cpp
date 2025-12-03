@@ -1371,6 +1371,37 @@ namespace jank::analyze
       qualified_sym = qualified_sym->with_meta(meta_with_doc);
     }
 
+    /* Add source location (file, line, column) to var metadata.
+     * If this def came from a macro expansion (like defn), use the original source location.
+     * Otherwise, use the def form's source location. */
+    auto def_source(read::source::unknown);
+    auto const expansion(latest_expansion(macro_expansions));
+    if(expansion != runtime::jank_nil)
+    {
+      def_source = object_source(expansion);
+    }
+    if(def_source == read::source::unknown || def_source.file == read::no_source_path)
+    {
+      def_source = meta_source(l->meta);
+    }
+    if(def_source != read::source::unknown && def_source.file != read::no_source_path)
+    {
+      auto meta(qualified_sym->meta.unwrap_or(runtime::jank_nil));
+      meta = runtime::assoc(
+        meta,
+        __rt_ctx->intern_keyword("file").expect_ok(),
+        runtime::make_box<runtime::obj::persistent_string>(def_source.file));
+      meta = runtime::assoc(
+        meta,
+        __rt_ctx->intern_keyword("line").expect_ok(),
+        runtime::make_box<runtime::obj::integer>(static_cast<i64>(def_source.start.line)));
+      meta = runtime::assoc(
+        meta,
+        __rt_ctx->intern_keyword("column").expect_ok(),
+        runtime::make_box<runtime::obj::integer>(static_cast<i64>(def_source.start.col)));
+      qualified_sym = qualified_sym->with_meta(meta);
+    }
+
     /* Lift this so it can be used during codegen. */
     /* TODO: I don't think lifting meta is actually needed anymore. Verify. */
     if(qualified_sym->meta.is_some())

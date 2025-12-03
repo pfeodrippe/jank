@@ -37,8 +37,12 @@
   - [x] + flecs
   - [x] wasm
   - [ ] convert more things to jank instead of using cpp/raw
-    - [ ] nREPL
-    - [ ] refactor
+    - [ ] imgui
+    - [ ] flecs
+    - [ ] raylib
+  - [ ] nREPL
+    - [x] native
+    - [ ] wasm
   - [ ] fix nREPL goto info
 - [ ] vybe
 - [ ] wasm
@@ -67,3 +71,4 @@
 - [ ] Fix implicit conversion
   - Unknown implicit conversion from ecs_world_t * to jank::runtime::object *. {:jank/error-kind "internal/analysis-failure" :jank/error-message "Unknown implicit conversion from ecs_world_t * to jank::runtime::object *."}
 - [ ] overtone-like
+- [ ] if a native function requires a given type, unbox it automatically
