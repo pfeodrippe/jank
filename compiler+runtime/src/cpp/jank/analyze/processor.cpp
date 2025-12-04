@@ -4304,7 +4304,9 @@ namespace jank::analyze
                                           guard_name,
                                           raw_string) };
 
-    return jtl::make_ref<expr::cpp_raw>(position, current_frame, needs_box, guarded_code);
+    auto result(jtl::make_ref<expr::cpp_raw>(position, current_frame, needs_box, guarded_code));
+    result->source = object_source(l);
+    return result;
   }
 
   enum class literal_kind : u8

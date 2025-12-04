@@ -915,6 +915,10 @@ namespace jank::evaluate
           discovered_types.emplace_back(std::move(metadata));
         };
 
+        /* CppInterOp adds a preamble before user code, which offsets Clang line numbers.
+         * This constant represents the number of preamble lines to subtract. */
+        constexpr unsigned cpp_interop_preamble_lines{ 3 };
+
         /* Iterate through all contexts to find functions and types */
         native_vector<clang::DeclContext const *> contexts;
         contexts.reserve(8);
@@ -973,12 +977,19 @@ namespace jank::evaluate
                 metadata.arguments.emplace_back(std::move(argument));
               }
 
-              /* Store the jank source location where cpp/raw was called */
+              /* Store the jank source location where cpp/raw was called,
+               * plus the line offset within the C++ code */
               if(expr->source.is_some())
               {
                 auto const &src(expr->source.unwrap());
                 metadata.origin = src.file;
-                metadata.origin_line = static_cast<std::int64_t>(src.start.line);
+                /* Calculate the line offset relative to the start of user code.
+                 * Subtract the CppInterOp preamble lines and 1 (since line 1 of user code
+                 * is the same line as the cpp/raw call). */
+                auto const cpp_line(source_manager.getSpellingLineNumber(loc));
+                metadata.origin_line
+                  = static_cast<std::int64_t>(src.start.line)
+                    + static_cast<std::int64_t>(cpp_line - cpp_interop_preamble_lines - 1);
                 metadata.origin_column = static_cast<std::int64_t>(src.start.col);
               }
 
@@ -1030,12 +1041,19 @@ namespace jank::evaluate
               auto const var_type_str(var_type.getAsString(printing_policy));
               metadata.type = jtl::immutable_string{ var_type_str.data(), var_type_str.size() };
 
-              /* Store the jank source location where cpp/raw was called */
+              /* Store the jank source location where cpp/raw was called,
+               * plus the line offset within the C++ code */
               if(expr->source.is_some())
               {
                 auto const &src(expr->source.unwrap());
                 metadata.origin = src.file;
-                metadata.origin_line = static_cast<std::int64_t>(src.start.line);
+                /* Calculate the line offset relative to the start of user code.
+                 * Subtract the CppInterOp preamble lines and 1 (since line 1 of user code
+                 * is the same line as the cpp/raw call). */
+                auto const cpp_line(source_manager.getSpellingLineNumber(loc));
+                metadata.origin_line
+                  = static_cast<std::int64_t>(src.start.line)
+                    + static_cast<std::int64_t>(cpp_line - cpp_interop_preamble_lines - 1);
                 metadata.origin_column = static_cast<std::int64_t>(src.start.col);
               }
 

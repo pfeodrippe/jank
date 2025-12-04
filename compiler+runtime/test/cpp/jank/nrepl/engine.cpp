@@ -4477,4 +4477,70 @@ TEST_CASE("complete returns static variables from cpp/raw")
   CHECK(found_reset_requested);
 }
 
+TEST_CASE("info returns jank source location for cpp/raw functions")
+{
+  /* This test verifies that functions defined in cpp/raw blocks
+   * return the correct line within the C++ code (not just the cpp/raw line),
+   * enabling goto-definition to jump to the exact declaration. */
+  engine eng;
+
+  /* Load a jank file that contains multiple cpp/raw function definitions.
+   * The cpp/raw call is on line 4 of the test file.
+   * - first_fn is on line 1 of C++ code = jank line 4
+   * - second_fn is on line 2 of C++ code = jank line 5 */
+  std::string const jank_file_path{ "test/jank/nrepl/cpp_raw_location.jank" };
+  std::string const file_contents =
+    "; Test file for cpp/raw source location tracking\n"
+    "; The cpp/raw call on line 4 should have its location stored\n"
+    "\n"
+    "(cpp/raw \"inline void test_first_fn(int x) { }\n"
+    "inline void test_second_fn(int y) { }\")\n";
+
+  eng.handle(make_message({
+    {        "op",     "load-file" },
+    {      "file",   file_contents },
+    { "file-path", jank_file_path }
+  }));
+
+  /* Test first function - should be on line 4 (same line as cpp/raw) */
+  {
+    auto responses(eng.handle(make_message({
+      {  "op",                "info" },
+      { "sym", "cpp/test_first_fn" },
+      {  "ns",                "user" }
+    })));
+
+    REQUIRE(responses.size() == 1);
+    auto const &payload(responses.front());
+
+    auto const name_it(payload.find("name"));
+    REQUIRE(name_it != payload.end());
+    CHECK(name_it->second.as_string() == "test_first_fn");
+
+    auto const line_it(payload.find("line"));
+    REQUIRE(line_it != payload.end());
+    CHECK(line_it->second.as_integer() == 4);
+  }
+
+  /* Test second function - should be on line 5 (one line after cpp/raw) */
+  {
+    auto responses(eng.handle(make_message({
+      {  "op",                 "info" },
+      { "sym", "cpp/test_second_fn" },
+      {  "ns",                 "user" }
+    })));
+
+    REQUIRE(responses.size() == 1);
+    auto const &payload(responses.front());
+
+    auto const name_it(payload.find("name"));
+    REQUIRE(name_it != payload.end());
+    CHECK(name_it->second.as_string() == "test_second_fn");
+
+    auto const line_it(payload.find("line"));
+    REQUIRE(line_it != payload.end());
+    CHECK(line_it->second.as_integer() == 5);
+  }
+}
+
 }
