@@ -179,6 +179,86 @@ namespace jank::nrepl_server::asio
       CHECK(statuses == std::vector<std::string>{ "done" });
     }
 
+    TEST_CASE("eval respects explicit ns field")
+    {
+      engine eng;
+
+      /* First, create a namespace with some vars */
+      eng.handle(make_message({
+        {   "op",                                              "eval" },
+        { "code", "(ns my-custom-ns) (def my-var 42) (defn my-fn [] 100)" }
+      }));
+
+      /* Switch back to user namespace for the session */
+      eng.handle(make_message({
+        {   "op",        "eval" },
+        { "code", "(ns user)" }
+      }));
+
+      /* Now evaluate code with explicit ns field - should work because my-fn is defined there */
+      auto responses(eng.handle(make_message({
+        {   "op",          "eval" },
+        { "code",      "(my-fn)" },
+        {   "ns", "my-custom-ns" }
+      })));
+
+      REQUIRE(responses.size() == 2);
+      auto const &value_payload(responses.front());
+      INFO("value payload keys: " << dict_keys(value_payload));
+      if(auto const err_it = value_payload.find("err"); err_it != value_payload.end())
+      {
+        INFO("eval error: " << err_it->second.as_string());
+      }
+      auto const value_it(value_payload.find("value"));
+      REQUIRE(value_it != value_payload.end());
+      CHECK(value_it->second.as_string() == "100");
+
+      /* The response should show the namespace we evaluated in */
+      auto const ns_it(value_payload.find("ns"));
+      REQUIRE(ns_it != value_payload.end());
+      CHECK(ns_it->second.as_string() == "my-custom-ns");
+    }
+
+    TEST_CASE("eval with explicit ns resolves aliases from that namespace")
+    {
+      engine eng;
+
+      /* Create a library namespace */
+      eng.handle(make_message({
+        {   "op",                                    "eval" },
+        { "code", "(ns my-lib) (defn helper [] :success)" }
+      }));
+
+      /* Create a namespace that requires the lib with an alias */
+      eng.handle(make_message({
+        {   "op",                                                  "eval" },
+        { "code", "(ns my-app (:require [my-lib :as lib])) (def x 1)" }
+      }));
+
+      /* Switch session to user */
+      eng.handle(make_message({
+        {   "op",        "eval" },
+        { "code", "(ns user)" }
+      }));
+
+      /* Evaluate using the alias - should work when ns is set to my-app */
+      auto responses(eng.handle(make_message({
+        {   "op",        "eval" },
+        { "code", "(lib/helper)" },
+        {   "ns",      "my-app" }
+      })));
+
+      REQUIRE(responses.size() == 2);
+      auto const &value_payload(responses.front());
+      if(auto const err_it = value_payload.find("err"); err_it != value_payload.end())
+      {
+        INFO("eval error: " << err_it->second.as_string());
+      }
+      auto const value_it(value_payload.find("value"));
+      REQUIRE(value_it != value_payload.end());
+      CHECK(value_it->second.as_string() == ":success");
+    }
+
     TEST_CASE("eval surfaces syntax errors")
     {
       engine eng;

@@ -53,7 +53,7 @@
   - [ ] create cpp/box2 for smart boxing
   - [ ] automatically type hinting for boxes (automatic boxing?)
 - [ ] nREPL
-  - [ ] autocompletion for ns
+  - [x] autocompletion for ns
   - [ ] switch to a ns automatically when evaluating from there
 - [ ] vybe
 - [ ] wasm

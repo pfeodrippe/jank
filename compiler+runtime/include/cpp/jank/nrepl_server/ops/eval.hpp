@@ -93,16 +93,32 @@ namespace jank::nrepl_server::asio
     }
 
     auto &session(ensure_session(msg.session()));
+
+    /* If an explicit ns is provided in the message, use it for evaluation.
+     * This is how CIDER and other editors work - they send the namespace of
+     * the current buffer along with the eval request. */
+    auto const requested_ns(msg.get("ns"));
+    object_ref eval_ns{ session.current_ns };
+    if(!requested_ns.empty())
+    {
+      auto const ns_sym(make_box<obj::symbol>(make_immutable_string(requested_ns)));
+      auto const found_ns(__rt_ctx->find_ns(ns_sym));
+      if(!found_ns.is_nil())
+      {
+        eval_ns = found_ns;
+      }
+    }
+
     obj::persistent_hash_map_ref bindings;
     if(file_path.empty())
     {
       bindings = obj::persistent_hash_map::create_unique(
-        std::make_pair(__rt_ctx->current_ns_var, session.current_ns));
+        std::make_pair(__rt_ctx->current_ns_var, eval_ns));
     }
     else
     {
       bindings = obj::persistent_hash_map::create_unique(
-        std::make_pair(__rt_ctx->current_ns_var, session.current_ns),
+        std::make_pair(__rt_ctx->current_ns_var, eval_ns),
         std::make_pair(__rt_ctx->current_file_var, make_box(make_immutable_string(file_path))));
     }
     context::binding_scope const scope{ bindings };
