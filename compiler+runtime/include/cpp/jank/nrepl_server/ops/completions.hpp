@@ -7,34 +7,54 @@ namespace jank::nrepl_server::asio
     auto const prefix(msg.get("prefix"));
     auto &session(ensure_session(msg.session()));
     auto const requested_ns(msg.get("ns"));
-    auto const query(prepare_completion_query(session, prefix, requested_ns, msg.get("symbol")));
-    auto const candidates(make_completion_candidates(query));
+    auto const context(msg.get("context"));
 
     bencode::value::list completions;
-    completions.reserve(candidates.size());
-    for(auto const &candidate : candidates)
+
+    /* Check if we're in a require context - if so, provide namespace completions */
+    if(is_require_context(context))
     {
-      std::string type_label{ "var" };
-      if(query.target_ns->name->name == "cpp")
+      auto const ns_candidates(make_namespace_candidates(prefix));
+      completions.reserve(ns_candidates.size());
+      for(auto const &candidate : ns_candidates)
       {
-        if(auto info = describe_cpp_entity(query.target_ns, candidate.symbol_name))
+        bencode::value::dict entry;
+        entry.emplace("candidate", candidate.display_name);
+        entry.emplace("type", "namespace");
+        completions.emplace_back(std::move(entry));
+      }
+    }
+    else
+    {
+      auto const query(
+        prepare_completion_query(session, prefix, requested_ns, msg.get("symbol")));
+      auto const candidates(make_completion_candidates(query));
+
+      completions.reserve(candidates.size());
+      for(auto const &candidate : candidates)
+      {
+        std::string type_label{ "var" };
+        if(query.target_ns->name->name == "cpp")
         {
-          type_label = completion_type_for(info.value());
+          if(auto info = describe_cpp_entity(query.target_ns, candidate.symbol_name))
+          {
+            type_label = completion_type_for(info.value());
+          }
+          else
+          {
+            type_label = "function";
+          }
         }
-        else
+        else if(query.native_alias.has_value())
         {
           type_label = "function";
         }
-      }
-      else if(query.native_alias.has_value())
-      {
-        type_label = "function";
-      }
 
-      bencode::value::dict entry;
-      entry.emplace("candidate", candidate.display_name);
-      entry.emplace("type", type_label);
-      completions.emplace_back(std::move(entry));
+        bencode::value::dict entry;
+        entry.emplace("candidate", candidate.display_name);
+        entry.emplace("type", type_label);
+        completions.emplace_back(std::move(entry));
+      }
     }
 
     bencode::value::dict payload;

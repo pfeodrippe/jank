@@ -16,6 +16,34 @@ namespace jank::nrepl_server::asio
     }
 
     auto &session(ensure_session(msg.session()));
+    auto const context(msg.get("context"));
+
+    /* Check if we're in a require context - if so, provide namespace completions */
+    if(is_require_context(context))
+    {
+      auto const ns_candidates(make_namespace_candidates(prefix));
+      bencode::value::list completion_payloads;
+      completion_payloads.reserve(ns_candidates.size());
+      for(auto const &candidate : ns_candidates)
+      {
+        bencode::value::dict entry;
+        entry.emplace("candidate", candidate.display_name);
+        entry.emplace("type", "namespace");
+        entry.emplace("ns", "");
+        completion_payloads.emplace_back(std::move(entry));
+      }
+
+      bencode::value::dict payload;
+      if(!msg.id().empty())
+      {
+        payload.emplace("id", msg.id());
+      }
+      payload.emplace("session", session.id);
+      payload.emplace("completions", bencode::value{ std::move(completion_payloads) });
+      payload.emplace("status", bencode::list_of_strings({ "done" }));
+      return { std::move(payload) };
+    }
+
     auto const query(prepare_completion_query(session, prefix, msg.get("ns"), msg.get("symbol")));
     auto const candidates(make_completion_candidates(query));
 

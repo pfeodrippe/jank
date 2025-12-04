@@ -1819,6 +1819,81 @@ namespace jank::nrepl_server::asio
       return matches;
     }
 
+    /* Collect all available namespace names for completion in require forms.
+     * This includes both already-loaded namespaces and modules available on the module path. */
+    std::vector<std::string> collect_available_namespaces(std::string const &prefix) const
+    {
+      std::vector<std::string> matches;
+
+      /* First, collect loaded namespaces */
+      {
+        auto const locked_namespaces{ __rt_ctx->namespaces.rlock() };
+        for(auto const &[sym, ns_val] : *locked_namespaces)
+        {
+          auto const ns_name(to_std_string(sym->to_string()));
+          if(prefix.empty() || starts_with(ns_name, prefix))
+          {
+            matches.push_back(ns_name);
+          }
+        }
+      }
+
+      /* Then, collect available modules from the module path */
+      for(auto const &[module_name, entry] : __rt_ctx->module_loader.entries)
+      {
+        auto const name(to_std_string(module_name));
+        if(prefix.empty() || starts_with(name, prefix))
+        {
+          /* Check if we already have this namespace */
+          if(std::ranges::find(matches, name) == matches.end())
+          {
+            matches.push_back(name);
+          }
+        }
+      }
+
+      std::ranges::sort(matches);
+      auto const unique_end(std::ranges::unique(matches));
+      matches.erase(unique_end.begin(), unique_end.end());
+      return matches;
+    }
+
+    /* Check if the completion context indicates we're in a require form.
+     * The context string typically contains surrounding code like "(__prefix__ns " or
+     * patterns like ":require [__prefix__" */
+    bool is_require_context(std::string const &context) const
+    {
+      if(context.empty())
+      {
+        return false;
+      }
+
+      /* Check for patterns that suggest require context:
+       * - ":require" followed by our position
+       * - "(ns " with require vectors
+       * - "(require " with module names */
+      return context.find(":require") != std::string::npos
+        || context.find("(require ") != std::string::npos
+        || context.find("(require\n") != std::string::npos
+        || context.find("(require'") != std::string::npos;
+    }
+
+    /* Make namespace completion candidates */
+    std::vector<completion_candidate> make_namespace_candidates(std::string const &prefix) const
+    {
+      auto names(collect_available_namespaces(prefix));
+      std::vector<completion_candidate> candidates;
+      candidates.reserve(names.size());
+      for(auto const &name : names)
+      {
+        completion_candidate entry;
+        entry.symbol_name = name;
+        entry.display_name = name;
+        candidates.emplace_back(std::move(entry));
+      }
+      return candidates;
+    }
+
     std::vector<completion_candidate>
     make_completion_candidates(completion_query const &query) const
     {

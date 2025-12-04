@@ -4177,4 +4177,151 @@ TEST_CASE("info shows default parameter values for C++ functions")
   CHECK_MESSAGE(has_default_20, "arglists should contain '{:default 20}' for fontSize, got: " << arglists_str);
 }
 
+TEST_CASE("completions returns namespaces in require context")
+{
+  engine eng;
+
+  /* First, create a namespace to ensure we have something to complete */
+  eng.handle(make_message({
+    {   "op",                                    "eval" },
+    { "code", "(ns sample.server) (defn run [] 42)" }
+  }));
+  eng.handle(make_message({
+    {   "op",             "eval" },
+    { "code", "(ns sample.client)" }
+  }));
+  eng.handle(make_message({
+    {   "op",        "eval" },
+    { "code", "(ns user)" }
+  }));
+
+  /* Test completions with require context - should return namespaces */
+  auto responses(eng.handle(make_message({
+    {      "op", "completions" },
+    {  "prefix",     "sample." },
+    { "context",   ":require [" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+  REQUIRE_FALSE(completions.empty());
+
+  bool found_server{ false };
+  bool found_client{ false };
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    auto const &type(dict.at("type").as_string());
+
+    /* All results should be namespace type */
+    CHECK(type == "namespace");
+
+    if(candidate == "sample.server")
+    {
+      found_server = true;
+    }
+    if(candidate == "sample.client")
+    {
+      found_client = true;
+    }
+  }
+
+  CHECK(found_server);
+  CHECK(found_client);
+}
+
+TEST_CASE("complete returns namespaces in require context")
+{
+  engine eng;
+
+  /* Create namespaces to complete */
+  eng.handle(make_message({
+    {   "op",                                          "eval" },
+    { "code", "(ns myapp.handlers) (defn handle-request [] 1)" }
+  }));
+  eng.handle(make_message({
+    {   "op",                                   "eval" },
+    { "code", "(ns myapp.middleware) (defn wrap [] 2)" }
+  }));
+  eng.handle(make_message({
+    {   "op",        "eval" },
+    { "code", "(ns user)" }
+  }));
+
+  /* Test complete with require context */
+  auto responses(eng.handle(make_message({
+    {      "op",   "complete" },
+    {  "prefix",     "myapp." },
+    { "context", "(require '" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+  REQUIRE_FALSE(completions.empty());
+
+  bool found_handlers{ false };
+  bool found_middleware{ false };
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    auto const &type(dict.at("type").as_string());
+
+    CHECK(type == "namespace");
+
+    if(candidate == "myapp.handlers")
+    {
+      found_handlers = true;
+    }
+    if(candidate == "myapp.middleware")
+    {
+      found_middleware = true;
+    }
+  }
+
+  CHECK(found_handlers);
+  CHECK(found_middleware);
+}
+
+TEST_CASE("completions without require context returns vars not namespaces")
+{
+  engine eng;
+
+  /* Create a namespace with a var that starts with 'clojure' */
+  eng.handle(make_message({
+    {   "op",                             "eval" },
+    { "code", "(def clojure-version-str \"1.0\")" }
+  }));
+
+  /* Test completions without require context - should return vars, not namespaces */
+  auto responses(eng.handle(make_message({
+    {     "op", "completions" },
+    { "prefix",    "clojure-" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+  REQUIRE_FALSE(completions.empty());
+
+  bool found_var{ false };
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    auto const &type(dict.at("type").as_string());
+
+    if(candidate == "clojure-version-str")
+    {
+      found_var = true;
+      CHECK(type == "var");
+    }
+  }
+
+  CHECK(found_var);
+}
+
 }

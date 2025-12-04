@@ -39,12 +39,22 @@
   - [ ] convert more things to jank instead of using cpp/raw
     - [ ] imgui
       - [ ] native-draw-imgui-panel
+        - [ ] "Paused" checbox automatic unboxing
+        - [ ] jolt_world_get_num_bodies
     - [ ] flecs
     - [ ] raylib
   - [ ] nREPL
     - [x] native
     - [ ] wasm
   - [ ] fix nREPL goto info
+- [ ] jank issues
+  - [x] when we eval any form, state is lost (is-paused)
+    - use cpp/new (GC-allocated) instead of, for example, cpp/bool. (which is stack-allocated)
+  - [ ] create cpp/box2 for smart boxing
+  - [ ] automatically type hinting for boxes (automatic boxing?)
+- [ ] nREPL
+  - [ ] autocompletion for ns
+  - [ ] switch to a ns automatically when evaluating from there
 - [ ] vybe
 - [ ] wasm
   - [x] no require
