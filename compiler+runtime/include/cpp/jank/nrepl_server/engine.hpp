@@ -1367,6 +1367,7 @@ namespace jank::nrepl_server::asio
       bool is_cpp_type{ false };
       bool is_cpp_constructor{ false };
       bool is_cpp_macro{ false };
+      bool is_cpp_variable{ false };
     };
 
     std::string completion_type_for(var_documentation const &info) const
@@ -1386,6 +1387,10 @@ namespace jank::nrepl_server::asio
       if(info.is_cpp_macro)
       {
         return std::string{ "macro" };
+      }
+      if(info.is_cpp_variable)
+      {
+        return std::string{ "variable" };
       }
       if(info.is_macro)
       {
@@ -1804,6 +1809,17 @@ namespace jank::nrepl_server::asio
           {
             matches.push_back(ctor_name);
           }
+        }
+
+        auto const locked_vars{ __rt_ctx->global_cpp_variables.rlock() };
+        for(auto const &[name, _] : *locked_vars)
+        {
+          auto const candidate_name(to_std_string(name));
+          if(!prefix.empty() && !starts_with(candidate_name, prefix))
+          {
+            continue;
+          }
+          matches.push_back(candidate_name);
         }
       }
       else if(query.native_alias.has_value())
@@ -2445,6 +2461,49 @@ namespace jank::nrepl_server::asio
     }
 
     std::optional<var_documentation>
+    describe_cpp_variable(ns_ref target_ns, std::string const &symbol_name) const
+    {
+      if(symbol_name.empty())
+      {
+        return std::nullopt;
+      }
+
+      auto const locked_vars{ __rt_ctx->global_cpp_variables.rlock() };
+      auto const key(make_immutable_string(symbol_name));
+      auto const it(locked_vars->find(key));
+      if(it == locked_vars->end())
+      {
+        return std::nullopt;
+      }
+
+      var_documentation info;
+      info.ns_name = current_ns_name(target_ns);
+      info.name = symbol_name;
+      info.is_function = false;
+      info.is_cpp_function = false;
+      info.is_cpp_variable = true;
+
+      /* Set the doc to show the variable type */
+      info.doc = "C++ variable of type: " + to_std_string(it->second.type);
+
+      /* Include source location if available */
+      if(it->second.origin.is_some())
+      {
+        info.file = to_std_string(it->second.origin.unwrap());
+      }
+      if(it->second.origin_line.is_some())
+      {
+        info.line = it->second.origin_line.unwrap();
+      }
+      if(it->second.origin_column.is_some())
+      {
+        info.column = it->second.origin_column.unwrap();
+      }
+
+      return info;
+    }
+
+    std::optional<var_documentation>
     describe_cpp_entity(ns_ref target_ns, std::string const &symbol_name) const
     {
       if(auto info = describe_cpp_function(target_ns, symbol_name))
@@ -2452,6 +2511,10 @@ namespace jank::nrepl_server::asio
         return info;
       }
       if(auto info = describe_cpp_type(target_ns, symbol_name))
+      {
+        return info;
+      }
+      if(auto info = describe_cpp_variable(target_ns, symbol_name))
       {
         return info;
       }

@@ -4404,4 +4404,77 @@ TEST_CASE("completions without require context returns vars not namespaces")
   CHECK(found_var);
 }
 
+TEST_CASE("complete returns static variables from cpp/raw")
+{
+  engine eng;
+
+  /* Define static variables via cpp/raw, similar to a real game integration */
+  eng.handle(make_message({
+    {   "op",                                                                          "eval" },
+    { "code",
+     "(cpp/raw \"static void* g_jolt_world = nullptr;\\n"
+     "static float* g_time_scale_ptr = nullptr;\\n"
+     "static int* g_spawn_count_ptr = nullptr;\\n"
+     "static bool* g_reset_requested_ptr = nullptr;\")" }
+  }));
+
+  /* Complete with cpp/g_ prefix - should find the static variables */
+  auto responses(eng.handle(make_message({
+    {     "op", "complete" },
+    { "prefix",   "cpp/g_" },
+    {     "ns",     "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  /* Static variable completion MUST work - fail if no completions */
+  INFO("Number of completions: " << completions.size());
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    INFO("Got completion: " << candidate);
+  }
+  REQUIRE_FALSE(completions.empty());
+
+  bool found_jolt_world{ false };
+  bool found_time_scale{ false };
+  bool found_spawn_count{ false };
+  bool found_reset_requested{ false };
+
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+
+    if(candidate == "cpp/g_jolt_world")
+    {
+      found_jolt_world = true;
+      CHECK(dict.at("type").as_string() == "variable");
+    }
+    if(candidate == "cpp/g_time_scale_ptr")
+    {
+      found_time_scale = true;
+      CHECK(dict.at("type").as_string() == "variable");
+    }
+    if(candidate == "cpp/g_spawn_count_ptr")
+    {
+      found_spawn_count = true;
+      CHECK(dict.at("type").as_string() == "variable");
+    }
+    if(candidate == "cpp/g_reset_requested_ptr")
+    {
+      found_reset_requested = true;
+      CHECK(dict.at("type").as_string() == "variable");
+    }
+  }
+
+  CHECK(found_jolt_world);
+  CHECK(found_time_scale);
+  CHECK(found_spawn_count);
+  CHECK(found_reset_requested);
+}
+
 }

@@ -164,6 +164,15 @@ namespace jank::runtime
       native_vector<cpp_function_metadata> constructors;
     };
 
+    struct cpp_variable_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string type;
+      jtl::option<jtl::immutable_string> origin;
+      jtl::option<std::int64_t> origin_line;
+      jtl::option<std::int64_t> origin_column;
+    };
+
     folly::Synchronized<native_unordered_map<obj::symbol_ref, ns_ref>> namespaces;
     folly::Synchronized<native_unordered_map<jtl::immutable_string, obj::keyword_ref>> keywords;
     folly::Synchronized<
@@ -171,6 +180,8 @@ namespace jank::runtime
       global_cpp_functions;
     folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_type_metadata>>
       global_cpp_types;
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_variable_metadata>>
+      global_cpp_variables;
 
     struct binding_scope
     {

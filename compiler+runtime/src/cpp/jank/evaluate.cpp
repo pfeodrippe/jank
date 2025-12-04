@@ -997,6 +997,52 @@ namespace jank::evaluate
               }
             }
 
+            /* Process global/static variables */
+            if(auto const *var_decl = llvm::dyn_cast<clang::VarDecl>(decl))
+            {
+              /* Only process static variables with file scope */
+              if(!var_decl->hasGlobalStorage())
+              {
+                continue;
+              }
+
+              auto loc(var_decl->getBeginLoc());
+              if(!loc.isValid())
+              {
+                continue;
+              }
+              loc = source_manager.getSpellingLoc(loc);
+              auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+              auto const file_name(source_manager.getFilename(loc));
+              if(!in_main_file && !file_name.empty())
+              {
+                continue;
+              }
+
+              auto qualified_name(var_decl->getQualifiedNameAsString());
+              auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+              runtime::context::cpp_variable_metadata metadata;
+              metadata.name
+                = jtl::immutable_string{ normalized_name.data(), normalized_name.size() };
+
+              auto const var_type(var_decl->getType());
+              auto const var_type_str(var_type.getAsString(printing_policy));
+              metadata.type = jtl::immutable_string{ var_type_str.data(), var_type_str.size() };
+
+              /* Store the jank source location where cpp/raw was called */
+              if(expr->source.is_some())
+              {
+                auto const &src(expr->source.unwrap());
+                metadata.origin = src.file;
+                metadata.origin_line = static_cast<std::int64_t>(src.start.line);
+                metadata.origin_column = static_cast<std::int64_t>(src.start.col);
+              }
+
+              auto locked_globals{ __rt_ctx->global_cpp_variables.wlock() };
+              (*locked_globals)[metadata.name] = std::move(metadata);
+            }
+
             /* Process types (structs/classes/unions) */
             if(auto const *record = llvm::dyn_cast<clang::CXXRecordDecl>(decl))
             {
