@@ -1343,7 +1343,23 @@ namespace jank::analyze
       {
         return value_result;
       }
-      value_result = apply_implicit_conversion(value_result.expect_ok(),
+
+      /* Store the original expression BEFORE implicit conversion for type inference.
+       * This allows us to look up the underlying type (e.g., cpp_box's boxed_type)
+       * when the var is later referenced. */
+      auto const original_value_expr{ value_result.expect_ok() };
+      vars.insert_or_assign(var.expect_ok(), original_value_expr);
+
+      /* For cpp_box expressions, store the boxed_type directly on the var object.
+       * This persists across processor instances, allowing type inference when
+       * the var is referenced in later top-level forms. */
+      if(original_value_expr->kind == expression_kind::cpp_box)
+      {
+        auto const box_expr{ llvm::cast<expr::cpp_box>(original_value_expr.data) };
+        var.expect_ok()->boxed_type = box_expr->boxed_type;
+      }
+
+      value_result = apply_implicit_conversion(original_value_expr,
                                                cpp_util::untyped_object_ptr_type(),
                                                macro_expansions);
       if(value_result.is_err())
@@ -1351,8 +1367,6 @@ namespace jank::analyze
         return value_result;
       }
       value_expr = some(value_result.expect_ok());
-
-      vars.insert_or_assign(var.expect_ok(), value_expr.unwrap());
     }
 
     if(has_docstring)
@@ -1756,7 +1770,46 @@ namespace jank::analyze
     {
       current_frame->lift_var(var_qualified_sym);
     }
-    return jtl::make_ref<expr::var_deref>(position, current_frame, true, var_qualified_sym, var);
+
+    /* Infer type from var's boxed_type (stored on the var itself, persists
+     * across processor instances). Fall back to vars map for same-processor lookups. */
+    jtl::ptr<void> tag_type{ nullptr };
+
+    /* First check the var object's boxed_type - this persists across processor instances. */
+    if(var->boxed_type)
+    {
+      tag_type = var->boxed_type;
+    }
+    /* Fall back to vars map for same-processor lookups. */
+    else
+    {
+      auto const var_expr_it(vars.find(var));
+      if(var_expr_it != vars.end())
+      {
+        auto const &init_expr{ var_expr_it->second };
+        /* For cpp_box, use the boxed_type (the underlying pointer type)
+         * rather than expression_type which returns object*. */
+        if(init_expr->kind == expression_kind::cpp_box)
+        {
+          auto const box_expr{ llvm::cast<expr::cpp_box>(init_expr.data) };
+          tag_type = box_expr->boxed_type;
+        }
+        else
+        {
+          tag_type = cpp_util::expression_type(init_expr);
+        }
+      }
+    }
+
+    /* Fall back to :tag metadata for pre-compiled modules or explicit overrides. */
+    if(!tag_type && var->meta.is_some())
+    {
+      auto const tag_kw(__rt_ctx->intern_keyword("", "tag", true).expect_ok());
+      auto const tag_val(get(var->meta.unwrap(), tag_kw));
+      tag_type = cpp_util::tag_to_cpp_type(tag_val);
+    }
+
+    return jtl::make_ref<expr::var_deref>(position, current_frame, true, var_qualified_sym, var, tag_type);
   }
 
   jtl::result<expr::function_arity, error_ref>
@@ -4626,6 +4679,7 @@ namespace jank::analyze
                                         current_frame,
                                         needs_box,
                                         value_expr,
+                                        value_type,
                                         object_source(l->first()));
   }
 
@@ -4640,15 +4694,7 @@ namespace jank::analyze
     if(count < 2)
     {
       return error::analyze_invalid_cpp_cast(
-               "This call to 'cpp/unbox' is missing a C++ type and a value as arguments.",
-               object_source(l->first()),
-               latest_expansion(macro_expansions))
-        ->add_usage(read::parse::reparse_nth(l, 0));
-    }
-    else if(count < 3)
-    {
-      return error::analyze_invalid_cpp_cast(
-               "This call to 'cpp/unbox' is missing a value to unbox as an argument.",
+               "This call to 'cpp/unbox' is missing a value as argument.",
                object_source(l->first()),
                latest_expansion(macro_expansions))
         ->add_usage(read::parse::reparse_nth(l, 0));
@@ -4663,6 +4709,62 @@ namespace jank::analyze
         ->add_usage(read::parse::reparse_nth(l, 3));
     }
 
+    /* Single-argument form: (cpp/unbox value)
+     * Type is inferred from the value expression (e.g., var with known type). */
+    if(count == 2)
+    {
+      auto const value_obj(l->data.rest().first().unwrap());
+      auto const value_expr_res(
+        analyze(value_obj, current_frame, expression_position::value, fn_ctx, false));
+      if(value_expr_res.is_err())
+      {
+        return value_expr_res.expect_err();
+      }
+
+      auto const value_expr{ value_expr_res.expect_ok() };
+
+      /* Get the unbox target type from var_deref's tag_type.
+       * This is the boxed_type stored on the var (e.g., bool* for v->p false). */
+      jtl::ptr<void> inferred_type{ nullptr };
+      if(value_expr->kind == expression_kind::var_deref)
+      {
+        auto const var_deref_expr{ llvm::cast<expr::var_deref>(value_expr.data) };
+        inferred_type = var_deref_expr->tag_type;
+      }
+
+      /* Check if we got a useful type */
+      if(!inferred_type || !Cpp::IsPointerType(inferred_type))
+      {
+        return error::analyze_invalid_cpp_unbox(
+                 "Unable to infer type for 'cpp/unbox'. The value must be a var with a known "
+                 "pointer type, or you must specify the type explicitly: (cpp/unbox type value).",
+                 object_source(value_obj),
+                 latest_expansion(macro_expansions))
+          ->add_usage(read::parse::reparse_nth(l, 1));
+      }
+
+      /* Verify the value is an object type (can be unboxed) */
+      auto const value_type{ cpp_util::expression_type(value_expr) };
+      if(!cpp_util::is_any_object(value_type))
+      {
+        return error::analyze_invalid_cpp_unbox(
+                 util::format("Unable to unbox value of type '{}', since it's not a jank object type."
+                              " You can only unbox the same object you get back from 'cpp/box'.",
+                              Cpp::GetTypeAsString(value_type)),
+                 object_source(value_obj),
+                 latest_expansion(macro_expansions))
+          ->add_usage(read::parse::reparse_nth(l, 1));
+      }
+
+      return jtl::make_ref<expr::cpp_unbox>(position,
+                                            current_frame,
+                                            needs_box,
+                                            inferred_type,
+                                            value_expr,
+                                            object_source(l->first()));
+    }
+
+    /* Two-argument form: (cpp/unbox type value) */
     auto const type_obj(l->data.rest().first().unwrap());
     /* TODO: Add a type expression_position and only allow types there? */
     auto const type_expr_res(

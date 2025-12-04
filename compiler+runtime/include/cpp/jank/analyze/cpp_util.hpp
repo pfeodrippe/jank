@@ -77,6 +77,10 @@ namespace jank::analyze::cpp_util
   jtl::ptr<void> untyped_object_ptr_type();
   jtl::ptr<void> untyped_object_ref_type();
 
+  /* Convert a :tag metadata value (keyword or string) to a C++ type pointer.
+   * Returns nullptr if the tag is nil or cannot be resolved. */
+  jtl::ptr<void> tag_to_cpp_type(runtime::object_ref tag);
+
   usize offset_to_typed_object_base(jtl::ptr<void> type);
 
   jtl::option<Cpp::Operator> match_operator(jtl::immutable_string const &name);

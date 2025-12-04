@@ -1,5 +1,9 @@
 #include <algorithm>
 
+#include <jank/runtime/obj/keyword.hpp>
+#include <jank/runtime/obj/persistent_string.hpp>
+#include <jank/runtime/rtti.hpp>
+
 // Include real CppInterOp when:
 // 1. Not on emscripten (native build), OR
 // 2. On emscripten but with CppInterOp available (WASM with eval support)
@@ -388,6 +392,98 @@ namespace jank::analyze::cpp_util
     return ret;
   }
 
+  jtl::ptr<void> tag_to_cpp_type(runtime::object_ref const tag)
+  {
+    if(tag.is_nil())
+    {
+      return nullptr;
+    }
+
+    /* Handle keyword tags like :bool, :i32, :f64, etc. */
+    if(tag->type == runtime::object_type::keyword)
+    {
+      auto const kw = runtime::expect_object<runtime::obj::keyword>(tag);
+      auto const &name = kw->get_name();
+      /* Boolean */
+      if(name == "bool" || name == "boolean")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("bool"));
+      }
+      /* Signed integers */
+      if(name == "i8")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("int8_t"));
+      }
+      if(name == "i16")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("int16_t"));
+      }
+      if(name == "i32" || name == "int")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("int"));
+      }
+      if(name == "i64" || name == "long")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("long"));
+      }
+      /* Unsigned integers */
+      if(name == "u8")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("uint8_t"));
+      }
+      if(name == "u16")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("uint16_t"));
+      }
+      if(name == "u32")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("unsigned int"));
+      }
+      if(name == "u64")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("unsigned long"));
+      }
+      /* Floating point */
+      if(name == "f32" || name == "float")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("float"));
+      }
+      if(name == "f64" || name == "double")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("double"));
+      }
+      /* Size type */
+      if(name == "size_t")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("size_t"));
+      }
+      /* Char */
+      if(name == "char")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("char"));
+      }
+      /* Try to resolve as a C++ type name */
+      auto const type = Cpp::GetType(std::string(name));
+      if(type)
+      {
+        return Cpp::GetPointerType(type);
+      }
+    }
+
+    /* Handle string tags for arbitrary C++ types */
+    if(tag->type == runtime::object_type::persistent_string)
+    {
+      auto const str = runtime::expect_object<runtime::obj::persistent_string>(tag);
+      auto const type_res = resolve_literal_type(str->data);
+      if(type_res.is_ok())
+      {
+        return Cpp::GetPointerType(type_res.expect_ok());
+      }
+    }
+
+    return nullptr;
+  }
+
   bool is_member_function(jtl::ptr<void> const scope)
   {
     return Cpp::IsMethod(scope) && !Cpp::IsConstructor(scope) && !Cpp::IsDestructor(scope);
@@ -480,6 +576,19 @@ namespace jank::analyze::cpp_util
         else if constexpr(jtl::is_same<T, expr::local_reference>)
         {
           return typed_expr->binding->type;
+        }
+        else if constexpr(jtl::is_same<T, expr::var_deref>)
+        {
+          /* Vars always hold object* at runtime. The tag_type is just a hint
+           * for cpp/unbox to know what type to cast to - it should be accessed
+           * directly via typed_expr->tag_type, not via expression_type. */
+          return untyped_object_ptr_type();
+        }
+        else if constexpr(jtl::is_same<T, expr::cpp_box>)
+        {
+          /* cpp/box returns an object*, not the underlying pointer type.
+           * Use get_boxed_type() to get the underlying type for inference. */
+          return untyped_object_ptr_type();
         }
         else if constexpr(jtl::is_same<T, expr::let> || jtl::is_same<T, expr::letfn>)
         {
@@ -1057,6 +1166,11 @@ namespace jank::analyze::cpp_util
   }
 
   jtl::ptr<void> untyped_object_ref_type()
+  {
+    return {};
+  }
+
+  jtl::ptr<void> tag_to_cpp_type(runtime::object_ref const)
   {
     return {};
   }

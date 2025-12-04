@@ -52,9 +52,9 @@
     - use cpp/new (GC-allocated) instead of, for example, cpp/bool. (which is stack-allocated)
   - [ ] create cpp/box2 for smart boxing
   - [ ] automatically type hinting for boxes (automatic boxing?)
-- [ ] nREPL
+- nREPL
   - [x] autocompletion for ns
-  - [ ] switch to a ns automatically when evaluating from there
+  - [x] switch to a ns automatically when evaluating from there
 - [ ] vybe
 - [ ] wasm
   - [x] no require

@@ -1,0 +1,9 @@
+; Test type inference for boxed bool pointer across top-level forms.
+; The key test: def with cpp/box in one form, single-arg cpp/unbox in another.
+(def bool-ptr (cpp/box (cpp/new (cpp/type "bool") true)))
+
+; In a separate top-level form, unbox should infer the type from var's boxed_type
+(let* [raw-ptr (cpp/unbox bool-ptr)
+       value (cpp/* raw-ptr)]
+  (if value
+    :success))

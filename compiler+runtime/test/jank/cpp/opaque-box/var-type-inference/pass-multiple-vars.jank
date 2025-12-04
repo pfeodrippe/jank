@@ -1,0 +1,11 @@
+; Test type inference with multiple boxed vars of different types.
+(def flag (cpp/box (cpp/new (cpp/type "bool") false)))
+(def counter (cpp/box (cpp/new (cpp/type "int") 100)))
+
+; Each var should have its own boxed_type correctly stored
+(let* [flag-ptr (cpp/unbox flag)
+       counter-ptr (cpp/unbox counter)
+       flag-val (cpp/* flag-ptr)
+       counter-val (cpp/* counter-ptr)]
+  (if (and (not flag-val) (= counter-val 100))
+    :success))

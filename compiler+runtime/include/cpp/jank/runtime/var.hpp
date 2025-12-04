@@ -73,6 +73,10 @@ namespace jank::runtime
     obj::symbol_ref name{};
     jtl::option<object_ref> meta;
     mutable uhash hash{};
+    /* The C++ type of the var's boxed value (for cpp/box inference).
+     * Set during analysis when the init expression is a cpp_box.
+     * nullptr means no type hint available. */
+    jtl::ptr<void> boxed_type{};
 
   private:
     folly::Synchronized<object_ref> root;
