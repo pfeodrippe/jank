@@ -7,4 +7,4 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Remove any previous code coverage files.
 rm -f "${here}/../build"/jank-*.profraw "${here}/../build"/jank.profdata
 
-"${here}/compile" && "${here}/../build/jank-test" "$@"
+"${here}/compile" && cd "${here}/../build" && ./jank-test "$@"

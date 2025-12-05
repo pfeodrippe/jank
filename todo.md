@@ -83,3 +83,6 @@
   - Unknown implicit conversion from ecs_world_t * to jank::runtime::object *. {:jank/error-kind "internal/analysis-failure" :jank/error-message "Unknown implicit conversion from ecs_world_t * to jank::runtime::object *."}
 - [ ] overtone-like
 - [ ] if a native function requires a given type, unbox it automatically
+- [ ] ios test
+- [ ] ability to alias cpp/raw using the ns itself
+- [ ] goto native could go to the implementation instead of the header (when these 2 are different)

@@ -4477,6 +4477,245 @@ TEST_CASE("complete returns static variables from cpp/raw")
   CHECK(found_reset_requested);
 }
 
+TEST_CASE("complete returns interned keywords with colon prefix")
+{
+  /* This test verifies that keyword autocompletion works.
+   * Keywords are interned in the runtime context when used.
+   * CIDER sends prefix=":my" to complete keywords starting with :my */
+  engine eng;
+
+  /* Use some keywords to intern them */
+  eng.handle(make_message({
+    {   "op",                                                    "eval" },
+    { "code", "(def my-map {:my-key 1 :my-other-key 2 :another 3})" }
+  }));
+
+  /* Complete keywords starting with :my */
+  auto responses(eng.handle(make_message({
+    {     "op", "complete" },
+    { "prefix",      ":my" },
+    {     "ns",     "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  /* Should find keywords that start with :my */
+  bool found_my_key{ false };
+  bool found_my_other_key{ false };
+  bool found_another{ false };
+
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    INFO("Got keyword completion: " << candidate);
+
+    if(candidate == ":my-key")
+    {
+      found_my_key = true;
+      CHECK(dict.at("type").as_string() == "keyword");
+    }
+    if(candidate == ":my-other-key")
+    {
+      found_my_other_key = true;
+      CHECK(dict.at("type").as_string() == "keyword");
+    }
+    if(candidate == ":another")
+    {
+      found_another = true; /* Should NOT be found since prefix is :my */
+    }
+  }
+
+  CHECK(found_my_key);
+  CHECK(found_my_other_key);
+  CHECK_FALSE(found_another); /* :another should not match :my prefix */
+}
+
+TEST_CASE("complete returns qualified keywords with namespace prefix")
+{
+  /* This test verifies that qualified keywords like :foo/bar are completed */
+  engine eng;
+
+  /* Use qualified keywords to intern them */
+  eng.handle(make_message({
+    {   "op",                                                              "eval" },
+    { "code", "(def my-data {:user/name \"test\" :user/id 1 :system/config {}})" }
+  }));
+
+  /* Complete keywords in :user namespace */
+  auto responses(eng.handle(make_message({
+    {     "op",  "complete" },
+    { "prefix", ":user/na" },
+    {     "ns",      "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  bool found_user_name{ false };
+
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    INFO("Got qualified keyword completion: " << candidate);
+
+    if(candidate == ":user/name")
+    {
+      found_user_name = true;
+      CHECK(dict.at("type").as_string() == "keyword");
+    }
+  }
+
+  CHECK(found_user_name);
+}
+
+TEST_CASE("completions op returns interned keywords with colon prefix")
+{
+  /* This test verifies that the 'completions' op (older CIDER style) also works for keywords */
+  engine eng;
+
+  /* Use some keywords to intern them */
+  eng.handle(make_message({
+    {   "op",                                              "eval" },
+    { "code", "(def data {:test-keyword 1 :test-other 2})" }
+  }));
+
+  /* Complete keywords starting with :test using 'completions' op */
+  auto responses(eng.handle(make_message({
+    {     "op", "completions" },
+    { "prefix",       ":test" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  bool found_test_keyword{ false };
+  bool found_test_other{ false };
+
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+
+    if(candidate == ":test-keyword")
+    {
+      found_test_keyword = true;
+      CHECK(dict.at("type").as_string() == "keyword");
+    }
+    if(candidate == ":test-other")
+    {
+      found_test_other = true;
+      CHECK(dict.at("type").as_string() == "keyword");
+    }
+  }
+
+  CHECK(found_test_keyword);
+  CHECK(found_test_other);
+}
+
+TEST_CASE("complete returns auto-resolved keywords with double colon prefix")
+{
+  /* This test verifies that ::foo keywords (auto-resolved to current ns) are completed */
+  engine eng;
+
+  /* Use auto-resolved keywords to intern them in the user namespace */
+  eng.handle(make_message({
+    {   "op",                                                "eval" },
+    { "code", "(def data {::local-key 1 ::local-other 2 :global 3})" }
+  }));
+
+  /* Complete keywords starting with :: (should find user/local-key, user/local-other) */
+  auto responses(eng.handle(make_message({
+    {     "op", "complete" },
+    { "prefix",    "::loc" },
+    {     "ns",     "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  bool found_local_key{ false };
+  bool found_local_other{ false };
+  bool found_global{ false };
+
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    INFO("Got :: keyword completion: " << candidate);
+
+    if(candidate == "::local-key")
+    {
+      found_local_key = true;
+      CHECK(dict.at("type").as_string() == "keyword");
+      CHECK(dict.at("ns").as_string() == "user");
+    }
+    if(candidate == "::local-other")
+    {
+      found_local_other = true;
+      CHECK(dict.at("type").as_string() == "keyword");
+    }
+    if(candidate == ":global" || candidate == "::global")
+    {
+      found_global = true; /* Should NOT be found - it's not in user ns */
+    }
+  }
+
+  CHECK(found_local_key);
+  CHECK(found_local_other);
+  CHECK_FALSE(found_global); /* :global should not match ::loc prefix */
+}
+
+TEST_CASE("complete returns all auto-resolved keywords with just double colon")
+{
+  /* This test verifies that :: alone completes all keywords in current namespace */
+  engine eng;
+
+  /* Use auto-resolved keywords */
+  eng.handle(make_message({
+    {   "op",                                    "eval" },
+    { "code", "(def data {::ns-key1 1 ::ns-key2 2})" }
+  }));
+
+  /* Complete with just :: */
+  auto responses(eng.handle(make_message({
+    {     "op", "complete" },
+    { "prefix",       "::" },
+    {     "ns",     "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  bool found_ns_key1{ false };
+  bool found_ns_key2{ false };
+
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+
+    if(candidate == "::ns-key1")
+    {
+      found_ns_key1 = true;
+    }
+    if(candidate == "::ns-key2")
+    {
+      found_ns_key2 = true;
+    }
+  }
+
+  CHECK(found_ns_key1);
+  CHECK(found_ns_key2);
+}
+
 TEST_CASE("info returns jank source location for cpp/raw functions")
 {
   /* This test verifies that functions defined in cpp/raw blocks

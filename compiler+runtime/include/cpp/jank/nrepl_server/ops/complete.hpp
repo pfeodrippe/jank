@@ -18,6 +18,72 @@ namespace jank::nrepl_server::asio
     auto &session(ensure_session(msg.session()));
     auto const context(msg.get("context"));
 
+    /* Check if we're completing keywords (prefix starts with :) */
+    if(!prefix.empty() && prefix[0] == ':')
+    {
+      bencode::value::list completion_payloads;
+
+      /* Check for auto-resolved keywords (::) */
+      bool const is_auto_resolved = prefix.size() >= 2 && prefix[1] == ':';
+
+      if(is_auto_resolved)
+      {
+        /* For ::foo, complete keywords in the current namespace */
+        auto const ns_name(current_ns_name(session.current_ns));
+        auto const ns_prefix(ns_name + "/");
+        auto const keyword_suffix(prefix.substr(2)); /* Strip leading :: */
+
+        auto const locked_keywords{ __rt_ctx->keywords.rlock() };
+        for(auto const &[key, kw] : *locked_keywords)
+        {
+          auto const key_str(to_std_string(key));
+          /* Check if keyword is in the current namespace */
+          if(starts_with(key_str, ns_prefix))
+          {
+            auto const local_name(key_str.substr(ns_prefix.size()));
+            /* Check if the local name matches the suffix after :: */
+            if(keyword_suffix.empty() || starts_with(local_name, keyword_suffix))
+            {
+              bencode::value::dict entry;
+              entry.emplace("candidate", "::" + local_name);
+              entry.emplace("type", "keyword");
+              entry.emplace("ns", ns_name);
+              completion_payloads.emplace_back(std::move(entry));
+            }
+          }
+        }
+      }
+      else
+      {
+        /* For :foo, complete all keywords matching the prefix */
+        auto const keyword_prefix(prefix.substr(1)); /* Strip leading : */
+
+        auto const locked_keywords{ __rt_ctx->keywords.rlock() };
+        for(auto const &[key, kw] : *locked_keywords)
+        {
+          auto const key_str(to_std_string(key));
+          if(keyword_prefix.empty() || starts_with(key_str, keyword_prefix))
+          {
+            bencode::value::dict entry;
+            entry.emplace("candidate", ":" + key_str);
+            entry.emplace("type", "keyword");
+            entry.emplace("ns", "");
+            completion_payloads.emplace_back(std::move(entry));
+          }
+        }
+      }
+
+      bencode::value::dict payload;
+      if(!msg.id().empty())
+      {
+        payload.emplace("id", msg.id());
+      }
+      payload.emplace("session", session.id);
+      payload.emplace("completions", bencode::value{ std::move(completion_payloads) });
+      payload.emplace("status", bencode::list_of_strings({ "done" }));
+      return { std::move(payload) };
+    }
+
     /* Check if we're in a require context - if so, provide namespace completions */
     if(is_require_context(context))
     {
