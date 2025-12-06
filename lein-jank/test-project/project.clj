@@ -1,7 +1,7 @@
 (defproject test-project "0.1.0-SNAPSHOT"
   :description "FIXME: write description"
   :url "http://example.com/FIXME"
-  :plugins [[org.jank-lang/lein-jank "0.0.1-SNAPSHOT"]]
+       :plugins [[org.jank-lang/lein-jank "0.2"]]
   :main test-project.core
   :jank {;:disable-locals-clearing false
          ;:elide-meta false

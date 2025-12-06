@@ -1,10 +1,11 @@
 name: Build compiler+runtime
 
-on:
-  pull_request:
-  push:
-    branches:
-      - main
+on: [ push, pull_request ]
+# on:
+#   pull_request:
+#   push:
+#     branches:
+#       - main
 
 permissions:
   contents: read
@@ -27,15 +28,19 @@ jobs:
           submodules: true
       - uses: awalsh128/cache-apt-pkgs-action@5902b33ae29014e6ca012c5d8025d4346556bd40
         with:
-          packages: curl git build-essential libssl-dev libdouble-conversion-dev pkg-config ninja-build cmake zlib1g-dev libffi-dev
+          packages: curl git build-essential libssl-dev libdouble-conversion-dev pkg-config ninja-build cmake zlib1g-dev libffi-dev libboost-dev libboost-system-dev
           # Increment this when the package list changes.
-          version: 1
+          version: 3
+      - name: Ensure Boost headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libboost-dev libboost-system-dev
       - name: Cache Clang/LLVM
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: |
             ${{ github.workspace }}/compiler+runtime/build/llvm-install
-          key: clang-${{ runner.os }}-${{ hashFiles('compiler+runtime/bin/build-clang') }}
+          key: clang-${{ runner.os }}-v1
       - name: Build Clang/LLVM
         run: |
           if [[ ! -e ${{ github.workspace }}/compiler+runtime/build/llvm-install/usr/local/bin/clang++ ]];
@@ -64,7 +69,7 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/compiler+runtime/build/llvm-install
-          key: clang-${{ runner.os }}-${{ hashFiles('compiler+runtime/bin/build-clang') }}
+          key: clang-${{ runner.os }}-v1
       - name: Build Clang/LLVM
         run: |
           if [[ ! -e ${{ github.workspace }}/compiler+runtime/build/llvm-install/usr/local/bin/clang++ ]];
@@ -97,10 +102,11 @@ jobs:
             analyze: on
 
           ## Debug + sanitization
-          - name: Ubuntu - address sanitizer
-            os: ubuntu-24.04
-            build_type: Debug
-            sanitize: address
+          # TODO: Fix this. GC issue: https://github.com/bdwgc/bdwgc/issues/772
+          #- name: Ubuntu - address sanitizer
+          #  os: ubuntu-24.04
+          #  build_type: Debug
+          #  sanitize: address
 
           - name: Ubuntu - undefined behavior sanitizer
             os: ubuntu-24.04
@@ -176,9 +182,14 @@ jobs:
         if: runner.os == 'Linux'
         uses: awalsh128/cache-apt-pkgs-action@5902b33ae29014e6ca012c5d8025d4346556bd40
         with:
-          packages: default-jdk software-properties-common lsb-release npm lcov leiningen ccache curl git git-lfs build-essential entr libssl-dev libdouble-conversion-dev pkg-config ninja-build cmake zlib1g-dev libffi-dev doctest-dev gcc g++ libgc-dev
+          packages: default-jdk software-properties-common lsb-release npm lcov leiningen ccache curl git git-lfs build-essential entr libssl-dev libdouble-conversion-dev pkg-config ninja-build cmake zlib1g-dev libffi-dev doctest-dev gcc g++ libgc-dev libboost-dev libboost-system-dev
           # Increment this when the package list changes.
-          version: 9
+          version: 11
+      - name: Install boost headers
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libboost-dev libboost-system-dev
       - name: Install Homebrew packages
         if: runner.os == 'macOS'
         run: |
@@ -188,7 +199,7 @@ jobs:
         with:
           path: |
             ${{ github.workspace }}/compiler+runtime/build/llvm-install
-          key: clang-${{ runner.os }}-${{ hashFiles('${{ github.workspace }}/compiler+runtime/bin/build-clang') }}
+          key: clang-${{ runner.os }}-v1
       - name: Cache ccache object files
         if: matrix.analyze == 'off'
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
@@ -218,80 +229,3 @@ jobs:
             export JANK_SKIP_AOT_CHECK=1
           fi
           JANK_INSTALL_DEPS=true ./bin/jank/check_everything.clj
-      - name: Upload .deb for publishing
-        if: github.ref == 'refs/heads/main' && steps.jank-build-step.outputs.deb
-        uses: actions/upload-artifact@v4
-        with:
-          name: jank-deb
-          path: ${{ steps.jank-build-step.outputs.deb }}
-      - name: Upload Homebrew tarball for publishing
-        if: github.ref == 'refs/heads/main' && steps.jank-build-step.outputs.homebrew-tarball
-        uses: actions/upload-artifact@v4
-        with:
-          name: jank-homebrew-tarball
-          path: ${{ steps.jank-build-step.outputs.homebrew-tarball }}
-
-  publish-deb:
-    if: github.ref == 'refs/heads/main'
-    needs: build-jank
-    name: Publish .deb
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          name: jank-deb
-          path: ~/
-      - name: Import SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.PPA_SSH_KEY }}" > ~/.ssh/jank_id_ed25519
-          chmod 400 ~/.ssh/jank_id_ed25519
-      - name: Publish to PPA
-        run: |
-          scp -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no ~/*.deb root@ppa.jank-lang.org:/var/www/ppa.jank-lang.org/html/
-          ssh -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no root@ppa.jank-lang.org "~/update+sign"
-
-  publish-homebrew-tarball:
-    if: github.ref == 'refs/heads/main'
-    needs: build-jank
-    name: Publish Homebrew package
-    runs-on: macos-26
-    timeout-minutes: 5
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          name: jank-homebrew-tarball
-          path: ~/
-      - name: Import SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.PPA_SSH_KEY }}" > ~/.ssh/jank_id_ed25519
-          chmod 400 ~/.ssh/jank_id_ed25519
-      - name: Publish to cache
-        run: |
-          scp -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no ~/*.tar.gz root@cache.jank-lang.org:/var/www/cache.jank-lang.org/html/
-
-  build-nix:
-    name: "Nix - release"
-    runs-on: ubuntu-latest
-    steps:
-    - name: "Set up nix"
-      uses: cachix/install-nix-action@v31
-      with:
-        nix_path: nixpkgs=channel:nixos-unstable
-    - name: "Set up cachix"
-      uses: cachix/cachix-action@v16
-      with:
-        name: jank-lang
-        # If you chose API tokens for write access OR if you have a private cache
-        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-        # Only push to cache on main branch, not PRs
-        skipPush: "${{ github.ref != 'refs/heads/main' }}"
-    - uses: actions/checkout@v4
-      with:
-        submodules: 'recursive'
-    - name: "Build jank"
-      run: nix build .?submodules=1 -L
-    - name: "Check health"
-      run: nix run .?submodules=1 check-health

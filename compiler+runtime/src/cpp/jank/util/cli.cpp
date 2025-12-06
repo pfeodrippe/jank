@@ -47,12 +47,27 @@ namespace jank::util::cli
       ->check(CLI::Range(0, 3));
 
     std::map<std::string, codegen_type> const codegen_types{
-      { "llvm_ir", codegen_type::llvm_ir },
-      {     "cpp",     codegen_type::cpp }
+      {    "llvm-ir",    codegen_type::llvm_ir },
+      {        "cpp",        codegen_type::cpp },
+      {   "wasm-aot",   codegen_type::wasm_aot },
+      { "wasm-patch", codegen_type::wasm_patch }
     };
     cli.add_option("--codegen", opts.codegen, "The type of code generation to use.")
-      ->transform(CLI::CheckedTransformer(codegen_types).description("{llvm_ir,cpp}"))
-      ->default_str(make_default("llvm_ir"));
+      ->transform(
+        CLI::CheckedTransformer(codegen_types).description("{llvm-ir,cpp,wasm-aot,wasm-patch}"))
+      ->default_str(make_default(codegen_type_str(opts.codegen)));
+    cli.add_flag("--save-cpp",
+                 opts.save_cpp,
+                 "Save generated C++ code to a file (useful for AOT/WASM compilation).");
+    cli.add_option("--save-cpp-path",
+                   opts.save_cpp_path,
+                   "Path to save generated C++ code (requires --save-cpp or --codegen wasm-aot).");
+    cli.add_flag("--save-llvm-ir",
+                 opts.save_llvm_ir,
+                 "Save generated LLVM IR to a file (useful for WASM/cross-compilation).");
+    cli.add_option("--save-llvm-ir-path",
+                   opts.save_llvm_ir_path,
+                   "Path to save generated LLVM IR code.");
 
     /* Native dependencies. */
     cli.add_option("-I,--include-dir",
@@ -66,10 +81,28 @@ namespace jank::util::cli
     cli.add_option("-D,--define-macro",
                    opts.define_macros,
                    "Defines macro value, sets to 1 if omitted. Can be specified multiple times.");
-    cli.add_option("-l",
+    cli.add_option("-l,--lib",
                    opts.libs,
                    "Library identifiers, absolute or relative paths eg. -lfoo for libfoo.so or "
                    "foo.dylib. Can be specified multiple times.");
+    cli.add_option("--jit-lib",
+                   opts.jit_libs,
+                   "Libraries to load into JIT only (not passed to AOT linker). "
+                   "Use for symbol resolution during compilation without creating runtime dependency. "
+                   "Can be specified multiple times.");
+    cli.add_option("--link-lib",
+                   opts.link_libs,
+                   "Libraries to pass to AOT linker only (not loaded into JIT). "
+                   "Use for static libraries (.a) or libraries only needed at link time. "
+                   "Can be specified multiple times.");
+    cli.add_option("--obj",
+                   opts.object_files,
+                   "Absolute or relative path to object files (.o) to load into JIT. "
+                   "Can be specified multiple times.");
+    cli.add_option("--framework",
+                   opts.frameworks,
+                   "macOS framework to link (e.g., --framework Cocoa). "
+                   "Can be specified multiple times.");
 
     /* Run subcommand. */
     auto &cli_run(*cli.add_subcommand("run", "Load and run a file."));

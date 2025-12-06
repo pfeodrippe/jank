@@ -19,9 +19,13 @@ namespace jank::runtime
 
   read::source meta_source(jtl::option<object_ref> const &o);
   read::source object_source(object_ref const o);
+  read::source meta_source_hint(object_ref const meta);
+  read::source object_source_hint(object_ref const o);
   obj::persistent_hash_map_ref source_to_meta(read::source const &source);
   obj::persistent_hash_map_ref
   source_to_meta(read::source_position const &start, read::source_position const &end);
   object_ref strip_source_from_meta(object_ref meta);
   jtl::option<object_ref> strip_source_from_meta_opt(jtl::option<object_ref> const &meta);
+  void push_source_hint(read::source const &source);
+  void pop_source_hint();
 }

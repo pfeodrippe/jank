@@ -1,0 +1,11 @@
+(ns eita-simple)
+
+;; Test basic core functions without clojure.set
+(def numbers [1 2 3 (+ 44 49) 5])
+(def doubled (map #(* 2 %) numbers))
+(def filtered (filter even? numbers))
+
+(println "Numbers:" numbers)
+(println "Doubled:" (vec doubled))
+(println "Even numbers:" (vec filtered))
+(println "WASM build test completed successfully!")

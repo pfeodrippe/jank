@@ -37,17 +37,21 @@ namespace jank::runtime
     return make_box<obj::integer>(i);
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Only needed when native_big_integer != i64 (boost::multiprecision)
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline auto make_box(native_big_integer const &i)
   {
     return make_box<obj::big_integer>(i);
   }
 
+  // Only needed when native_big_decimal != f64 (boost::multiprecision)
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline auto make_box(native_big_decimal const &i)
   {
     return make_box<obj::big_decimal>(i);
   }
+#endif
 
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline auto make_box(char const i)

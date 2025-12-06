@@ -12,16 +12,12 @@ namespace jtl
   using allocator_type = jank::native_allocator<string_builder::value_type>;
   using allocator_traits = std::allocator_traits<allocator_type>;
 
-  /* NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) */
-  static allocator_type allocator;
-
   static void realloc(string_builder &sb, usize const required)
   {
     auto const new_capacity{ std::bit_ceil(required) };
-    /* TODO: Pointer-free GC alloc. */
-    auto const new_data{ allocator_traits::allocate(allocator, new_capacity) };
+    auto const new_data{ reinterpret_cast<char *>(GC_malloc_atomic(new_capacity)) };
     string_builder::traits_type::copy(new_data, sb.buffer, sb.pos);
-    allocator_traits::deallocate(allocator, sb.buffer, sb.pos);
+    GC_free(sb.buffer);
     sb.buffer = new_data;
     sb.capacity = new_capacity;
   }
@@ -103,7 +99,7 @@ namespace jtl
 
   string_builder::~string_builder()
   {
-    allocator_traits::deallocate(allocator, buffer, pos);
+    GC_free(buffer);
   }
 
   string_builder &string_builder::operator()(bool const d) &
@@ -239,10 +235,13 @@ namespace jtl
     return *this;
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Only needed when native_big_integer is a boost type with .str() method
   string_builder &string_builder::operator()(jank::native_big_integer const &d) &
   {
     return (*this)(d.str());
   }
+#endif
 
   string_builder &string_builder::operator()(char const d) &
   {
@@ -348,10 +347,12 @@ namespace jtl
     (*this)(d);
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
   void string_builder::push_back(jank::native_big_integer const &d) &
   {
     (*this)(d);
   }
+#endif
 
   void string_builder::push_back(char const d) &
   {

@@ -10,12 +10,16 @@
 #include <gc/gc_cpp.h>
 #include <gc/gc_allocator.h>
 
+// For WASM, we include immer memory policy components but avoid boost/folly
 #include <immer/heap/gc_heap.hpp>
 #include <immer/heap/heap_policy.hpp>
 #include <immer/memory_policy.hpp>
-#include <boost/multiprecision/cpp_int.hpp>
-#include <boost/multiprecision/cpp_dec_float.hpp>
-#include <folly/FBVector.h>
+
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <boost/multiprecision/cpp_int.hpp>
+  #include <boost/multiprecision/cpp_dec_float.hpp>
+  #include <folly/FBVector.h>
+#endif
 
 #include <jtl/primitive.hpp>
 
@@ -23,6 +27,8 @@ namespace jank
 {
   template <typename T>
   using native_allocator = gc_allocator<T>;
+
+  // Same memory policy for both native and WASM - uses immer's gc_heap
   using memory_policy = immer::memory_policy<immer::heap_policy<immer::gc_heap>,
                                              immer::no_refcount_policy,
                                              immer::default_lock_policy,
@@ -30,6 +36,8 @@ namespace jank
                                              false>;
 
   using native_persistent_string_view = std::string_view;
+
+#ifndef JANK_TARGET_EMSCRIPTEN
   using native_big_integer
     = boost::multiprecision::number<boost::multiprecision::cpp_int_backend<>>;
   using native_big_decimal
@@ -38,12 +46,21 @@ namespace jank
 
   template <typename T>
   using native_vector = folly::fbvector<T, native_allocator<T>>;
+#else
+  // Minimal stubs for WASM - boost-multiprecision causes math.h macro conflicts
+  using native_big_integer = long long; // Stub
+  using native_big_decimal = double; // Stub
+
+  template <typename T>
+  using native_vector = std::vector<T, native_allocator<T>>;
+#endif
+
   template <typename T>
   using native_deque = std::deque<T, native_allocator<T>>;
   template <typename T>
   using native_list = std::list<T, native_allocator<T>>;
   template <typename K, typename V>
-  using native_map = std::map<K, V, native_allocator<std::pair<K const, V>>>;
+  using native_map = std::map<K, V, std::less<K>, native_allocator<std::pair<K const, V>>>;
   template <typename T>
   using native_set = std::set<T, std::less<T>, native_allocator<T>>;
 

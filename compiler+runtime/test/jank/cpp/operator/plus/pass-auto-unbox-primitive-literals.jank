@@ -1,0 +1,14 @@
+; Test automatic unboxing of primitive literals in let bindings for cpp/ operators
+(let* [n 5
+       m 10
+       x 3.14
+       y 2.0
+       ; Integer arithmetic
+       _ (assert (= 15 (cpp/+ n m)))
+       _ (assert (= 5 (cpp/- m n)))
+       ; Real arithmetic
+       _ (assert (< 5.0 (cpp/+ x y)))
+       _ (assert (> 6.0 (cpp/+ x y)))
+       ; Mixed with explicit cpp/ type
+       _ (assert (= 8 (cpp/+ n (cpp/int. 3))))]
+  :success)

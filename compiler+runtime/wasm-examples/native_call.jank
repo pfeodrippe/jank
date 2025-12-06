@@ -1,0 +1,9 @@
+;; Test calling native functions directly
+;; This doesn't work yet because we need to evaluate, not just parse
+
+;; For now, just test that we can parse various things
+42
+"hello"
+:keyword
+[1 2 3]
+{:a 1 :b 2}

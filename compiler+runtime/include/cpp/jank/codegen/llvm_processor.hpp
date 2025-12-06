@@ -78,7 +78,9 @@ namespace jank::codegen
   {
     module,
     function,
-    eval
+    eval,
+    wasm_aot, // Generates standalone C++ modules for WASM (no JIT)
+    wasm_patch // Generates SIDE_MODULE patches for hot-reload (extern C, no headers)
   };
 
   constexpr char const *compilation_target_str(compilation_target const t)
@@ -91,6 +93,10 @@ namespace jank::codegen
         return "function";
       case compilation_target::eval:
         return "eval";
+      case compilation_target::wasm_aot:
+        return "wasm_aot";
+      case compilation_target::wasm_patch:
+        return "wasm_patch";
       default:
         return "unknown";
     }
@@ -110,7 +116,7 @@ namespace jank::codegen
                    compilation_target target);
     /* For this ctor, we're inheriting the context from another function, which means
      * we're building a nested function. */
-    llvm_processor(analyze::expr::function_ref expr, std::unique_ptr<reusable_context> ctx);
+    llvm_processor(analyze::expr::function_ref expr, jtl::ref<reusable_context> ctx);
     llvm_processor(llvm_processor const &) = delete;
     llvm_processor(llvm_processor &&) noexcept = default;
 

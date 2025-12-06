@@ -1,20 +1,36 @@
 #include <algorithm>
 
-#include <clang/Interpreter/CppInterOp.h>
-#include <clang/Sema/Sema.h>
-#include <Interpreter/Compatibility.h>
+#include <jank/runtime/obj/keyword.hpp>
+#include <jank/runtime/obj/persistent_string.hpp>
+#include <jank/runtime/rtti.hpp>
+
+// Include real CppInterOp when:
+// 1. Not on emscripten (native build), OR
+// 2. On emscripten but with CppInterOp available (WASM with eval support)
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <Interpreter/Compatibility.h>
+  #include <Interpreter/CppInterOpInterpreter.h>
+  #include <clang/Interpreter/CppInterOp.h>
+  #include <clang/Sema/Sema.h>
+  #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+  #include <llvm/Support/Error.h>
+#endif
 
 #include <jank/analyze/cpp_util.hpp>
 #include <jank/analyze/visit.hpp>
+#include <jank/analyze/local_frame.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core/munge.hpp>
+#include <jank/jit/interpreter.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/scope_exit.hpp>
 #include <jank/error/analyze.hpp>
 #include <jank/error/codegen.hpp>
+#include <jank/error/runtime.hpp>
 
 namespace jank::analyze::cpp_util
 {
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
   /* Even with a SFINAE trap, Clang can get into a bad state when failing to instantiate
    * templates. In that bad state, whatever the next thing is that we parse fails. So, we
    * hack around this by trying to detect that state and them just giving Clang something
@@ -23,7 +39,7 @@ namespace jank::analyze::cpp_util
    * After that failure, Clang gets back into a good state. */
   static void reset_sfinae_state()
   {
-    static_cast<void>(runtime::__rt_ctx->jit_prc.interpreter->Parse("1"));
+    static_cast<void>(jit::get_interpreter()->Parse("1"));
   }
 
   jtl::string_result<void> instantiate_if_needed(jtl::ptr<void> const scope)
@@ -156,13 +172,13 @@ namespace jank::analyze::cpp_util
 
   jtl::string_result<jtl::ptr<void>> resolve_literal_type(jtl::immutable_string const &literal)
   {
-    auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
+    auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
     clang::DiagnosticErrorTrap const trap{ diag };
 
     auto const alias{ runtime::__rt_ctx->unique_namespaced_string() };
     /* We add a new line so that a trailing // comment won't interfere with our code. */
     auto const code{ util::format("using {} = {}\n;", runtime::munge(alias), literal) };
-    auto parse_res{ runtime::__rt_ctx->jit_prc.interpreter->Parse(code.c_str()) };
+    auto parse_res{ jit::get_interpreter()->Parse(code.c_str()) };
     if(!parse_res || trap.hasErrorOccurred())
     {
       reset_sfinae_state();
@@ -210,7 +226,7 @@ namespace jank::analyze::cpp_util
   jtl::string_result<literal_value_result>
   resolve_literal_value(jtl::immutable_string const &literal)
   {
-    auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
+    auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
     clang::DiagnosticErrorTrap const trap{ diag };
 
     auto const alias{ runtime::__rt_ctx->unique_namespaced_string() };
@@ -220,7 +236,7 @@ namespace jank::analyze::cpp_util
       runtime::munge(alias),
       literal) };
     //util::println("cpp/value code: {}", code);
-    auto parse_res{ runtime::__rt_ctx->jit_prc.interpreter->Parse(code.c_str()) };
+    auto parse_res{ jit::get_interpreter()->Parse(code.c_str()) };
     if(!parse_res || trap.hasErrorOccurred())
     {
       return err("Unable to parse C++ literal.");
@@ -235,7 +251,7 @@ namespace jank::analyze::cpp_util
       return err("Invalid C++ literal.");
     }
 
-    auto exec_res{ runtime::__rt_ctx->jit_prc.interpreter->Execute(*parse_res) };
+    auto exec_res{ jit::get_interpreter()->Execute(*parse_res) };
     if(exec_res)
     {
       return err("Unable to load C++ literal.");
@@ -292,23 +308,63 @@ namespace jank::analyze::cpp_util
     return res;
   }
 
+  jtl::immutable_string get_qualified_type_name(jtl::ptr<void> const type)
+  {
+    if(type == untyped_object_ptr_type())
+    {
+      return "jank::runtime::object_ref";
+    }
+    /* TODO: Handle typed object refs, too. */
+
+    /* TODO: We probably want a recursive approach to this, for types and scopes. */
+    auto const qual_type{ clang::QualType::getFromOpaquePtr(type) };
+    if(auto const *alias{
+         llvm::dyn_cast_or_null<clang::TypedefType>(qual_type.getTypePtrOrNull()) };
+       alias)
+    {
+      if(auto const *alias_decl{ alias->getDecl() }; alias_decl)
+      {
+        auto alias_name{ alias_decl->getQualifiedNameAsString() };
+        if(!alias_name.empty())
+        {
+          if(Cpp::IsPointerType(type))
+          {
+            alias_name += "*";
+          }
+          return alias_name;
+        }
+      }
+    }
+
+    if(auto const scope{ Cpp::GetScopeFromType(type) }; scope)
+    {
+      auto name{ get_qualified_name(scope) };
+      if(Cpp::IsPointerType(type))
+      {
+        name = name + "*";
+      }
+      return name;
+    }
+    return Cpp::GetTypeAsString(type);
+  }
+
   /* This is a quick and dirty helper to get the RTTI for a given QualType. We need
    * this for exception catching. */
   void register_rtti(jtl::ptr<void> const type)
   {
-    auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
+    auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
     clang::DiagnosticErrorTrap const trap{ diag };
     auto const alias{ runtime::__rt_ctx->unique_namespaced_string() };
     auto const code{ util::format("&typeid({})", Cpp::GetTypeAsString(type)) };
     clang::Value value;
-    auto exec_res{ runtime::__rt_ctx->jit_prc.interpreter->ParseAndExecute(code.c_str(), &value) };
+    auto exec_res{ jit::get_interpreter()->ParseAndExecute(code.c_str(), &value) };
     if(exec_res || trap.hasErrorOccurred())
     {
       throw error::internal_codegen_failure(
         util::format("Unable to get RTTI for '{}'.", Cpp::GetTypeAsString(type)));
     }
 
-    auto const lljit{ runtime::__rt_ctx->jit_prc.interpreter->getExecutionEngine() };
+    auto const lljit{ jit::get_interpreter()->getExecutionEngine() };
     llvm::orc::SymbolMap symbols;
     llvm::orc::MangleAndInterner interner{ lljit->getExecutionSession(), lljit->getDataLayout() };
     auto const &symbol{ Cpp::MangleRTTI(type) };
@@ -334,6 +390,98 @@ namespace jank::analyze::cpp_util
     static jtl::ptr<void> const ret{ Cpp::GetCanonicalType(
       Cpp::GetTypeFromScope(Cpp::GetScopeFromCompleteName("jank::runtime::object_ref"))) };
     return ret;
+  }
+
+  jtl::ptr<void> tag_to_cpp_type(runtime::object_ref const tag)
+  {
+    if(tag.is_nil())
+    {
+      return nullptr;
+    }
+
+    /* Handle keyword tags like :bool, :i32, :f64, etc. */
+    if(tag->type == runtime::object_type::keyword)
+    {
+      auto const kw = runtime::expect_object<runtime::obj::keyword>(tag);
+      auto const &name = kw->get_name();
+      /* Boolean */
+      if(name == "bool" || name == "boolean")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("bool"));
+      }
+      /* Signed integers */
+      if(name == "i8")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("int8_t"));
+      }
+      if(name == "i16")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("int16_t"));
+      }
+      if(name == "i32" || name == "int")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("int"));
+      }
+      if(name == "i64" || name == "long")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("long"));
+      }
+      /* Unsigned integers */
+      if(name == "u8")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("uint8_t"));
+      }
+      if(name == "u16")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("uint16_t"));
+      }
+      if(name == "u32")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("unsigned int"));
+      }
+      if(name == "u64")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("unsigned long"));
+      }
+      /* Floating point */
+      if(name == "f32" || name == "float")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("float"));
+      }
+      if(name == "f64" || name == "double")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("double"));
+      }
+      /* Size type */
+      if(name == "size_t")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("size_t"));
+      }
+      /* Char */
+      if(name == "char")
+      {
+        return Cpp::GetPointerType(Cpp::GetType("char"));
+      }
+      /* Try to resolve as a C++ type name */
+      auto const type = Cpp::GetType(std::string(name));
+      if(type)
+      {
+        return Cpp::GetPointerType(type);
+      }
+    }
+
+    /* Handle string tags for arbitrary C++ types */
+    if(tag->type == runtime::object_type::persistent_string)
+    {
+      auto const str = runtime::expect_object<runtime::obj::persistent_string>(tag);
+      auto const type_res = resolve_literal_type(str->data);
+      if(type_res.is_ok())
+      {
+        return Cpp::GetPointerType(type_res.expect_ok());
+      }
+    }
+
+    return nullptr;
   }
 
   bool is_member_function(jtl::ptr<void> const scope)
@@ -429,6 +577,19 @@ namespace jank::analyze::cpp_util
         {
           return typed_expr->binding->type;
         }
+        else if constexpr(jtl::is_same<T, expr::var_deref>)
+        {
+          /* Vars always hold object* at runtime. The tag_type is just a hint
+           * for cpp/unbox to know what type to cast to - it should be accessed
+           * directly via typed_expr->tag_type, not via expression_type. */
+          return untyped_object_ptr_type();
+        }
+        else if constexpr(jtl::is_same<T, expr::cpp_box>)
+        {
+          /* cpp/box returns an object*, not the underlying pointer type.
+           * Use get_boxed_type() to get the underlying type for inference. */
+          return untyped_object_ptr_type();
+        }
         else if constexpr(jtl::is_same<T, expr::let> || jtl::is_same<T, expr::letfn>)
         {
           return expression_type(typed_expr->body);
@@ -511,9 +672,21 @@ namespace jank::analyze::cpp_util
      * The user will need to specify the correct type by using a cast. */
     for(usize arg_idx{}; arg_idx < max_arg_count; ++arg_idx)
     {
+      /* If this argument index is beyond what we were given (i.e., the caller is using
+       * default parameters for this position), skip to the next argument. */
+      if(arg_idx + member_offset >= arg_types.size())
+      {
+        continue;
+      }
       /* If our input argument here isn't an object ptr, there's no implicit conversion
        * we're going to consider. Skip to the next argument. */
-      auto const arg_type{ Cpp::GetNonReferenceType(arg_types[arg_idx + member_offset].m_Type) };
+      auto const raw_arg_type{ arg_types[arg_idx + member_offset].m_Type };
+      /* Skip if the arg type is null - this can happen with certain cpp/& expressions. */
+      if(!raw_arg_type)
+      {
+        continue;
+      }
+      auto const arg_type{ Cpp::GetNonReferenceType(raw_arg_type) };
       auto const is_arg_untyped_obj{ is_untyped_object(arg_type) };
       auto const is_arg_typed_obj{ is_typed_object(arg_type) };
       auto const is_arg_obj{ is_arg_untyped_obj || is_arg_typed_obj };
@@ -625,10 +798,10 @@ namespace jank::analyze::cpp_util
     static auto const convert_template{ Cpp::GetScopeFromCompleteName("jank::runtime::convert") };
     Cpp::TemplateArgInfo const arg{ Cpp::GetCanonicalType(
       Cpp::GetTypeWithoutCv(Cpp::GetNonReferenceType(type))) };
-    clang::Sema::SFINAETrap const trap{ runtime::__rt_ctx->jit_prc.interpreter->getSema(), true };
+    clang::Sema::SFINAETrap const trap{ jit::get_interpreter()->getSema(), true };
     Cpp::TCppScope_t instantiation{};
     {
-      auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
+      auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
       auto old_client{ diag.takeClient() };
       diag.setClient(new clang::IgnoringDiagConsumer{}, true);
       util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
@@ -854,4 +1027,177 @@ namespace jank::analyze::cpp_util
 
     return implicit_conversion_action::unknown;
   }
+#else
+  namespace
+  {
+    constexpr char const *cpp_unavailable_msg{
+      "C++ interop is unavailable when targeting emscripten."
+    };
+
+    template <typename T>
+    jtl::string_result<T> cpp_unavailable_string_result()
+    {
+      return err(cpp_unavailable_msg);
+    }
+  }
+
+  jtl::string_result<void> instantiate_if_needed(jtl::ptr<void> const)
+  {
+    return err(cpp_unavailable_msg);
+  }
+
+  jtl::ptr<void> apply_pointers(jtl::ptr<void>, u8)
+  {
+    return {};
+  }
+
+  jtl::ptr<void> resolve_type(jtl::immutable_string const &, u8)
+  {
+    return {};
+  }
+
+  jtl::string_result<jtl::ptr<void>> resolve_scope(jtl::immutable_string const &)
+  {
+    return cpp_unavailable_string_result<jtl::ptr<void>>();
+  }
+
+  jtl::string_result<jtl::ptr<void>> resolve_literal_type(jtl::immutable_string const &)
+  {
+    return cpp_unavailable_string_result<jtl::ptr<void>>();
+  }
+
+  jtl::string_result<literal_value_result> resolve_literal_value(jtl::immutable_string const &)
+  {
+    return cpp_unavailable_string_result<literal_value_result>();
+  }
+
+  native_vector<jtl::ptr<void>> find_adl_scopes(native_vector<jtl::ptr<void>> const &)
+  {
+    return {};
+  }
+
+  jtl::immutable_string get_qualified_name(jtl::ptr<void>)
+  {
+    return {};
+  }
+
+  void register_rtti(jtl::ptr<void>)
+  {
+  }
+
+  jtl::ptr<void> expression_type(expression_ref)
+  {
+    return {};
+  }
+
+  jtl::ptr<void> non_void_expression_type(expression_ref)
+  {
+    return {};
+  }
+
+  jtl::ptr<void> expression_scope(expression_ref const)
+  {
+    return {};
+  }
+
+  jtl::string_result<std::vector<Cpp::TemplateArgInfo>>
+  find_best_arg_types_with_conversions(std::vector<void *> const &,
+                                       std::vector<Cpp::TemplateArgInfo> const &,
+                                       bool)
+  {
+    return cpp_unavailable_string_result<std::vector<Cpp::TemplateArgInfo>>();
+  }
+
+  jtl::string_result<jtl::ptr<void>> find_best_overload(std::vector<void *> const &,
+                                                        std::vector<Cpp::TemplateArgInfo> &,
+                                                        std::vector<Cpp::TCppScope_t> const &)
+  {
+    return cpp_unavailable_string_result<jtl::ptr<void>>();
+  }
+
+  bool is_trait_convertible(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_untyped_object(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_typed_object(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_any_object(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_primitive(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_member_function(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_non_static_member_function(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_nullptr(jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  bool is_implicitly_convertible(jtl::ptr<void>, jtl::ptr<void>)
+  {
+    return false;
+  }
+
+  jtl::ptr<void> untyped_object_ptr_type()
+  {
+    return {};
+  }
+
+  jtl::ptr<void> untyped_object_ref_type()
+  {
+    return {};
+  }
+
+  jtl::ptr<void> tag_to_cpp_type(runtime::object_ref const)
+  {
+    return {};
+  }
+
+  usize offset_to_typed_object_base(jtl::ptr<void>)
+  {
+    return 0;
+  }
+
+  jtl::option<Cpp::Operator> match_operator(jtl::immutable_string const &)
+  {
+    return none;
+  }
+
+  jtl::option<jtl::immutable_string> operator_name(Cpp::Operator const)
+  {
+    return none;
+  }
+
+  jtl::result<void, error_ref> ensure_convertible(expression_ref const)
+  {
+    return error::runtime_unable_to_load_module(cpp_unavailable_msg);
+  }
+
+  implicit_conversion_action determine_implicit_conversion(jtl::ptr<void>, jtl::ptr<void> const)
+  {
+    return implicit_conversion_action::unknown;
+  }
+#endif
 }
