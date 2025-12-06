@@ -7,7 +7,8 @@ namespace jank::analyze
   enum class conversion_policy : u8
   {
     into_object,
-    from_object
+    from_object,
+    native_print
   };
 
   [[gnu::visibility("default")]]
@@ -19,6 +20,8 @@ namespace jank::analyze
         return "into_object";
       case conversion_policy::from_object:
         return "from_object";
+      case conversion_policy::native_print:
+        return "native_print";
       default:
         return "unknown";
     }

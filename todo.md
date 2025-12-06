@@ -58,6 +58,8 @@
 - nREPL
   - [x] autocompletion for ns
   - [x] switch to a ns automatically when evaluating from there
+  - [ ] eval with `(bindings [*allow-native-return* true] ... )`
+  - [ ] pprint middleware
   - [ ] find some way to search, for a given `cpp/thing`, where `thing` is located (so we can later require the file and use alias)
   - [ ]
 - [ ] vybe

@@ -74,6 +74,11 @@ namespace jank::runtime
     compile_files_var->bind_root(jank_false);
     compile_files_var->dynamic.store(true);
 
+    auto const allow_native_return_sym(make_box<obj::symbol>("*allow-native-return*"));
+    allow_native_return_var = core->intern_var(allow_native_return_sym);
+    allow_native_return_var->bind_root(jank_false);
+    allow_native_return_var->dynamic.store(true);
+
     auto const loaded_libs_sym(make_box<obj::symbol>("*loaded-libs*"));
     loaded_libs_var = core->intern_var(loaded_libs_sym);
     loaded_libs_var->bind_root(make_box<obj::atom>(obj::persistent_sorted_set::empty()));
@@ -179,7 +184,7 @@ namespace jank::runtime
       ret = form.expect_ok().unwrap().ptr;
       forms.emplace_back(ret);
 #else
-      analyze::processor an_prc;
+      /* We use the context's analyzer which may have allow_native_return set for REPL use. */
       auto const expr(analyze::pass::optimize(
         an_prc.analyze(form.expect_ok().unwrap().ptr, analyze::expression_position::statement)
           .expect_ok()));

@@ -239,5 +239,9 @@ namespace jank::analyze
     local_frame_ptr root_frame;
     native_vector<runtime::object_ref> macro_expansions;
     jtl::option<expr::let_ptr> loop_details;
+    /* When true, allows native C++ values to be returned without conversion to jank objects.
+     * The native value will be wrapped in a printable representation like "(Type) address".
+     * This is useful for REPL development when interacting with native C++ code. */
+    bool allow_native_return{ false };
   };
 }

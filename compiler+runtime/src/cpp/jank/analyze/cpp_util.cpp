@@ -21,6 +21,7 @@
 #include <jank/analyze/local_frame.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core/munge.hpp>
+#include <jank/runtime/core/truthy.hpp>
 #include <jank/jit/interpreter.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/scope_exit.hpp>
@@ -924,14 +925,10 @@ namespace jank::analyze::cpp_util
 
   jtl::result<void, error_ref> ensure_convertible(expression_ref const expr)
   {
-    auto const type{ expression_type(expr) };
-    if(!is_any_object(type) && !is_trait_convertible(type))
-    {
-      return error::analyze_invalid_conversion(
-        util::format("This function is returning a native object of type '{}', which is not "
-                     "convertible to a jank runtime object.",
-                     Cpp::GetTypeAsString(type)));
-    }
+    /* Always allow non-convertible types through at analysis time.
+     * The runtime check for *allow-native-return* happens in the generated code,
+     * which allows (binding [*allow-native-return* true] ...) to work. */
+    (void)expr;
     return ok();
   }
 

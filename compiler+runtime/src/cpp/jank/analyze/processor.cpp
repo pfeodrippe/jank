@@ -1956,24 +1956,32 @@ namespace jank::analyze
       if(!cpp_util::is_any_object(last_expression_type)
          && !cpp_util::is_trait_convertible(last_expression_type))
       {
-        /* TODO: Error. */
-        return error::analyze_invalid_cpp_conversion(
-          util::format("This function is returning a native object of type '{}', which is not "
-                       "convertible to a jank runtime object.",
-                       Cpp::GetTypeAsString(last_expression_type)),
-          object_source(list),
-          latest_expansion(macro_expansions));
+        /* Always wrap non-convertible types in a native_print cast. The runtime check for
+         * *allow-native-return* happens in the generated code, which allows
+         * (binding [*allow-native-return* true] ...) to work correctly at runtime. */
+        auto const cast_position{ last_expression->position };
+        last_expression->propagate_position(expression_position::value);
+        body_do->values.back() = jtl::make_ref<expr::cpp_cast>(
+          cast_position,
+          last_expression->frame,
+          true, /* needs_box */
+          cpp_util::untyped_object_ptr_type(),
+          last_expression_type,
+          conversion_policy::native_print,
+          last_expression);
       }
-
-      auto const new_last_expression{ apply_implicit_conversion(last_expression,
-                                                                last_expression_type,
-                                                                cpp_util::untyped_object_ptr_type(),
-                                                                macro_expansions) };
-      if(new_last_expression.is_err())
+      else
       {
-        return new_last_expression.expect_err();
+        auto const new_last_expression{ apply_implicit_conversion(last_expression,
+                                                                  last_expression_type,
+                                                                  cpp_util::untyped_object_ptr_type(),
+                                                                  macro_expansions) };
+        if(new_last_expression.is_err())
+        {
+          return new_last_expression.expect_err();
+        }
+        body_do->values.back() = new_last_expression.expect_ok();
       }
-      body_do->values.back() = new_last_expression.expect_ok();
     }
 
     return ok(expr::function_arity{ std::move(param_symbols),

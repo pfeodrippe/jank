@@ -211,13 +211,18 @@ namespace jank::evaluate
     expression_ref expr_to_add{ expr };
     if(!cpp_util::is_untyped_object(expr_type))
     {
-      jank_debug_assert(cpp_util::is_trait_convertible(expr_type));
+      /* For non-convertible types, use native_print policy. The runtime check for
+       * *allow-native-return* happens in the generated code, which allows
+       * (binding [*allow-native-return* true] ...) to work at runtime. */
+      conversion_policy const policy{ cpp_util::is_trait_convertible(expr_type)
+                                        ? conversion_policy::into_object
+                                        : conversion_policy::native_print };
       expr_to_add = jtl::make_ref<expr::cpp_cast>(expr->position,
                                                   expr->frame,
                                                   expr->needs_box,
                                                   cpp_util::untyped_object_ptr_type(),
                                                   expr_type,
-                                                  conversion_policy::into_object,
+                                                  policy,
                                                   expr);
       expr->propagate_position(expression_position::value);
     }
