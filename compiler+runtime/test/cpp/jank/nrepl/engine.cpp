@@ -2829,17 +2829,14 @@ namespace jank::nrepl_server::asio
     {
       engine eng;
 
-      /* First include the header via cpp/raw so the JIT can compile it */
+      /* Require the template_types.hpp header from the include path with :scope.
+       * The header is located at include/cpp/jank/test/template_types.hpp and defines
+       * the namespace template_type_test with various template functions for testing. */
       eng.handle(make_message({
-        {   "op",                                                               "eval" },
-        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/template_types.hpp\""))" }
-      }));
-
-      /* Then require it with :scope to get the namespace alias */
-      eng.handle(make_message({
-        {   "op",                                                                     "eval"                 },
+        {   "op", "eval" },
         { "code",
-         R"((require '["../test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
+         "(require '[\"jank/test/template_types.hpp\" :as tmpl-test :scope "
+         "\"template_type_test\"])" }
       }));
 
       /* Get info for a non-template method to verify header loading */
@@ -2852,59 +2849,29 @@ namespace jank::nrepl_server::asio
       REQUIRE(responses.size() == 1);
       auto const &payload(responses.front());
 
-      /* Debug: print all keys in the payload */
-      std::cerr << "Info response keys for entity.get_id:";
-      for(auto const &[key, val] : payload)
-      {
-        std::cerr << " " << key;
-      }
-      std::cerr << "\n";
-
-      /* Check for errors first */
-      if(payload.contains("status"))
-      {
-        auto const &status_list(payload.at("status").as_list());
-        for(auto const &s : status_list)
-        {
-          std::cerr << "Status: " << s.as_string() << "\n";
-        }
-      }
-
       auto const arglists_str_it(payload.find("arglists-str"));
-      /* In sanitizer builds, the include might fail - make this a soft check */
-      if(arglists_str_it == payload.end())
-      {
-        WARN_MESSAGE(false,
-                     "arglists-str not found - header may not have loaded properly in this build");
-      }
-      else
-      {
-        auto const &arglists_str(arglists_str_it->second.as_string());
-        /* Should have the this pointer with proper type */
-        CHECK_MESSAGE(
-          arglists_str.find("template_type_test::entity") != std::string::npos,
-          "arglists should contain 'template_type_test::entity', got: " << arglists_str);
-      }
+      REQUIRE_MESSAGE(arglists_str_it != payload.end(),
+                      "arglists-str not found in info response");
+
+      auto const &arglists_str(arglists_str_it->second.as_string());
+      /* Should have the this pointer with proper type */
+      CHECK_MESSAGE(arglists_str.find("template_type_test::entity") != std::string::npos,
+                    "arglists should contain 'template_type_test::entity', got: " << arglists_str);
     }
 
     SUBCASE("variadic template member function shows Args types")
     {
       engine eng;
 
-      /* First include the header via cpp/raw so the JIT can compile it */
+      /* Require the template_types.hpp header with :scope for template_type_test namespace */
       eng.handle(make_message({
-        {   "op",                                                               "eval" },
-        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/template_types.hpp\""))" }
-      }));
-
-      /* Then require it with :scope to get the namespace alias */
-      eng.handle(make_message({
-        {   "op",                                                                     "eval"                 },
+        {   "op", "eval" },
         { "code",
-         R"((require '["../test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
+         "(require '[\"jank/test/template_types.hpp\" :as tmpl-test :scope "
+         "\"template_type_test\"])" }
       }));
 
-      /* Get info for the variadic template method - similar to flecs::entity::child */
+      /* Get info for the variadic template method */
       auto responses(eng.handle(make_message({
         {  "op",                   "info" },
         { "sym", "tmpl-test/entity.child" },
@@ -2916,59 +2883,43 @@ namespace jank::nrepl_server::asio
 
       /* Check arglists-str doesn't contain "auto" */
       auto const arglists_str_it(payload.find("arglists-str"));
-      /* In sanitizer builds, the include might fail - make this a soft check */
-      if(arglists_str_it == payload.end())
-      {
-        WARN_MESSAGE(false,
-                     "arglists-str not found - header may not have loaded properly in this build");
-      }
-      else
-      {
-        auto const &arglists_str(arglists_str_it->second.as_string());
+      REQUIRE_MESSAGE(arglists_str_it != payload.end(),
+                      "arglists-str not found in info response");
 
-        /* Should not contain "auto" - should show actual template parameter types */
-        CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
-                      "arglists should not contain 'auto', got: " << arglists_str);
+      auto const &arglists_str(arglists_str_it->second.as_string());
 
-        /* Should contain "Args" or the actual parameter pack type */
-        bool const has_args_param = arglists_str.find("Args") != std::string::npos
-          || arglists_str.find("args") != std::string::npos;
-        CHECK_MESSAGE(has_args_param,
-                      "arglists should contain template parameter name 'Args' or 'args', got: "
-                        << arglists_str);
-      }
+      /* Should not contain "auto" - should show actual template parameter types */
+      CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
+                    "arglists should not contain 'auto', got: " << arglists_str);
+
+      /* Should contain "Args" or the actual parameter pack type */
+      bool const has_args_param = arglists_str.find("Args") != std::string::npos
+        || arglists_str.find("args") != std::string::npos;
+      CHECK_MESSAGE(has_args_param,
+                    "arglists should contain template parameter name 'Args' or 'args', got: "
+                      << arglists_str);
 
       /* Also check return type is not "auto" */
       auto const return_type_it(payload.find("return-type"));
-      if(return_type_it == payload.end())
-      {
-        WARN_MESSAGE(false,
-                     "return-type not found - header may not have loaded properly in this build");
-      }
-      else
-      {
-        auto const &return_type(return_type_it->second.as_string());
-        /* Return type should be "entity" not "auto" */
-        CHECK_MESSAGE(return_type.find("auto") == std::string::npos,
-                      "return-type should not be 'auto', got: " << return_type);
-      }
+      REQUIRE_MESSAGE(return_type_it != payload.end(),
+                      "return-type not found in info response");
+
+      auto const &return_type(return_type_it->second.as_string());
+      /* Return type should be "entity" not "auto" */
+      CHECK_MESSAGE(return_type.find("auto") == std::string::npos,
+                    "return-type should not be 'auto', got: " << return_type);
     }
 
     SUBCASE("simple template function with T parameter")
     {
       engine eng;
 
-      /* First include the header via cpp/raw so the JIT can compile it */
+      /* Require the template_types.hpp header with :scope for template_type_test namespace */
       eng.handle(make_message({
-        {   "op",                                                               "eval" },
-        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/template_types.hpp\""))" }
-      }));
-
-      /* Then require it with :scope to get the namespace alias */
-      eng.handle(make_message({
-        {   "op",                                                                     "eval"                 },
+        {   "op", "eval" },
         { "code",
-         R"((require '["../test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
+         "(require '[\"jank/test/template_types.hpp\" :as tmpl-test :scope "
+         "\"template_type_test\"])" }
       }));
 
       /* Get info for a simple template function */
@@ -2982,41 +2933,30 @@ namespace jank::nrepl_server::asio
       auto const &payload(responses.front());
 
       auto const arglists_str_it(payload.find("arglists-str"));
-      /* In sanitizer builds, the include might fail - make this a soft check */
-      if(arglists_str_it == payload.end())
-      {
-        WARN_MESSAGE(false,
-                     "arglists-str not found - header may not have loaded properly in this build");
-      }
-      else
-      {
-        auto const &arglists_str(arglists_str_it->second.as_string());
+      REQUIRE_MESSAGE(arglists_str_it != payload.end(),
+                      "arglists-str not found in info response");
 
-        /* Should not contain "auto" */
-        CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
-                      "arglists should not contain 'auto', got: " << arglists_str);
+      auto const &arglists_str(arglists_str_it->second.as_string());
 
-        /* Should contain "T" for the template parameter */
-        CHECK_MESSAGE(arglists_str.find("T ") != std::string::npos,
-                      "arglists should contain template parameter 'T', got: " << arglists_str);
-      }
+      /* Should not contain "auto" */
+      CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
+                    "arglists should not contain 'auto', got: " << arglists_str);
+
+      /* Should contain "T" for the template parameter */
+      CHECK_MESSAGE(arglists_str.find("T ") != std::string::npos,
+                    "arglists should contain template parameter 'T', got: " << arglists_str);
     }
 
     SUBCASE("template method with mixed parameters")
     {
       engine eng;
 
-      /* First include the header via cpp/raw so the JIT can compile it */
+      /* Require the template_types.hpp header with :scope for template_type_test namespace */
       eng.handle(make_message({
-        {   "op",                                                               "eval" },
-        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/template_types.hpp\""))" }
-      }));
-
-      /* Then require it with :scope to get the namespace alias */
-      eng.handle(make_message({
-        {   "op",                                                                     "eval"                 },
+        {   "op", "eval" },
         { "code",
-         R"((require '["../test/cpp/jank/nrepl/template_types.hpp" :as tmpl-test :scope "template_type_test"]))" }
+         "(require '[\"jank/test/template_types.hpp\" :as tmpl-test :scope "
+         "\"template_type_test\"])" }
       }));
 
       /* Get info for template method with const char* and T&& params */
@@ -3030,29 +2970,22 @@ namespace jank::nrepl_server::asio
       auto const &payload(responses.front());
 
       auto const arglists_str_it(payload.find("arglists-str"));
-      /* In sanitizer builds, the include might fail - make this a soft check */
-      if(arglists_str_it == payload.end())
-      {
-        WARN_MESSAGE(false,
-                     "arglists-str not found - header may not have loaded properly in this build");
-      }
-      else
-      {
-        auto const &arglists_str(arglists_str_it->second.as_string());
+      REQUIRE_MESSAGE(arglists_str_it != payload.end(),
+                      "arglists-str not found in info response");
 
-        /* Should not contain "auto" */
-        CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
-                      "arglists should not contain 'auto', got: " << arglists_str);
+      auto const &arglists_str(arglists_str_it->second.as_string());
 
-        /* Should contain the const char* type */
-        CHECK_MESSAGE(
-          arglists_str.find("char") != std::string::npos,
-          "arglists should contain 'char' for const char* param, got: " << arglists_str);
+      /* Should not contain "auto" */
+      CHECK_MESSAGE(arglists_str.find("auto") == std::string::npos,
+                    "arglists should not contain 'auto', got: " << arglists_str);
 
-        /* Should contain "T" for the template parameter */
-        CHECK_MESSAGE(arglists_str.find("T ") != std::string::npos,
-                      "arglists should contain template parameter 'T', got: " << arglists_str);
-      }
+      /* Should contain the const char* type */
+      CHECK_MESSAGE(arglists_str.find("char") != std::string::npos,
+                    "arglists should contain 'char' for const char* param, got: " << arglists_str);
+
+      /* Should contain "T" for the template parameter */
+      CHECK_MESSAGE(arglists_str.find("T ") != std::string::npos,
+                    "arglists should contain template parameter 'T', got: " << arglists_str);
     }
   }
 

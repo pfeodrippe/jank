@@ -52,9 +52,14 @@
     - use cpp/new (GC-allocated) instead of, for example, cpp/bool. (which is stack-allocated)
   - [ ] create cpp/box2 for smart boxing
   - [ ] automatically type hinting for boxes (automatic boxing?)
+  - [ ] make bean work
+  - [ ] should work with `.at` instead of just `cpp.at` ?
+    - [ ] also, autocompletion (for whatever case) could be done using context ?
 - nREPL
   - [x] autocompletion for ns
   - [x] switch to a ns automatically when evaluating from there
+  - [ ] find some way to search, for a given `cpp/thing`, where `thing` is located (so we can later require the file and use alias)
+  - [ ]
 - [ ] vybe
 - [ ] wasm
   - [x] no require
