@@ -459,6 +459,59 @@ namespace jank::analyze
       Cpp::GetPointeeType(Cpp::GetNonReferenceType(args[0].m_Type)));
   }
 
+
+  /* Returns the native type for a primitive literal expression (integer -> long, real -> double).
+   * Also works for local_references that refer to primitive literal bindings.
+   * Returns nullptr if the expression is not a primitive literal or has no native equivalent. */
+  static jtl::ptr<void> get_primitive_native_type(expression_ref const expr)
+  {
+    runtime::object_type data_type{};
+
+    if(expr->kind == expression_kind::primitive_literal)
+    {
+      auto const lit = llvm::cast<expr::primitive_literal>(expr.data);
+      data_type = lit->data->type;
+    }
+    else if(expr->kind == expression_kind::local_reference)
+    {
+      auto const ref = llvm::cast<expr::local_reference>(expr.data);
+      if(ref->binding->value_expr.is_some())
+      {
+        auto const val_expr = ref->binding->value_expr.unwrap();
+        if(val_expr->kind == expression_kind::primitive_literal)
+        {
+          auto const lit = llvm::cast<expr::primitive_literal>(val_expr.data);
+          data_type = lit->data->type;
+        }
+        else
+        {
+          return nullptr;
+        }
+      }
+      else
+      {
+        return nullptr;
+      }
+    }
+    else
+    {
+      return nullptr;
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wswitch-enum"
+    switch(data_type)
+    {
+      case runtime::object_type::integer:
+        return Cpp::GetType("long");
+      case runtime::object_type::real:
+        return Cpp::GetType("double");
+      default:
+        return nullptr;
+    }
+#pragma clang diagnostic pop
+  }
+
   static processor::expression_result
   build_builtin_operator_call(expr::cpp_value_ref const val,
                               Cpp::Operator const op,
@@ -470,6 +523,28 @@ namespace jank::analyze
                               native_vector<runtime::object_ref> const &macro_expansions)
   {
     auto const op_name{ try_object<obj::symbol>(val->form)->name };
+
+    /* Auto-unbox primitive literals for cpp/ operator usage.
+     * This allows (let [n 5] (cpp/+ n 10)) to work without manual conversion. */
+    auto converted_arg_types{ arg_types };
+    for(usize i{}; i < arg_exprs.size(); ++i)
+    {
+      auto const native_type = get_primitive_native_type(arg_exprs[i]);
+      if(native_type && cpp_util::is_any_object(converted_arg_types[i].m_Type))
+      {
+        /* Wrap the expression in a cpp_cast to unbox it. */
+        auto const cast_position{ arg_exprs[i]->position };
+        arg_exprs[i]->propagate_position(expression_position::value);
+        arg_exprs[i] = jtl::make_ref<expr::cpp_cast>(cast_position,
+                                                     arg_exprs[i]->frame,
+                                                     arg_exprs[i]->needs_box,
+                                                     native_type,
+                                                     native_type,
+                                                     conversion_policy::from_object,
+                                                     arg_exprs[i]);
+        converted_arg_types[i].m_Type = native_type;
+      }
+    }
 
     struct op_processor
     {
@@ -532,7 +607,7 @@ namespace jank::analyze
     {
       for(auto const &f : found->second.validators)
       {
-        auto const res{ f(arg_types, op_name, val, macro_expansions) };
+        auto const res{ f(converted_arg_types, op_name, val, macro_expansions) };
         if(res.is_err())
         {
           return res.expect_err();
@@ -544,10 +619,10 @@ namespace jank::analyze
                                                             needs_box,
                                                             op,
                                                             jtl::move(arg_exprs),
-                                                            found->second.type(arg_types));
+                                                            found->second.type(converted_arg_types));
     }
 
-    return invalid(arg_types, op_name, val, macro_expansions);
+    return invalid(converted_arg_types, op_name, val, macro_expansions);
   }
 
   static processor::expression_result
