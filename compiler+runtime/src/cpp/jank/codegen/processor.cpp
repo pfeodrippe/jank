@@ -1539,60 +1539,14 @@ namespace jank::codegen
       return "jank::runtime::jank_nil";
     }
 
-    if(expr->policy == conversion_policy::native_print)
-    {
-      /* For native_print, we format the value as a string in clang-repl style: (Type) value
-       * We use std::ostringstream to avoid format escaping issues.
-       * The runtime check allows (binding [*allow-native-return* true] ...) to work. */
-      auto const type_name{ Cpp::GetTypeAsString(expr->conversion_type) };
-      if(Cpp::IsPointerType(expr->conversion_type))
-      {
-        /* For pointers, format as (Type*) 0xaddress */
-        util::format_to(
-          body_buffer,
-          "auto const {} = [&]() {{"
-          " if(!__rt_ctx->an_prc.allow_native_return && "
-          "!jank::runtime::truthy(__rt_ctx->allow_native_return_var->deref())) {{"
-          " throw std::runtime_error(\"This function is returning a native object of type '{}', "
-          "which is not convertible to a jank runtime object. "
-          "Use (binding [*allow-native-return* true] ...) to enable native printing.\"); }}"
-          " std::ostringstream ss; ss << \"({}) \" << static_cast<void const*>({}); "
-          "return jank::runtime::make_box<jank::runtime::obj::persistent_string>(ss.str()); }}();",
-          ret_tmp,
-          type_name,
-          type_name,
-          value_tmp.unwrap().str(true));
-      }
-      else
-      {
-        /* For non-pointers, use stream operator if available */
-        util::format_to(
-          body_buffer,
-          "auto const {} = [&]() {{"
-          " if(!__rt_ctx->an_prc.allow_native_return && "
-          "!jank::runtime::truthy(__rt_ctx->allow_native_return_var->deref())) {{"
-          " throw std::runtime_error(\"This function is returning a native object of type '{}', "
-          "which is not convertible to a jank runtime object. "
-          "Use (binding [*allow-native-return* true] ...) to enable native printing.\"); }}"
-          " std::ostringstream ss; ss << \"({}) \" << {}; "
-          "return jank::runtime::make_box<jank::runtime::obj::persistent_string>(ss.str()); }}();",
-          ret_tmp,
-          type_name,
-          type_name,
-          value_tmp.unwrap().str(true));
-      }
-    }
-    else
-    {
-      util::format_to(
-        body_buffer,
-        "auto const {}{ jank::runtime::convert<{}>::{}({}) };",
-        ret_tmp,
-        cpp_util::get_qualified_type_name(
-          Cpp::GetTypeWithoutCv(Cpp::GetNonReferenceType(expr->conversion_type))),
-        (expr->policy == conversion_policy::into_object ? "into_object" : "from_object"),
-        value_tmp.unwrap().str(true));
-    }
+    util::format_to(
+      body_buffer,
+      "auto const {}{ jank::runtime::convert<{}>::{}({}) };",
+      ret_tmp,
+      cpp_util::get_qualified_type_name(
+        Cpp::GetTypeWithoutCv(Cpp::GetNonReferenceType(expr->conversion_type))),
+      (expr->policy == conversion_policy::into_object ? "into_object" : "from_object"),
+      value_tmp.unwrap().str(true));
 
     if(expr->position == expression_position::tail)
     {

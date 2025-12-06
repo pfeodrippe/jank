@@ -34,10 +34,8 @@ namespace jank::compiler_native
   static object_ref with_pipeline(object_ref const form, Fn &&fn)
   {
     /* We use a clean analyze::processor so we don't share lifted items from other REPL
-     * evaluations. For REPL, we enable native return printing so C++ values that aren't
-     * convertible to jank objects are wrapped in a printable string representation. */
+     * evaluations. */
     analyze::processor an_prc;
-    an_prc.allow_native_return = true;
     auto const analyzed_expr(an_prc.analyze(form, analyze::expression_position::value).expect_ok());
     auto const optimized_expr(analyze::pass::optimize(analyzed_expr));
     auto const wrapped_expr(evaluate::wrap_expression(optimized_expr, "native_source", {}));

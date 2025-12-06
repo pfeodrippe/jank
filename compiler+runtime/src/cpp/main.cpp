@@ -258,10 +258,6 @@ namespace jank
       dynamic_call(__rt_ctx->in_ns_var->deref(), make_box<obj::symbol>(opts.target_module));
     }
 
-    /* For REPL use, enable native return printing so C++ values that aren't
-     * convertible to jank objects are wrapped in a printable string representation. */
-    __rt_ctx->an_prc.allow_native_return = true;
-
     auto const get_prompt([](jtl::immutable_string const &suffix) {
       return __rt_ctx->current_ns()->name->to_code_string() + suffix;
     });
