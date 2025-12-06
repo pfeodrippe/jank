@@ -1,6 +1,10 @@
 # Claude Code Notes for jank
 
-## CRITICAL: Do NOT Delete llvm-install
+## CRITICAL 1: Do NOT Delete llvm-install
+
+## CRITICAL 2: Always run the tests before changes (./bin/test), put result into a .tests.txt file so you can refer later when you do the changes to make sure you haven't broke any new test!
+
+## CRITICAL 3: Before finalizing, read .tests.txt, run the tests again (./bin/test) and compare so you don't have new breaks!
 
 **NEVER delete or run `rm -rf` on the `build/` directory or `build/llvm-install/`!**
 
