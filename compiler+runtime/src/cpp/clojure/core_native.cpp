@@ -312,6 +312,34 @@ namespace clojure::core_native
     return jank_nil;
   }
 
+  /* Evaluates C++ code and returns a map with detailed result info:
+   * {:valid bool, :void? bool, :ptr int, :type string, :repr string}
+   * The :repr is similar to clang-repl output, e.g. "(int) 42" */
+  object_ref cpp_eval_with_info(object_ref const code)
+  {
+    auto const code_str(runtime::to_string(code));
+    auto const result(__rt_ctx->jit_prc.eval_string_with_result(code_str));
+
+    if(result.is_err())
+    {
+      throw std::runtime_error{ std::string{ result.expect_err().data() } };
+    }
+
+    auto const &r{ result.expect_ok() };
+    auto const kw_valid(__rt_ctx->intern_keyword("valid").expect_ok());
+    auto const kw_void(__rt_ctx->intern_keyword("void?").expect_ok());
+    auto const kw_ptr(__rt_ctx->intern_keyword("ptr").expect_ok());
+    auto const kw_type(__rt_ctx->intern_keyword("type").expect_ok());
+    auto const kw_repr(__rt_ctx->intern_keyword("repr").expect_ok());
+
+    return obj::persistent_hash_map::create_unique(
+      std::make_pair(kw_valid, make_box(r.valid)),
+      std::make_pair(kw_void, make_box(r.is_void)),
+      std::make_pair(kw_ptr, make_box(reinterpret_cast<i64>(r.ptr))),
+      std::make_pair(kw_type, make_box<obj::persistent_string>(r.type_str)),
+      std::make_pair(kw_repr, make_box<obj::persistent_string>(r.repr)));
+  }
+
   object_ref register_native_header(object_ref const current_ns,
                                     object_ref const alias,
                                     object_ref const header,
@@ -724,6 +752,7 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
   intern_fn("load-module", &core_native::load_module);
 #ifndef JANK_TARGET_WASM
   intern_fn("compile", &core_native::compile);
+  intern_fn("cpp-eval-with-info", &core_native::cpp_eval_with_info);
   intern_fn("register-native-header", &core_native::register_native_header);
   intern_fn("register-native-refer", &core_native::register_native_refer);
   intern_fn("native-header-functions", &core_native::native_header_functions);

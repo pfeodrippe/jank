@@ -2,6 +2,7 @@
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendDiagnostic.h>
+#include <clang/Interpreter/Value.h>
 #include <Interpreter/Compatibility.h>
 #include <clang/Interpreter/CppInterOp.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
@@ -299,6 +300,69 @@ namespace jank::jit
       };
     }
     register_jit_stack_frames();
+  }
+
+  jtl::result<eval_result, jtl::immutable_string>
+  processor::eval_string_with_result(jtl::immutable_string const &s) const
+  {
+    profile::timer const timer{ "jit eval_string_with_result" };
+
+    clang::Value v;
+    auto parse_err(interpreter->ParseAndExecute({ s.data(), s.size() }, &v));
+    if(parse_err)
+    {
+      std::string err_msg;
+      llvm::raw_string_ostream err_stream{ err_msg };
+      llvm::logAllUnhandledErrors(std::move(parse_err), err_stream, "");
+      err_stream.flush();
+
+      auto const preview_len{ std::min<size_t>(s.size(), 200) };
+      native_transient_string code_preview{ s.data(), preview_len };
+      if(s.size() > 200)
+      {
+        code_preview.append("...");
+      }
+
+      return err(util::format("Failed to evaluate C++ expression '{}': {}",
+                              code_preview,
+                              jtl::immutable_string{ err_msg.data(), err_msg.size() }));
+    }
+
+    register_jit_stack_frames();
+
+    eval_result result;
+    result.valid = v.isValid();
+    result.is_void = v.isVoid();
+
+    if(result.valid && !result.is_void)
+    {
+      result.ptr = v.getPtr();
+
+      /* Capture the type string */
+      {
+        std::string type_buf;
+        llvm::raw_string_ostream type_stream{ type_buf };
+        v.printType(type_stream);
+        type_stream.flush();
+        result.type_str = jtl::immutable_string{ type_buf.data(), type_buf.size() };
+      }
+
+      /* Capture the full printed representation (type + data) */
+      {
+        std::string repr_buf;
+        llvm::raw_string_ostream repr_stream{ repr_buf };
+        v.print(repr_stream);
+        repr_stream.flush();
+        result.repr = jtl::immutable_string{ repr_buf.data(), repr_buf.size() };
+      }
+    }
+    else if(result.is_void)
+    {
+      result.type_str = "void";
+      result.repr = "(void)";
+    }
+
+    return ok(jtl::move(result));
   }
 
   void processor::load_object(jtl::immutable_string_view const &path) const

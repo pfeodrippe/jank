@@ -6,6 +6,7 @@
 #include <csignal>
 #include <unordered_set>
 
+#include <jtl/option.hpp>
 #include <jtl/result.hpp>
 #include <jtl/string_builder.hpp>
 
@@ -27,6 +28,25 @@ namespace Cpp
 
 namespace jank::jit
 {
+  /* Result struct for eval_string_with_result, providing access to
+   * the C++ interpreter's expression result similar to clang-repl output. */
+  struct eval_result
+  {
+    /* Whether the evaluation succeeded and produced a valid result. */
+    bool valid{};
+
+    /* Whether the result is void (valid but no value). */
+    bool is_void{};
+
+    /* Raw pointer to the result value (if applicable). */
+    void *ptr{};
+
+    /* The C++ type as a string, e.g. "std::vector<int> &". */
+    jtl::immutable_string type_str;
+
+    /* The printed representation of the value, similar to clang-repl output. */
+    jtl::immutable_string repr;
+  };
   /* Thread-local recovery point for fatal LLVM errors. This allows callers (like nREPL eval)
    * to register a jmp_buf that the fatal error handler can use to recover instead of exiting.
    * When set, LLVM fatal errors will longjmp to this point with the JIT_FATAL_ERROR_SIGNAL. */
@@ -54,6 +74,13 @@ namespace jank::jit
     ~processor();
 
     void eval_string(jtl::immutable_string const &s) const;
+
+    /* Evaluates a C++ expression and returns detailed result information including
+     * the type and printed representation, similar to clang-repl output.
+     * Note: The expression should NOT end with a semicolon to capture the result. */
+    jtl::result<eval_result, jtl::immutable_string>
+    eval_string_with_result(jtl::immutable_string const &s) const;
+
     void load_object(jtl::immutable_string_view const &path) const;
     jtl::string_result<void> load_dynamic_library(jtl::immutable_string const &path) const;
     void load_ir_module(llvm::orc::ThreadSafeModule &&m) const;
