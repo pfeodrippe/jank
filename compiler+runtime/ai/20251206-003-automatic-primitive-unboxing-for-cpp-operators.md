@@ -94,6 +94,38 @@ This works with all cpp/ builtin operators:
 - Bitwise: `cpp/&`, `cpp/|`, `cpp/^`, `cpp/~`, `cpp/<<`, `cpp/>>`
 - Logical: `cpp/&&`, `cpp/||`, `cpp/!`
 - Increment/Decrement: `cpp/++`, `cpp/--`
+- Array access: `cpp/aget` (index argument is auto-unboxed)
+
+## Bug Fix: Overloaded Operators (ImVector, etc.)
+
+The initial implementation only applied auto-unboxing in `build_builtin_operator_call()`, which handles builtin operators on primitive types (pointers, arrays, integers). However, for class types with overloaded `operator[]` (like ImGui's `ImVector`), the code takes a different path through `Cpp::GetOperator()`.
+
+**Problem**: `(cpp/aget ImVector n)` where `n` is a primitive literal would fail:
+```
+No matching call to 'aget' function. With argument 0 having type 'ImVector<ImDrawList *> &'.
+With argument 1 having type 'jank::runtime::object *'.
+```
+
+**Fix**: Added auto-unboxing logic in `build_cpp_call()` (line ~754) before the `Cpp::GetOperator()` call:
+```cpp
+/* Auto-unbox primitive literals for overloaded operator calls. */
+for(usize i{}; i < arg_exprs.size(); ++i)
+{
+  auto const native_type = get_primitive_native_type(arg_exprs[i]);
+  if(native_type && cpp_util::is_any_object(arg_types[i].m_Type))
+  {
+    // ... wrap in cpp_cast ...
+    arg_types[i].m_Type = native_type;
+  }
+}
+```
+
+Now this works:
+```clojure
+(let [dd (imgui/GetDrawData)]
+  (dotimes [n (cpp/.-CmdListsCount dd)]
+    (cpp/aget (cpp/.-CmdLists dd) n)))
+```
 
 ## Limitations
 
@@ -103,10 +135,17 @@ This works with all cpp/ builtin operators:
 
 ## Tests
 
-All existing tests pass (587 jank files, 0 failures; 210 C++ test cases, 209 passed).
+All tests pass (591 jank files, 0 failures).
 
-New functionality tested with:
+### Test files added:
+- `test/jank/cpp/operator/plus/pass-auto-unbox-primitive-literals.jank`
+- `test/jank/cpp/operator/aget/pass-auto-unbox-primitive-literals.jank`
+- `test/jank/cpp/operator/aget/pass-dotimes-member-access.jank` - Tests dotimes + cpp/aget with pointer arrays
+- `test/jank/cpp/operator/aget/pass-overloaded-operator-auto-unbox.jank` - Tests class types with overloaded `operator[]` (like ImVector)
+
+### Test coverage:
 ```clojure
+; Arithmetic operators with primitive literals
 (let [n 5 m 10]
   (assert (= 15 (cpp/+ n m)))
   (assert (= 5 (cpp/- m n))))
@@ -121,4 +160,28 @@ New functionality tested with:
 (let [x 6 y 2]
   (assert (= 12 (cpp/* x y)))
   (assert (= 3 (cpp// x y))))
+
+; Array access with auto-unboxed index
+(let [n 1]
+  (assert (= 200 (cpp/aget arr n))))
+
+; Array access with native-typed C++ member access
+(let [idx (cpp/.-count data)]
+  (cpp/aget arr idx))
+
+; dotimes iteration variable with cpp/aget
+(dotimes [i (cpp/.-count data)]
+  (let [v (cpp/aget arr i)]
+    ...))
+
+; Class types with overloaded operator[] (like ImVector)
+(let [dd (cpp/GetDrawData)]
+  (dotimes [n (cpp/.-CmdListsCount dd)]
+    (cpp/aget (cpp/.-Items dd) n)))  ; Items is MyVector<int>, a class type
 ```
+
+### Verified scenarios:
+1. Direct primitive literals in let bindings
+2. Native-typed variables from C++ member access (already native, no unboxing needed)
+3. `dotimes` iteration variables (primitive literal `0` is auto-unboxed)
+4. Class types with overloaded `operator[]` (like ImVector) - auto-unboxing applies to the index argument

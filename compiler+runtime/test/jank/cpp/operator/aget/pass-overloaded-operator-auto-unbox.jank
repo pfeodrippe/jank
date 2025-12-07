@@ -1,0 +1,44 @@
+(cpp/raw "namespace jank::cpp::operator_::aget::pass_overloaded_operator_auto_unbox
+          {
+            // Mimics ImVector from ImGui - class with overloaded operator[]
+            template<typename T>
+            struct MyVector {
+              int Size;
+              int Capacity;
+              T* Data;
+
+              MyVector() : Size(3), Capacity(3), Data(new T[3]) {
+                Data[0] = (T)100;
+                Data[1] = (T)200;
+                Data[2] = (T)300;
+              }
+
+              T& operator[](int i) { return Data[i]; }
+              const T& operator[](int i) const { return Data[i]; }
+            };
+
+            struct DrawData {
+              int CmdListsCount;
+              MyVector<int> Items;
+
+              DrawData() : CmdListsCount(3) {}
+            };
+
+            DrawData* GetDrawData() {
+              static DrawData data;
+              return &data;
+            }
+          }")
+
+; Test that auto-unboxing works with class types that have overloaded operator[]
+; This is the pattern from ImGui: (cpp/aget ImVector n) where n is a primitive literal
+(let [dd (cpp/jank.cpp.operator_.aget.pass_overloaded_operator_auto_unbox.GetDrawData)
+      total (atom 0)]
+  ; dotimes creates n as a primitive literal binding (starts at 0)
+  ; Items is a MyVector (class type), not a pointer
+  ; The auto-unboxing should convert n from object* to long for operator[]
+  (dotimes [n (cpp/.-CmdListsCount dd)]
+    (let [value (cpp/aget (cpp/.-Items dd) n)]
+      (swap! total + value)))
+  (assert (= 600 @total))  ; 100 + 200 + 300
+  :success)

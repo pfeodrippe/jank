@@ -751,6 +751,26 @@ namespace jank::analyze
       }
 
 
+      /* Auto-unbox primitive literals for overloaded operator calls.
+       * This allows (cpp/aget ImVector n) to work when n is a primitive literal binding. */
+      for(usize i{}; i < arg_exprs.size(); ++i)
+      {
+        auto const native_type = get_primitive_native_type(arg_exprs[i]);
+        if(native_type && cpp_util::is_any_object(arg_types[i].m_Type))
+        {
+          auto const cast_position{ arg_exprs[i]->position };
+          arg_exprs[i]->propagate_position(expression_position::value);
+          arg_exprs[i] = jtl::make_ref<expr::cpp_cast>(cast_position,
+                                                       arg_exprs[i]->frame,
+                                                       arg_exprs[i]->needs_box,
+                                                       native_type,
+                                                       native_type,
+                                                       conversion_policy::from_object,
+                                                       arg_exprs[i]);
+          arg_types[i].m_Type = native_type;
+        }
+      }
+
       auto const arity{ arg_count == 1 ? Cpp::kUnary : Cpp::kBinary };
       Cpp::GetOperator(op, arg_types, fns, arity);
 
