@@ -1093,7 +1093,14 @@ namespace jank::analyze
                           bool const needs_box,
                           native_vector<runtime::object_ref> const &macro_expansions)
   {
-    auto const source_type{ cpp_util::expression_type(source) };
+    auto source_type{ cpp_util::expression_type(source) };
+    /* Function pointers accessed via member access (e.g. struct->callback) return
+     * a reference to the function pointer type. We need to strip the reference
+     * to properly detect and call function pointers. */
+    if(Cpp::IsReferenceType(source_type))
+    {
+      source_type = Cpp::GetNonReferenceType(source_type);
+    }
     if(!Cpp::IsFunctionPointerType(source_type))
     {
       /* If we get to this function but we don't have a function pointer, we assume

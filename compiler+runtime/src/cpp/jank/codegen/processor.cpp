@@ -427,6 +427,14 @@ namespace jank::codegen
       auto const source{ runtime::object_source(form) };
       emit_line_directive(buffer, source);
     }
+
+    static void emit_line_directive(jtl::string_builder &buffer, jtl::option<read::source> const &source)
+    {
+      if(source.is_some())
+      {
+        emit_line_directive(buffer, source.unwrap());
+      }
+    }
   }
 
   handle::handle(jtl::immutable_string const &name, bool const boxed)
@@ -1038,6 +1046,9 @@ namespace jank::codegen
   jtl::option<handle>
   processor::gen(analyze::expr::let_ref const expr, analyze::expr::function_arity const &fn_arity)
   {
+    /* Emit #line directive for source mapping. */
+    detail::emit_line_directive(body_buffer, expr->source);
+
     auto const &ret_tmp{ runtime::munge(__rt_ctx->unique_namespaced_string("let")) };
     bool used_option{};
 
@@ -1297,6 +1308,9 @@ namespace jank::codegen
   jtl::option<handle>
   processor::gen(analyze::expr::if_ref const expr, analyze::expr::function_arity const &fn_arity)
   {
+    /* Emit #line directive for source mapping. */
+    detail::emit_line_directive(body_buffer, expr->source);
+
     auto ret_tmp(runtime::munge(__rt_ctx->unique_namespaced_string("if")));
     auto const expr_type{ cpp_util::expression_type(expr->then) };
     util::format_to(body_buffer,
@@ -1343,6 +1357,9 @@ namespace jank::codegen
   jtl::option<handle>
   processor::gen(analyze::expr::throw_ref const expr, analyze::expr::function_arity const &fn_arity)
   {
+    /* Emit #line directive for source mapping. */
+    detail::emit_line_directive(body_buffer, expr->source);
+
     auto const &value_tmp(gen(expr->value, fn_arity));
     /* We static_cast to object_ref here, since we'll be trying to catch an object_ref in any
      * try/catch forms. This loses us our type info, but C++ doesn't do implicit conversions
@@ -1526,6 +1543,9 @@ namespace jank::codegen
   jtl::option<handle>
   processor::gen(analyze::expr::cpp_cast_ref const expr, analyze::expr::function_arity const &arity)
   {
+    /* Emit #line directive for source mapping. */
+    detail::emit_line_directive(body_buffer, expr->source);
+
     auto ret_tmp(runtime::munge(__rt_ctx->unique_namespaced_string("cpp_cast")));
     auto const value_tmp{ gen(expr->value_expr, arity) };
 
@@ -1560,6 +1580,9 @@ namespace jank::codegen
   jtl::option<handle>
   processor::gen(analyze::expr::cpp_call_ref const expr, analyze::expr::function_arity const &arity)
   {
+    /* Emit #line directive for source mapping. */
+    detail::emit_line_directive(body_buffer, expr->source);
+
     if(expr->source_expr->kind == expression_kind::cpp_value)
     {
       auto const source{ static_cast<expr::cpp_value *>(expr->source_expr.data) };

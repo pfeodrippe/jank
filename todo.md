@@ -55,6 +55,7 @@
   - [ ] make bean work
   - [ ] should work with `.at` instead of just `cpp.at` ?
     - [ ] also, autocompletion (for whatever case) could be done using context ?
+  - [ ] add docstring/metadata support to ns forms
   - [ ] we need to get a way to get rid of almost all of the cpp/... we should be able to do `.-Data` instead of `cpp/.-Data`
   - [ ] deref (@) could be used in lieu of cpp/*
 - nREPL
