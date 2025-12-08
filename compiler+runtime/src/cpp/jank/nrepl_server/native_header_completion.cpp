@@ -595,13 +595,14 @@ namespace jank::nrepl_server::asio
           continue;
         }
 
-        // Check if it's a type (class, struct, or enum)
+        // Check if it's a type (class, struct, enum, or typedef alias)
         auto child_scope = Cpp::GetScope(name, scope_handle);
 
         if(child_scope)
         {
           bool is_class = Cpp::IsClass(child_scope);
           bool is_enum = Cpp::IsEnumScope(child_scope);
+          bool is_typedef_alias = false;
 
           /* Handle C-style typedef structs: typedef struct {...} Name;
            * In this case, GetScope("Name") returns the TypedefDecl, not the RecordDecl.
@@ -626,9 +627,15 @@ namespace jank::nrepl_server::asio
                   child_scope = tag_decl;
                 }
               }
+              else
+              {
+                /* It's a typedef to a non-tag type (e.g., typedef bool ecs_bool_t).
+                 * Include these in autocompletion as well. */
+                is_typedef_alias = true;
+              }
             }
           }
-          if(is_class || is_enum)
+          if(is_class || is_enum || is_typedef_alias)
           {
             /* For global scope, filter by header file */
             if(!header_name.empty())

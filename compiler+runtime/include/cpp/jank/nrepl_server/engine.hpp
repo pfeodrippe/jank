@@ -663,6 +663,14 @@ namespace jank::nrepl_server::asio
       {
         return handle_wasm_compile_patch(msg);
       }
+      if(op == "test")
+      {
+        return handle_test(msg);
+      }
+      if(op == "test-var-query")
+      {
+        return handle_test_var_query(msg);
+      }
 
       return handle_unsupported(msg, "unknown-op");
     }
@@ -749,6 +757,10 @@ namespace jank::nrepl_server::asio
     std::vector<bencode::value::dict> handle_stdin(message const &msg);
 
     std::vector<bencode::value::dict> handle_wasm_compile_patch(message const &msg);
+
+    std::vector<bencode::value::dict> handle_test(message const &msg);
+
+    std::vector<bencode::value::dict> handle_test_var_query(message const &msg);
 
     std::vector<bencode::value::dict>
     handle_unsupported(message const &msg, std::string_view reason)
@@ -3234,3 +3246,5 @@ namespace jank::nrepl_server::asio
 #include <jank/nrepl_server/ops/swap_middleware.hpp>
 #include <jank/nrepl_server/ops/stdin.hpp>
 #include <jank/nrepl_server/ops/wasm_compile_patch.hpp>
+#include <jank/nrepl_server/ops/test.hpp>
+#include <jank/nrepl_server/ops/test_var_query.hpp>

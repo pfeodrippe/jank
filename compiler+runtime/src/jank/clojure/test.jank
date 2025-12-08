@@ -614,7 +614,8 @@
   (if *load-tests*
     ;;FIXME https://github.com/jank-lang/jank/issues/197
     ;#_`(doto ~definition (alter-meta! assoc :test (fn [] ~@body)))
-    `(doto ~definition (-workaround-set-test (fn [] ~@body)))
+    ;; jank workaround: add :test true metadata for CIDER detection
+    `(doto ~definition (alter-meta! assoc :test true) (-workaround-set-test (fn [] ~@body)))
     definition))
 
 
@@ -632,9 +633,12 @@
   [name & body]
   (when *load-tests*
     ;;FIXME https://github.com/jank-lang/jank/issues/197
+    ;; Original Clojure stores the test fn in :test metadata:
     ;#_`(def ~(vary-meta name assoc :test `(fn [] ~@body))
     ;     (fn [] (test-var (var ~name))))
-    `(do (def ~name (fn [] (test-var (var ~name))))
+    ;; jank workaround: store test fn in atom, but add :test true metadata
+    ;; so CIDER can detect it via (contains? (meta v) :test)
+    `(do (def ~(vary-meta name assoc :test true) (fn [] (test-var (var ~name))))
          (#'-workaround-set-test (var ~name) (fn [] ~@body)))))
 
 (defmacro deftest-
@@ -644,7 +648,8 @@
     ;;FIXME https://github.com/jank-lang/jank/issues/197
     ;#_`(def ~(vary-meta name assoc :test `(fn [] ~@body) :private true)
     ;     (fn [] (test-var (var ~name))))
-    `(do (def ~name (fn [] (test-var (var ~name))))
+    ;; jank workaround: add :test true metadata for CIDER detection
+    `(do (def ~(vary-meta name assoc :test true :private true) (fn [] (test-var (var ~name))))
          (#'-workaround-set-test (var ~name) (fn [] ~@body)))))
 
 
@@ -658,7 +663,9 @@
   (when *load-tests*
     ;;FIXME https://github.com/jank-lang/jank/issues/197
     ;#_`(alter-meta! (var ~name) assoc :test (fn [] ~@body))
-    `(#'-workaround-set-test (var ~name) (fn [] ~@body))))
+    ;; jank workaround: add :test true metadata for CIDER detection
+    `(do (alter-meta! (var ~name) assoc :test true)
+         (#'-workaround-set-test (var ~name) (fn [] ~@body)))))
 
 
 

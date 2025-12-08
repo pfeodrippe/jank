@@ -33,8 +33,10 @@
   - [x] native
   - [x] wasm
 - [ ] flecs
-  - [ ] ecs_entity_desc_t autocomplete
-  - [ ] improve error
+  - [x] ecs_entity_desc_t autocomplete
+  - [ ] defcomp
+    - [ ] could we use flecs for it?
+  - [ ] arena
 - [ ] integrate raylib + flecs + imgui + jolt
   - [x] raylib + imgui + jolt
   - [x] + flecs
@@ -65,7 +67,7 @@
   - [x] autocompletion for ns
   - [x] switch to a ns automatically when evaluating from there
   - [ ] find some way to search, for a given `cpp/thing`, where `thing` is located (so we can later require the file and use alias)
-  - [ ]
+  - [ ] improve error location
 - [ ] vybe
 - [ ] wasm
   - [x] no require
