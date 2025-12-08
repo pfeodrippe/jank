@@ -31,6 +31,17 @@ namespace jank::util::cli
     cli.add_flag("--profile-fns",
                  opts.profiler_fns_enabled,
                  "Automatically profile all function calls (implies --profile).");
+    cli.add_flag("--profile-core",
+                 opts.profiler_core_enabled,
+                 "Also profile clojure.core functions (implies --profile-fns).");
+    cli.add_flag("--profile-interop",
+                 opts.profiler_interop_enabled,
+                 "Profile cpp/ interop operations like box/unbox (implies --profile).");
+    cli
+      .add_option("--profile-sample",
+                  opts.profiler_sample_rate,
+                  "Sample 1 in N events (e.g., 10=10%, 100=1%). 0 or omit for all events.")
+      ->default_str("0");
     cli
       .add_option("--profile-output",
                   opts.profiler_file,
@@ -211,8 +222,20 @@ namespace jank::util::cli
       opts.command = command::check_health;
     }
 
+    /* --profile-core implies --profile-fns */
+    if(opts.profiler_core_enabled)
+    {
+      opts.profiler_fns_enabled = true;
+    }
+
     /* --profile-fns implies --profile */
     if(opts.profiler_fns_enabled)
+    {
+      opts.profiler_enabled = true;
+    }
+
+    /* --profile-interop implies --profile */
+    if(opts.profiler_interop_enabled)
     {
       opts.profiler_enabled = true;
     }

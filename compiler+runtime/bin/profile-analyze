@@ -261,12 +261,39 @@ def generate_html(roots: list[CallNode], stats: dict[str, RegionStats], output_p
                 'depth': depth,
                 'duration': ns_to_human(node.duration_ns),
                 'self_time': ns_to_human(node.self_time_ns),
+                'start_ns': node.start_ns,
+                'end_ns': node.end_ns,
+                'duration_ns': node.duration_ns,
+                'self_time_ns': node.self_time_ns,
             })
         for child in node.children:
             collect_for_timeline(child, depth + 1)
 
     for root in roots:
         collect_for_timeline(root)
+
+    # Serialize call tree for JavaScript (for filtering by time selection)
+    def serialize_tree(nodes: list[CallNode], max_depth: int = 15) -> list:
+        """Serialize call tree to JSON-friendly structure."""
+        result = []
+        def serialize_node(node: CallNode, depth: int):
+            if depth > max_depth:
+                return None
+            return {
+                'region': node.region,
+                'start_ns': node.start_ns,
+                'end_ns': node.end_ns,
+                'duration_ns': node.duration_ns,
+                'self_time_ns': node.self_time_ns,
+                'children': [c for c in (serialize_node(child, depth + 1) for child in node.children) if c is not None]
+            }
+        for node in nodes:
+            serialized = serialize_node(node, 0)
+            if serialized:
+                result.append(serialized)
+        return result
+
+    tree_json = json.dumps(serialize_tree(roots), separators=(',', ':'))
 
     # Generate colors based on region name
     def region_color(name: str) -> str:
@@ -293,6 +320,91 @@ def generate_html(roots: list[CallNode], stats: dict[str, RegionStats], output_p
             <td>{ns_to_human(avg)}</td>
         </tr>
         """
+
+    # Build hierarchical call tree for nested view
+    # Aggregate children by region name to show unique callee patterns
+    @dataclass
+    class TreeNode:
+        region: str
+        total_ns: int = 0
+        self_ns: int = 0
+        count: int = 0
+        children: dict = field(default_factory=dict)  # region -> TreeNode
+
+    def build_aggregated_tree(call_nodes: list[CallNode], max_depth: int = 10) -> dict[str, TreeNode]:
+        """Build aggregated tree from call nodes, merging same-named children."""
+        result = {}
+
+        def add_to_tree(node: CallNode, target: dict, depth: int):
+            if depth > max_depth:
+                return
+            if node.region not in target:
+                target[node.region] = TreeNode(region=node.region)
+            t = target[node.region]
+            t.total_ns += node.duration_ns
+            t.self_ns += node.self_time_ns
+            t.count += 1
+
+            for child in node.children:
+                add_to_tree(child, t.children, depth + 1)
+
+        for node in call_nodes:
+            add_to_tree(node, result, 0)
+
+        return result
+
+    def generate_tree_html(tree_nodes: dict[str, TreeNode], total_time: int, depth: int = 0) -> str:
+        """Generate nested HTML for call tree."""
+        if not tree_nodes:
+            return ""
+
+        # Sort by total time descending
+        sorted_nodes = sorted(tree_nodes.values(), key=lambda n: n.total_ns, reverse=True)
+
+        # Limit children shown at deeper levels (increased limits)
+        max_children = 50 if depth < 2 else 30 if depth < 4 else 20
+        sorted_nodes = sorted_nodes[:max_children]
+
+        html = ""
+        for node in sorted_nodes:
+            pct = (node.self_ns / total_time * 100) if total_time > 0 else 0
+            avg = node.total_ns // node.count if node.count > 0 else 0
+            has_children = bool(node.children)
+            node_id = f"node_{hash(node.region) % 1000000}_{depth}"
+
+            # Calculate bar width for visual representation
+            bar_pct = min((node.total_ns / total_time * 100) * 2, 100)  # Scale up for visibility
+
+            children_html = generate_tree_html(node.children, total_time, depth + 1) if has_children else ""
+
+            expand_icon = "&#9660;" if has_children else "&#183;"  # ▼ (expanded) and · as HTML entities
+            expand_class = "expandable" if has_children else ""
+
+            html += f"""
+            <div class="tree-row {expand_class}" data-depth="{depth}" data-node-id="{node_id}">
+                <div class="tree-cell tree-name" style="padding-left: {depth * 20 + 8}px;">
+                    <span class="expand-icon" onclick="toggleNode('{node_id}')">{expand_icon}</span>
+                    <span class="color-dot" style="background: {region_color(node.region)};"></span>
+                    <span class="region-name">{node.region}</span>
+                </div>
+                <div class="tree-cell">{ns_to_human(node.total_ns)}</div>
+                <div class="tree-cell">{ns_to_human(node.self_ns)}</div>
+                <div class="tree-cell">{pct:.1f}%</div>
+                <div class="tree-cell">{node.count}</div>
+                <div class="tree-cell">{ns_to_human(avg)}</div>
+                <div class="tree-cell tree-bar">
+                    <div class="bar" style="width: {bar_pct}%; background: {region_color(node.region)};"></div>
+                </div>
+            </div>
+            <div class="tree-children" id="{node_id}" style="display: block;">
+                {children_html}
+            </div>
+            """
+
+        return html
+
+    aggregated_tree = build_aggregated_tree(roots)
+    tree_html = generate_tree_html(aggregated_tree, total_duration)
 
     # Build timeline rows
     max_depth = max((d['depth'] for d in timeline_data), default=0)
@@ -365,6 +477,10 @@ def generate_html(roots: list[CallNode], stats: dict[str, RegionStats], output_p
         h1, h2 {{ color: #00d4ff; }}
         .container {{ max-width: 1400px; margin: 0 auto; }}
 
+        .timeline-wrapper {{
+            position: relative;
+            margin-bottom: 30px;
+        }}
         .timeline-container {{
             position: relative;
             width: 100%;
@@ -372,7 +488,39 @@ def generate_html(roots: list[CallNode], stats: dict[str, RegionStats], output_p
             background: #16213e;
             border-radius: 8px;
             overflow-x: auto;
-            margin-bottom: 30px;
+            cursor: default;
+        }}
+        .timeline-selection {{
+            position: absolute;
+            top: 0;
+            height: 100%;
+            background: rgba(0, 212, 255, 0.2);
+            border-left: 2px solid #00d4ff;
+            border-right: 2px solid #00d4ff;
+            pointer-events: none;
+            z-index: 50;
+        }}
+        .timeline-info {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            font-size: 13px;
+        }}
+        .timeline-info .selection-info {{
+            color: #00d4ff;
+        }}
+        .timeline-info button {{
+            background: #0f3460;
+            color: #00d4ff;
+            border: 1px solid #00d4ff;
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }}
+        .timeline-info button:hover {{
+            background: #1f4068;
         }}
 
         .timeline-item {{
@@ -423,6 +571,97 @@ def generate_html(roots: list[CallNode], stats: dict[str, RegionStats], output_p
             margin-right: 30px;
             color: #00d4ff;
         }}
+
+        /* Tree view styles */
+        .tree-container {{
+            background: #16213e;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 30px;
+        }}
+        .tree-header {{
+            display: flex;
+            background: #0f3460;
+            padding: 12px 8px;
+            font-weight: bold;
+        }}
+        .tree-header .tree-cell {{
+            flex-shrink: 0;
+        }}
+        .tree-row {{
+            display: flex;
+            border-bottom: 1px solid #0f3460;
+            align-items: center;
+        }}
+        .tree-row:hover {{
+            background: #1f4068;
+        }}
+        .tree-row.expandable {{
+            cursor: pointer;
+        }}
+        .tree-cell {{
+            padding: 6px 8px;
+            flex-shrink: 0;
+        }}
+        .tree-cell.tree-name {{
+            flex: 1;
+            min-width: 300px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .tree-cell:nth-child(2) {{ width: 80px; }}  /* Total */
+        .tree-cell:nth-child(3) {{ width: 80px; }}  /* Self */
+        .tree-cell:nth-child(4) {{ width: 60px; }}  /* Self % */
+        .tree-cell:nth-child(5) {{ width: 70px; }}  /* Count */
+        .tree-cell:nth-child(6) {{ width: 80px; }}  /* Avg */
+        .tree-cell.tree-bar {{ width: 150px; }}
+        .tree-bar .bar {{
+            height: 12px;
+            border-radius: 2px;
+            min-width: 2px;
+        }}
+        .expand-icon {{
+            width: 16px;
+            text-align: center;
+            color: #00d4ff;
+            font-size: 10px;
+            cursor: pointer;
+            user-select: none;
+        }}
+        .expand-icon:hover {{
+            color: #fff;
+        }}
+        .color-dot {{
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }}
+        .region-name {{
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .tree-children {{
+            /* Children container - hidden by default */
+        }}
+        .tree-controls {{
+            margin-bottom: 10px;
+        }}
+        .tree-controls button {{
+            background: #0f3460;
+            color: #00d4ff;
+            border: 1px solid #00d4ff;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            font-size: 13px;
+        }}
+        .tree-controls button:hover {{
+            background: #1f4068;
+        }}
     </style>
 </head>
 <body>
@@ -436,11 +675,33 @@ def generate_html(roots: list[CallNode], stats: dict[str, RegionStats], output_p
         </div>
 
         <h2>Timeline</h2>
-        <div class="timeline-container">
-            {timeline_items}
+        <div class="timeline-wrapper">
+            <div class="timeline-container" id="timelineContainer">
+                {timeline_items}
+            </div>
         </div>
 
-        <h2>Statistics (by total time)</h2>
+        <h2>Call Tree</h2>
+        <div class="tree-controls">
+            <button onclick="expandAll()">Expand All</button>
+            <button onclick="collapseAll()">Collapse All</button>
+            <button onclick="expandLevel(1)">Expand Level 1</button>
+            <button onclick="expandLevel(2)">Expand Level 2</button>
+        </div>
+        <div class="tree-container">
+            <div class="tree-header">
+                <div class="tree-cell tree-name">Function</div>
+                <div class="tree-cell">Total</div>
+                <div class="tree-cell">Self</div>
+                <div class="tree-cell">Self %</div>
+                <div class="tree-cell">Count</div>
+                <div class="tree-cell">Avg</div>
+                <div class="tree-cell tree-bar">Time</div>
+            </div>
+            {tree_html}
+        </div>
+
+        <h2>Statistics (flat view, by total time)</h2>
         <table>
             <tr>
                 <th></th>
@@ -454,6 +715,72 @@ def generate_html(roots: list[CallNode], stats: dict[str, RegionStats], output_p
             {stats_rows}
         </table>
     </div>
+
+    <script>
+        // ==================== Tree Expand/Collapse ====================
+        function toggleNode(nodeId) {{
+            const children = document.getElementById(nodeId);
+            const row = document.querySelector(`[data-node-id="${{nodeId}}"]`);
+            if (!children || !row) return;
+            const icon = row.querySelector('.expand-icon');
+
+            if (children.style.display === 'none') {{
+                children.style.display = 'block';
+                icon.innerHTML = '&#9660;';  // ▼
+            }} else {{
+                children.style.display = 'none';
+                icon.innerHTML = '&#9654;';  // ▶
+            }}
+        }}
+
+        function expandAll() {{
+            document.querySelectorAll('.tree-children').forEach(el => {{
+                el.style.display = 'block';
+            }});
+            document.querySelectorAll('.expandable .expand-icon').forEach(el => {{
+                el.innerHTML = '&#9660;';  // ▼
+            }});
+        }}
+
+        function collapseAll() {{
+            document.querySelectorAll('.tree-children').forEach(el => {{
+                el.style.display = 'none';
+            }});
+            document.querySelectorAll('.expandable .expand-icon').forEach(el => {{
+                el.innerHTML = '&#9654;';  // ▶
+            }});
+        }}
+
+        function expandLevel(targetDepth) {{
+            collapseAll();
+            document.querySelectorAll('.tree-row.expandable').forEach(row => {{
+                const depth = parseInt(row.dataset.depth);
+                if (depth < targetDepth) {{
+                    const nodeId = row.dataset.nodeId;
+                    const children = document.getElementById(nodeId);
+                    const icon = row.querySelector('.expand-icon');
+                    if (children) {{
+                        children.style.display = 'block';
+                        icon.innerHTML = '&#9660;';  // ▼
+                    }}
+                }}
+            }});
+        }}
+
+        function attachTreeClickHandlers() {{
+            document.querySelectorAll('.tree-row.expandable').forEach(row => {{
+                row.addEventListener('click', (e) => {{
+                    if (!e.target.classList.contains('expand-icon')) {{
+                        const nodeId = row.dataset.nodeId;
+                        toggleNode(nodeId);
+                    }}
+                }});
+            }});
+        }}
+
+        // Initial attachment
+        attachTreeClickHandlers();
+    </script>
 </body>
 </html>
 """

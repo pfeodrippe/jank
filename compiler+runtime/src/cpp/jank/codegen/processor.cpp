@@ -677,12 +677,39 @@ namespace jank::codegen
     /* Emit #line directive for source mapping. */
     detail::emit_line_directive(body_buffer, expr->form);
 
+    /* Check if this is a call to a clojure.core function that should be profiled. */
+    jtl::immutable_string core_fn_name;
+    if(util::cli::opts.profiler_core_enabled)
+    {
+      auto const var_deref(analyze::expr_dyn_cast<analyze::expr::var_deref>(expr->source_expr.data));
+      if(var_deref)
+      {
+        auto const &qualified_name(var_deref->qualified_name);
+        if(qualified_name->ns == "clojure.core")
+        {
+          core_fn_name = qualified_name->to_code_string();
+        }
+      }
+    }
+
+    /* Profile enter for clojure.core calls (only if not already inside core). */
+    if(!core_fn_name.empty())
+    {
+      util::format_to(body_buffer, "jank::profile::enter_core(\"{}\");", core_fn_name);
+    }
+
     handle ret_tmp{ runtime::munge(__rt_ctx->unique_namespaced_string("call")) };
     auto const &source_tmp(gen(expr->source_expr, fn_arity));
     format_dynamic_call(source_tmp.unwrap().str(true),
                         ret_tmp.str(true),
                         expr->arg_exprs,
                         fn_arity);
+
+    /* Profile exit for clojure.core calls (only if not already inside core). */
+    if(!core_fn_name.empty())
+    {
+      util::format_to(body_buffer, "jank::profile::exit_core(\"{}\");", core_fn_name);
+    }
 
     if(expr->position == analyze::expression_position::tail)
     {
@@ -1939,6 +1966,12 @@ namespace jank::codegen
     auto const type_str{ Cpp::GetTypeAsString(
       Cpp::GetCanonicalType(Cpp::GetNonReferenceType(value_expr_type))) };
 
+    /* Add profiling for cpp/box when --profile-interop is enabled */
+    if(util::cli::opts.profiler_interop_enabled)
+    {
+      util::format_to(body_buffer, "jank::profile::enter(\"cpp/box<{}>\");", type_str);
+    }
+
     util::format_to(
       body_buffer,
       "auto {}{ jank::runtime::make_box<jank::runtime::obj::opaque_box>({}, \"{}\") };\n",
@@ -1951,6 +1984,11 @@ namespace jank::codegen
                     "jank::runtime::reset_meta({}, jank::runtime::__rt_ctx->read_string(\"{}\"));",
                     ret_tmp,
                     util::escape(runtime::to_code_string(meta)));
+
+    if(util::cli::opts.profiler_interop_enabled)
+    {
+      util::format_to(body_buffer, "jank::profile::exit(\"cpp/box<{}>\");", type_str);
+    }
 
     if(expr->position == expression_position::tail)
     {
@@ -1969,6 +2007,12 @@ namespace jank::codegen
     auto const type_name{ cpp_util::get_qualified_type_name(expr->type) };
     auto const meta{ runtime::source_to_meta(expr->source) };
 
+    /* Add profiling for cpp/unbox when --profile-interop is enabled */
+    if(util::cli::opts.profiler_interop_enabled)
+    {
+      util::format_to(body_buffer, "jank::profile::enter(\"cpp/unbox<{}>\");", type_name);
+    }
+
     util::format_to(body_buffer,
                     "auto {}{ "
                     "static_cast<{}>(jank_unbox_with_source(\"{}\", {}.data, "
@@ -1979,6 +2023,11 @@ namespace jank::codegen
                     type_name,
                     value_tmp.unwrap().str(false),
                     util::escape(runtime::to_code_string(meta)));
+
+    if(util::cli::opts.profiler_interop_enabled)
+    {
+      util::format_to(body_buffer, "jank::profile::exit(\"cpp/unbox<{}>\");", type_name);
+    }
 
     if(expr->position == expression_position::tail)
     {
@@ -1998,6 +2047,12 @@ namespace jank::codegen
 
     auto const type_name{ cpp_util::get_qualified_type_name(expr->type) };
     auto const needs_finalizer{ !Cpp::IsTriviallyDestructible(expr->type) };
+
+    /* Add profiling for cpp/new when --profile-interop is enabled */
+    if(util::cli::opts.profiler_interop_enabled)
+    {
+      util::format_to(body_buffer, "jank::profile::enter(\"cpp/new<{}>\");", type_name);
+    }
 
     if(needs_finalizer)
     {
@@ -2019,6 +2074,11 @@ namespace jank::codegen
                     (needs_finalizer ? ", " + finalizer_tmp : ""),
                     type_name,
                     value_tmp.unwrap().str(false));
+
+    if(util::cli::opts.profiler_interop_enabled)
+    {
+      util::format_to(body_buffer, "jank::profile::exit(\"cpp/new<{}>\");", type_name);
+    }
 
     if(expr->position == expression_position::tail)
     {
