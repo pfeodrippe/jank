@@ -4058,6 +4058,29 @@
      (println (str "Elapsed time: " (/ (- end# start#) 1000000.0) " ms"))
      ret#))
 
+(defn- profile-enter [label]
+  (cpp/clojure.core_native.profile_enter label))
+
+(defn- profile-exit [label]
+  (cpp/clojure.core_native.profile_exit label))
+
+(defn profile-enabled? []
+  (cpp/clojure.core_native.profile_enabled))
+
+(defmacro profile
+  "Profiles expr with the given label. When profiling is enabled (--profile flag),
+   the timing will appear in the profile output file. Returns the value of expr.
+
+   Usage: (profile \"my-operation\" (do-something))"
+  [label expr]
+  `(if (profile-enabled?)
+     (do
+       (profile-enter ~label)
+       (let [ret# ~expr]
+         (profile-exit ~label)
+         ret#))
+     ~expr))
+
 (defn with-redefs-fn
   "Temporarily redefines Vars during a call to func. Each val of
    binding-map will replace the root value of its key which must be

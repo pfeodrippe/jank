@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+"""
+jank profile analyzer - Visualize jank profiling data
+
+Usage:
+    ./bin/profile-analyze profile.txt                  # Print summary
+    ./bin/profile-analyze profile.txt --flamegraph     # Output flamegraph format
+    ./bin/profile-analyze profile.txt --html out.html  # Generate HTML timeline
+    ./bin/profile-analyze profile.txt --tree           # Print call tree
+"""
+
+import sys
+import argparse
+import json
+from dataclasses import dataclass, field
+from typing import Optional
+from collections import defaultdict
+
+
+@dataclass
+class ProfileEvent:
+    timestamp_ns: int
+    event_type: str  # 'enter', 'exit', 'report'
+    region: str
+
+
+@dataclass
+class RegionStats:
+    name: str
+    total_ns: int = 0
+    self_ns: int = 0  # Time excluding children
+    count: int = 0
+    min_ns: int = float('inf')
+    max_ns: int = 0
+    children_time_ns: int = 0
+
+
+@dataclass
+class CallNode:
+    region: str
+    start_ns: int
+    end_ns: int = 0
+    children: list = field(default_factory=list)
+    parent: Optional['CallNode'] = None
+
+    @property
+    def duration_ns(self) -> int:
+        return self.end_ns - self.start_ns if self.end_ns else 0
+
+    @property
+    def self_time_ns(self) -> int:
+        children_time = sum(c.duration_ns for c in self.children)
+        return self.duration_ns - children_time
+
+
+def parse_profile(filepath: str) -> list[ProfileEvent]:
+    """Parse jank profile file into events."""
+    events = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or not line.startswith('jank::profile'):
+                continue
+
+            parts = line.split(None, 3)  # Split on whitespace, max 4 parts
+            if len(parts) < 4:
+                continue
+
+            # jank::profile <timestamp> <event_type> <region>
+            try:
+                timestamp_ns = int(parts[1])
+                event_type = parts[2]
+                region = parts[3]
+                events.append(ProfileEvent(timestamp_ns, event_type, region))
+            except (ValueError, IndexError):
+                continue
+
+    return events
+
+
+def build_call_tree(events: list[ProfileEvent]) -> list[CallNode]:
+    """Build a call tree from profile events."""
+    roots = []
+    stack = []
+
+    for event in events:
+        if event.event_type == 'enter':
+            node = CallNode(region=event.region, start_ns=event.timestamp_ns)
+            if stack:
+                node.parent = stack[-1]
+                stack[-1].children.append(node)
+            else:
+                roots.append(node)
+            stack.append(node)
+
+        elif event.event_type == 'exit':
+            if stack and stack[-1].region == event.region:
+                stack[-1].end_ns = event.timestamp_ns
+                stack.pop()
+            else:
+                # Mismatched exit - try to find matching entry
+                for i in range(len(stack) - 1, -1, -1):
+                    if stack[i].region == event.region:
+                        stack[i].end_ns = event.timestamp_ns
+                        stack[:] = stack[:i]
+                        break
+
+    return roots
+
+
+def compute_stats(roots: list[CallNode]) -> dict[str, RegionStats]:
+    """Compute statistics for each region."""
+    stats = defaultdict(lambda: RegionStats(name=""))
+
+    def visit(node: CallNode):
+        s = stats[node.region]
+        s.name = node.region
+        s.count += 1
+        s.total_ns += node.duration_ns
+        s.self_ns += node.self_time_ns
+        s.min_ns = min(s.min_ns, node.duration_ns)
+        s.max_ns = max(s.max_ns, node.duration_ns)
+
+        for child in node.children:
+            visit(child)
+
+    for root in roots:
+        visit(root)
+
+    return dict(stats)
+
+
+def ns_to_ms(ns: int) -> float:
+    return ns / 1_000_000
+
+
+def ns_to_human(ns: int) -> str:
+    """Convert nanoseconds to human readable format."""
+    if ns < 1_000:
+        return f"{ns}ns"
+    elif ns < 1_000_000:
+        return f"{ns/1_000:.2f}us"
+    elif ns < 1_000_000_000:
+        return f"{ns/1_000_000:.2f}ms"
+    else:
+        return f"{ns/1_000_000_000:.2f}s"
+
+
+def print_summary(stats: dict[str, RegionStats], top_n: int = 30):
+    """Print a summary of profiling data."""
+    print("=" * 80)
+    print("JANK PROFILE SUMMARY")
+    print("=" * 80)
+    print()
+
+    # Sort by total time descending
+    sorted_stats = sorted(stats.values(), key=lambda s: s.total_ns, reverse=True)
+
+    total_time = sum(s.self_ns for s in sorted_stats)
+
+    print(f"Total measured time: {ns_to_human(total_time)}")
+    print(f"Unique regions: {len(stats)}")
+    print()
+
+    print(f"{'Region':<45} {'Total':>12} {'Self':>12} {'Count':>8} {'Avg':>12}")
+    print("-" * 89)
+
+    for s in sorted_stats[:top_n]:
+        avg_ns = s.total_ns // s.count if s.count > 0 else 0
+        print(f"{s.name:<45} {ns_to_human(s.total_ns):>12} {ns_to_human(s.self_ns):>12} {s.count:>8} {ns_to_human(avg_ns):>12}")
+
+    if len(sorted_stats) > top_n:
+        print(f"... and {len(sorted_stats) - top_n} more regions")
+
+    print()
+
+    # Print top by self time (actual work, not including children)
+    print("TOP BY SELF TIME (actual work, excluding nested calls):")
+    print("-" * 89)
+    sorted_by_self = sorted(stats.values(), key=lambda s: s.self_ns, reverse=True)
+    for s in sorted_by_self[:15]:
+        pct = (s.self_ns / total_time * 100) if total_time > 0 else 0
+        print(f"{s.name:<45} {ns_to_human(s.self_ns):>12} ({pct:>5.1f}%)")
+
+
+def print_tree(roots: list[CallNode], max_depth: int = 10):
+    """Print call tree."""
+    print("=" * 80)
+    print("CALL TREE")
+    print("=" * 80)
+
+    def print_node(node: CallNode, depth: int = 0):
+        if depth > max_depth:
+            return
+        indent = "  " * depth
+        duration = ns_to_human(node.duration_ns)
+        self_time = ns_to_human(node.self_time_ns)
+        print(f"{indent}{node.region}: {duration} (self: {self_time})")
+        for child in node.children:
+            print_node(child, depth + 1)
+
+    for root in roots:
+        print_node(root)
+        print()
+
+
+def output_flamegraph(roots: list[CallNode]):
+    """Output in flamegraph format (collapsed stacks)."""
+    stacks = defaultdict(int)
+
+    def collect_stacks(node: CallNode, stack: list[str]):
+        current_stack = stack + [node.region]
+        # Add self time to this stack
+        if node.self_time_ns > 0:
+            stack_str = ";".join(current_stack)
+            stacks[stack_str] += node.self_time_ns // 1000  # Convert to microseconds
+
+        for child in node.children:
+            collect_stacks(child, current_stack)
+
+    for root in roots:
+        collect_stacks(root, [])
+
+    # Output in flamegraph format
+    for stack, time_us in sorted(stacks.items()):
+        if time_us > 0:
+            print(f"{stack} {time_us}")
+
+
+def generate_html(roots: list[CallNode], stats: dict[str, RegionStats], output_path: str):
+    """Generate an HTML timeline visualization."""
+
+    # Find time bounds
+    min_time = float('inf')
+    max_time = 0
+
+    def find_bounds(node: CallNode):
+        nonlocal min_time, max_time
+        min_time = min(min_time, node.start_ns)
+        if node.end_ns:
+            max_time = max(max_time, node.end_ns)
+        for child in node.children:
+            find_bounds(child)
+
+    for root in roots:
+        find_bounds(root)
+
+    total_duration = max_time - min_time
+
+    # Build timeline data
+    timeline_data = []
+
+    def collect_for_timeline(node: CallNode, depth: int = 0):
+        if node.duration_ns > 0:
+            start_pct = ((node.start_ns - min_time) / total_duration) * 100
+            width_pct = (node.duration_ns / total_duration) * 100
+            timeline_data.append({
+                'region': node.region,
+                'start_pct': start_pct,
+                'width_pct': width_pct,
+                'depth': depth,
+                'duration': ns_to_human(node.duration_ns),
+                'self_time': ns_to_human(node.self_time_ns),
+            })
+        for child in node.children:
+            collect_for_timeline(child, depth + 1)
+
+    for root in roots:
+        collect_for_timeline(root)
+
+    # Generate colors based on region name
+    def region_color(name: str) -> str:
+        # Hash-based color
+        h = hash(name) % 360
+        return f"hsl({h}, 70%, 60%)"
+
+    # Build stats table
+    sorted_stats = sorted(stats.values(), key=lambda s: s.total_ns, reverse=True)
+    total_self = sum(s.self_ns for s in sorted_stats)
+
+    stats_rows = ""
+    for s in sorted_stats[:50]:
+        pct = (s.self_ns / total_self * 100) if total_self > 0 else 0
+        avg = s.total_ns // s.count if s.count > 0 else 0
+        stats_rows += f"""
+        <tr>
+            <td style="background: {region_color(s.name)}; width: 10px;"></td>
+            <td>{s.name}</td>
+            <td>{ns_to_human(s.total_ns)}</td>
+            <td>{ns_to_human(s.self_ns)}</td>
+            <td>{pct:.1f}%</td>
+            <td>{s.count}</td>
+            <td>{ns_to_human(avg)}</td>
+        </tr>
+        """
+
+    # Build timeline rows
+    max_depth = max((d['depth'] for d in timeline_data), default=0)
+    row_height = 25
+
+    # Aggregate small items by region and depth into time buckets
+    # This prevents thousands of tiny calls from being filtered out
+    MIN_VISIBLE_PCT = 0.1  # Minimum width to render (lowered from 0.05)
+    BUCKET_PCT = 0.5  # Time bucket size for aggregation
+
+    # Group items: large ones shown directly, small ones aggregated
+    direct_items = []
+    aggregate_buckets = defaultdict(lambda: defaultdict(lambda: {'count': 0, 'total_ns': 0, 'regions': set()}))
+
+    for item in timeline_data:
+        if item['width_pct'] >= MIN_VISIBLE_PCT:
+            direct_items.append(item)
+        else:
+            # Aggregate by depth and time bucket
+            bucket_idx = int(item['start_pct'] / BUCKET_PCT)
+            depth = item['depth']
+            key = (depth, bucket_idx)
+            aggregate_buckets[key][item['region']]['count'] += 1
+            # We don't have raw ns here, estimate from width_pct
+            aggregate_buckets[key][item['region']]['total_ns'] += item['width_pct']
+
+    timeline_items = ""
+
+    # Render direct (large enough) items
+    for item in direct_items:
+        top = item['depth'] * row_height
+        timeline_items += f"""
+        <div class="timeline-item"
+             style="left: {item['start_pct']}%; width: {item['width_pct']}%; top: {top}px; background: {region_color(item['region'])};"
+             title="{item['region']}&#10;Duration: {item['duration']}&#10;Self: {item['self_time']}">
+            {item['region'] if item['width_pct'] > 2 else ''}
+        </div>
+        """
+
+    # Render aggregated buckets
+    for (depth, bucket_idx), regions in aggregate_buckets.items():
+        # Find the dominant region in this bucket
+        dominant_region = max(regions.keys(), key=lambda r: regions[r]['count'])
+        total_count = sum(r['count'] for r in regions.values())
+        total_width = sum(r['total_ns'] for r in regions.values())
+
+        if total_width < MIN_VISIBLE_PCT * 0.5:
+            continue  # Still too small even aggregated
+
+        start_pct = bucket_idx * BUCKET_PCT
+        width_pct = min(total_width, BUCKET_PCT * 0.9)  # Cap at bucket size
+        top = depth * row_height
+
+        # Show aggregated bar with hatched pattern to indicate aggregation
+        region_list = ', '.join(f"{r}({regions[r]['count']})" for r in sorted(regions.keys(), key=lambda r: -regions[r]['count'])[:5])
+        timeline_items += f"""
+        <div class="timeline-item aggregated"
+             style="left: {start_pct}%; width: {width_pct}%; top: {top}px; background: repeating-linear-gradient(45deg, {region_color(dominant_region)}, {region_color(dominant_region)} 2px, rgba(0,0,0,0.3) 2px, rgba(0,0,0,0.3) 4px);"
+             title="Aggregated ({total_count} calls)&#10;{region_list}">
+            {total_count} calls
+        </div>
+        """
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>jank Profile Visualization</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #1a1a2e; color: #eee; }}
+        h1, h2 {{ color: #00d4ff; }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+
+        .timeline-container {{
+            position: relative;
+            width: 100%;
+            height: {(max_depth + 1) * row_height + 20}px;
+            background: #16213e;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin-bottom: 30px;
+        }}
+
+        .timeline-item {{
+            position: absolute;
+            height: {row_height - 2}px;
+            border-radius: 3px;
+            font-size: 11px;
+            color: #fff;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding: 2px 4px;
+            box-sizing: border-box;
+            cursor: pointer;
+            border: 1px solid rgba(0,0,0,0.2);
+        }}
+
+        .timeline-item:hover {{
+            filter: brightness(1.2);
+            z-index: 100;
+        }}
+
+        .timeline-item.aggregated {{
+            font-weight: bold;
+            font-size: 10px;
+            border: 1px dashed rgba(255,255,255,0.5);
+        }}
+
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            background: #16213e;
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        th {{ background: #0f3460; padding: 12px 8px; text-align: left; }}
+        td {{ padding: 8px; border-bottom: 1px solid #0f3460; }}
+        tr:hover {{ background: #1f4068; }}
+
+        .summary {{
+            background: #16213e;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }}
+        .summary span {{
+            display: inline-block;
+            margin-right: 30px;
+            color: #00d4ff;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>jank Profile Visualization</h1>
+
+        <div class="summary">
+            <span>Total Time: {ns_to_human(total_duration)}</span>
+            <span>Regions: {len(stats)}</span>
+            <span>Events: {len(timeline_data)}</span>
+        </div>
+
+        <h2>Timeline</h2>
+        <div class="timeline-container">
+            {timeline_items}
+        </div>
+
+        <h2>Statistics (by total time)</h2>
+        <table>
+            <tr>
+                <th></th>
+                <th>Region</th>
+                <th>Total</th>
+                <th>Self</th>
+                <th>Self %</th>
+                <th>Count</th>
+                <th>Avg</th>
+            </tr>
+            {stats_rows}
+        </table>
+    </div>
+</body>
+</html>
+"""
+
+    with open(output_path, 'w') as f:
+        f.write(html)
+
+    print(f"HTML visualization written to: {output_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Analyze jank profile data')
+    parser.add_argument('profile_file', help='Path to profile file')
+    parser.add_argument('--flamegraph', action='store_true',
+                        help='Output in flamegraph collapsed format')
+    parser.add_argument('--html', metavar='OUTPUT',
+                        help='Generate HTML timeline visualization')
+    parser.add_argument('--tree', action='store_true',
+                        help='Print call tree')
+    parser.add_argument('--top', type=int, default=30,
+                        help='Number of top regions to show (default: 30)')
+
+    args = parser.parse_args()
+
+    # Parse profile
+    events = parse_profile(args.profile_file)
+    if not events:
+        print(f"No profile events found in {args.profile_file}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Parsed {len(events)} events", file=sys.stderr)
+
+    # Build call tree
+    roots = build_call_tree(events)
+    stats = compute_stats(roots)
+
+    if args.flamegraph:
+        output_flamegraph(roots)
+    elif args.html:
+        generate_html(roots, stats, args.html)
+    elif args.tree:
+        print_tree(roots)
+    else:
+        print_summary(stats, args.top)
+
+
+if __name__ == '__main__':
+    main()

@@ -28,6 +28,9 @@ namespace jank::util::cli
         "A {} separated list of directories, JAR files, and ZIP files to search for modules.",
         runtime::module::loader::module_separator_name));
     cli.add_flag("--profile", opts.profiler_enabled, "Enable compiler and runtime profiling.");
+    cli.add_flag("--profile-fns",
+                 opts.profiler_fns_enabled,
+                 "Automatically profile all function calls (implies --profile).");
     cli
       .add_option("--profile-output",
                   opts.profiler_file,
@@ -206,6 +209,12 @@ namespace jank::util::cli
     else if(cli.got_subcommand(&cli_check_health))
     {
       opts.command = command::check_health;
+    }
+
+    /* --profile-fns implies --profile */
+    if(opts.profiler_fns_enabled)
+    {
+      opts.profiler_enabled = true;
     }
 
     return ok();

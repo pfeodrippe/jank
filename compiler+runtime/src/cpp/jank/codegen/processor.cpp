@@ -15,6 +15,7 @@
 #include <jank/util/escape.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/clang_format.hpp>
+#include <jank/util/cli.hpp>
 #include <jank/detail/to_runtime_data.hpp>
 
 /* The strategy for codegen to C++ is quite simple. Codegen always happens on a
@@ -2276,7 +2277,12 @@ namespace jank::codegen
           using namespace jank::runtime;
         )");
 
-      //util::format_to(body_buffer, "jank::profile::timer __timer{ \"{}\" };", root_fn->name);
+      /* When --profile-fns is enabled, add profiling instrumentation to all functions. */
+      if(util::cli::opts.profiler_fns_enabled)
+      {
+        auto const ns_name{ __rt_ctx->current_ns()->name->to_code_string() };
+        util::format_to(body_buffer, "jank::profile::timer const __fn_timer{{ \"fn:{}/{}\" }};", ns_name, root_fn->name);
+      }
 
       if(!param_shadows_fn)
       {

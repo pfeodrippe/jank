@@ -152,7 +152,12 @@ namespace jank::runtime
 
   object_ref context::eval_file(jtl::immutable_string const &path)
   {
+    profile::timer const timer{ "rt eval_file" };
+
+    profile::enter("phase:read_file");
     auto const file(module::loader::read_file(path));
+    profile::exit("phase:read_file");
+
     if(file.is_err())
     {
       throw file.expect_err();
@@ -179,13 +184,22 @@ namespace jank::runtime
       ret = form.expect_ok().unwrap().ptr;
       forms.emplace_back(ret);
 #else
-      analyze::processor an_prc;
-      auto const expr(analyze::pass::optimize(
-        an_prc.analyze(form.expect_ok().unwrap().ptr, analyze::expression_position::statement)
-          .expect_ok()));
-      ret = evaluate::eval(expr);
+      auto const parsed_form = form.expect_ok().unwrap().ptr;
 
-      forms.emplace_back(form.expect_ok().unwrap().ptr);
+      profile::enter("phase:analyze");
+      analyze::processor an_prc;
+      auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+      profile::exit("phase:analyze");
+
+      profile::enter("phase:optimize");
+      expr = analyze::pass::optimize(expr);
+      profile::exit("phase:optimize");
+
+      profile::enter("phase:eval");
+      ret = evaluate::eval(expr);
+      profile::exit("phase:eval");
+
+      forms.emplace_back(parsed_form);
 #endif
     }
 

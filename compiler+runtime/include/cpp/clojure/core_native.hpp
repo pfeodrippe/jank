@@ -70,6 +70,9 @@ namespace clojure::core_native
 
   object_ref sleep(object_ref ms);
   object_ref current_time();
+  object_ref profile_enter(object_ref label);
+  object_ref profile_exit(object_ref label);
+  object_ref profile_enabled();
 
   object_ref eval(object_ref expr);
   object_ref read_string(object_ref /* opts */, object_ref str);

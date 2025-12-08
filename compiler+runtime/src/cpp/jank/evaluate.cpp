@@ -308,6 +308,7 @@ namespace jank::evaluate
 
   object_ref eval(expr::def_ref const expr)
   {
+    profile::timer const timer{ "eval:def" };
     auto var(__rt_ctx->intern_var(expr->name).expect_ok());
     var->meta = expr->name->meta;
 
@@ -614,6 +615,7 @@ namespace jank::evaluate
 
   object_ref eval(expr::function_ref const expr)
   {
+    profile::timer const timer{ "eval:function" };
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     auto const &module(
       module::nest_module(expect_object<ns>(__rt_ctx->current_ns_var->deref())->to_string(),
@@ -629,10 +631,16 @@ namespace jank::evaluate
       codegen::llvm_processor const cg_prc{ wrapped_expr,
                                             module,
                                             codegen::compilation_target::eval };
-      cg_prc.gen().expect_ok();
-      cg_prc.optimize();
+      {
+        profile::timer const gtimer{ "eval:fn:llvm_gen" };
+        cg_prc.gen().expect_ok();
+        cg_prc.optimize();
+      }
 
-      __rt_ctx->jit_prc.load_ir_module(jtl::move(cg_prc.get_module()));
+      {
+        profile::timer const ltimer{ "eval:fn:llvm_load" };
+        __rt_ctx->jit_prc.load_ir_module(jtl::move(cg_prc.get_module()));
+      }
 
       auto const fn(
         __rt_ctx->jit_prc.find_symbol(util::format("{}_0", munge(cg_prc.get_root_fn_name())))
@@ -657,17 +665,23 @@ namespace jank::evaluate
       util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
     }
 
-    __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
+    {
+      profile::timer const jtimer{ "eval:fn:cpp_jit_decl" };
+      __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
+    }
     auto const expr_str{ cg_prc.expression_str() + ".erase()" };
     clang::Value v;
-    auto res(
-      __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
-    if(res)
     {
-      /* TODO: Helper to turn an llvm::Error into a string. */
-      jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
-      llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
-      throw error::internal_codegen_failure(msg);
+      profile::timer const etimer{ "eval:fn:cpp_jit_expr" };
+      auto res(
+        __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
+      if(res)
+      {
+        /* TODO: Helper to turn an llvm::Error into a string. */
+        jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
+        llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
+        throw error::internal_codegen_failure(msg);
+      }
     }
     return try_object<obj::jit_function>(v.convertTo<runtime::object *>());
 #else /* No CppInterOp */

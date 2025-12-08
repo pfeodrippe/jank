@@ -46,6 +46,7 @@ namespace jank::util::cli
     std::string module_path;
     std::string profiler_file{ "jank.profile" };
     bool profiler_enabled{};
+    bool profiler_fns_enabled{};
     bool perf_profiling_enabled{};
     bool gc_incremental{};
     codegen_type codegen{ codegen_type::cpp };

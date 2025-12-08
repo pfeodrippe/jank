@@ -4,6 +4,7 @@
   #include <jank/nrepl_server/native_header_completion.hpp>
 #endif
 
+#include <jank/profile/time.hpp>
 #include <jank/runtime/behavior/callable.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/convert/function.hpp>
@@ -188,6 +189,23 @@ namespace clojure::core_native
     using namespace std::chrono;
     auto const t(high_resolution_clock::now());
     return make_box(duration_cast<nanoseconds>(t.time_since_epoch()).count());
+  }
+
+  object_ref profile_enter(object_ref const label)
+  {
+    profile::enter(to_string(label));
+    return jank_nil;
+  }
+
+  object_ref profile_exit(object_ref const label)
+  {
+    profile::exit(to_string(label));
+    return jank_nil;
+  }
+
+  object_ref profile_enabled()
+  {
+    return make_box(profile::is_enabled());
   }
 
   object_ref in_ns(object_ref const sym)
@@ -735,6 +753,9 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
   intern_val("int32-max", std::numeric_limits<i32>::max());
   intern_fn("sleep", &core_native::sleep);
   intern_fn("current-time", &core_native::current_time);
+  intern_fn("profile-enter", &core_native::profile_enter);
+  intern_fn("profile-exit", &core_native::profile_exit);
+  intern_fn("profile-enabled?", &core_native::profile_enabled);
   intern_fn("create-ns", &core_native::intern_ns);
   intern_fn("in-ns", &core_native::in_ns);
   intern_fn("find-ns", &core_native::find_ns);
