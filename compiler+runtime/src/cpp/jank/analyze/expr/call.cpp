@@ -10,11 +10,13 @@ namespace jank::analyze::expr
              bool const needs_box,
              expression_ref const source,
              native_vector<expression_ref> &&arg_exprs,
-             runtime::obj::persistent_list_ref const form)
+             runtime::obj::persistent_list_ref const form,
+             jtl::ptr<void> const return_tag_type)
     : expression{ expr_kind, position, frame, needs_box }
     , source_expr{ source }
     , arg_exprs{ std::move(arg_exprs) }
     , form{ form }
+    , return_tag_type{ return_tag_type }
   {
   }
 

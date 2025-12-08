@@ -78,8 +78,15 @@ namespace jank::analyze::cpp_util
   jtl::ptr<void> untyped_object_ref_type();
 
   /* Convert a :tag metadata value (keyword or string) to a C++ type pointer.
-   * Returns nullptr if the tag is nil or cannot be resolved. */
+   * Returns nullptr if the tag is nil or cannot be resolved.
+   * Note: This version adds a pointer level (e.g., :i32 -> int*) for boxed value semantics. */
   jtl::ptr<void> tag_to_cpp_type(runtime::object_ref tag);
+
+  /* Convert a :tag metadata value to a C++ type pointer with literal interpretation.
+   * Unlike tag_to_cpp_type, this respects the exact type specified:
+   *   :i32 -> int, :i32* -> int*, "int*" -> int*
+   * Use this for function return type hints where the user specifies the exact type. */
+  jtl::ptr<void> tag_to_cpp_type_literal(runtime::object_ref tag);
 
   usize offset_to_typed_object_base(jtl::ptr<void> type);
 

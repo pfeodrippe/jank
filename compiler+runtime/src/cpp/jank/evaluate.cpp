@@ -188,7 +188,8 @@ namespace jank::evaluate
     expr::function_arity arity{ jtl::move(params),
                                 jtl::make_ref<expr::do_>(expression_position::tail, frame, true),
                                 frame,
-                                fn_ctx };
+                                fn_ctx,
+                                jtl::none };
     expr->frame->parent = arity.frame;
     ret->frame = arity.frame->parent.unwrap_or(arity.frame);
     ret->frame->lift_constant(ret->meta);

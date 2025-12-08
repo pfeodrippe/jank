@@ -19,6 +19,7 @@
 #include <jank/analyze/cpp_util.hpp>
 #include <jank/analyze/visit.hpp>
 #include <jank/analyze/local_frame.hpp>
+#include <jank/analyze/expr/call.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core/munge.hpp>
 #include <jank/jit/interpreter.hpp>
@@ -329,7 +330,7 @@ namespace jank::analyze::cpp_util
         {
           if(Cpp::IsPointerType(type))
           {
-            alias_name += "*";
+            alias_name += " *";
           }
           return alias_name;
         }
@@ -341,7 +342,7 @@ namespace jank::analyze::cpp_util
       auto name{ get_qualified_name(scope) };
       if(Cpp::IsPointerType(type))
       {
-        name = name + "*";
+        name = name + " *";
       }
       return name;
     }
@@ -484,6 +485,135 @@ namespace jank::analyze::cpp_util
     return nullptr;
   }
 
+  jtl::ptr<void> tag_to_cpp_type_literal(runtime::object_ref const tag)
+  {
+    if(tag.is_nil())
+    {
+      return nullptr;
+    }
+
+    /* Handle keyword tags like :bool, :i32, :f64, :i32*, etc.
+     * Unlike tag_to_cpp_type, this returns the exact type without adding pointers. */
+    if(tag->type == runtime::object_type::keyword)
+    {
+      auto const kw = runtime::expect_object<runtime::obj::keyword>(tag);
+      auto const &name = kw->get_name();
+
+      /* Check if keyword ends with * for pointer types */
+      bool const is_pointer = !name.empty() && name[name.size() - 1] == '*';
+      auto const base_name = is_pointer ? name.substr(0, name.size() - 1) : name;
+
+      jtl::ptr<void> base_type = nullptr;
+
+      /* Boolean */
+      if(base_name == "bool" || base_name == "boolean")
+      {
+        base_type = Cpp::GetType("bool");
+      }
+      /* Signed integers */
+      else if(base_name == "i8")
+      {
+        base_type = Cpp::GetType("int8_t");
+      }
+      else if(base_name == "i16")
+      {
+        base_type = Cpp::GetType("int16_t");
+      }
+      else if(base_name == "i32" || base_name == "int")
+      {
+        base_type = Cpp::GetType("int");
+      }
+      else if(base_name == "i64" || base_name == "long")
+      {
+        base_type = Cpp::GetType("long");
+      }
+      /* Unsigned integers */
+      else if(base_name == "u8")
+      {
+        base_type = Cpp::GetType("uint8_t");
+      }
+      else if(base_name == "u16")
+      {
+        base_type = Cpp::GetType("uint16_t");
+      }
+      else if(base_name == "u32")
+      {
+        base_type = Cpp::GetType("unsigned int");
+      }
+      else if(base_name == "u64")
+      {
+        base_type = Cpp::GetType("unsigned long");
+      }
+      /* Floating point */
+      else if(base_name == "f32" || base_name == "float")
+      {
+        base_type = Cpp::GetType("float");
+      }
+      else if(base_name == "f64" || base_name == "double")
+      {
+        base_type = Cpp::GetType("double");
+      }
+      /* Size type */
+      else if(base_name == "size_t")
+      {
+        base_type = Cpp::GetType("size_t");
+      }
+      /* Char */
+      else if(base_name == "char")
+      {
+        base_type = Cpp::GetType("char");
+      }
+      else
+      {
+        /* Try to resolve as a C++ type name */
+        base_type = Cpp::GetType(std::string(base_name));
+      }
+
+      if(base_type)
+      {
+        if(is_pointer)
+        {
+          return Cpp::GetCanonicalType(Cpp::GetPointerType(base_type));
+        }
+        return Cpp::GetCanonicalType(base_type);
+      }
+    }
+
+    /* Handle string tags for arbitrary C++ types.
+     * Parse the string to extract base type and pointer level, then use
+     * Cpp::GetPointerType to match the format used by cpp/box. */
+    if(tag->type == runtime::object_type::persistent_string)
+    {
+      auto const str = runtime::expect_object<runtime::obj::persistent_string>(tag);
+      auto type_str = std::string(str->data);
+
+      /* Count and strip trailing * for pointer level */
+      size_t ptr_count = 0;
+      while(!type_str.empty() && type_str.back() == '*')
+      {
+        ++ptr_count;
+        type_str.pop_back();
+      }
+      /* Also strip trailing spaces */
+      while(!type_str.empty() && type_str.back() == ' ')
+      {
+        type_str.pop_back();
+      }
+
+      auto base_type = Cpp::GetType(type_str);
+      if(base_type)
+      {
+        for(size_t i = 0; i < ptr_count; ++i)
+        {
+          base_type = Cpp::GetPointerType(base_type);
+        }
+        return Cpp::GetCanonicalType(base_type);
+      }
+    }
+
+    return nullptr;
+  }
+
   bool is_member_function(jtl::ptr<void> const scope)
   {
     return Cpp::IsMethod(scope) && !Cpp::IsConstructor(scope) && !Cpp::IsDestructor(scope);
@@ -588,6 +718,13 @@ namespace jank::analyze::cpp_util
         {
           /* cpp/box returns an object*, not the underlying pointer type.
            * Use get_boxed_type() to get the underlying type for inference. */
+          return untyped_object_ptr_type();
+        }
+        else if constexpr(jtl::is_same<T, expr::call>)
+        {
+          /* jank function calls always return object* at runtime.
+           * The return_tag_type is only a hint for cpp/unbox type inference,
+           * not the actual expression type. */
           return untyped_object_ptr_type();
         }
         else if constexpr(jtl::is_same<T, expr::let> || jtl::is_same<T, expr::letfn>)
@@ -1171,6 +1308,11 @@ namespace jank::analyze::cpp_util
   }
 
   jtl::ptr<void> tag_to_cpp_type(runtime::object_ref const)
+  {
+    return {};
+  }
+
+  jtl::ptr<void> tag_to_cpp_type_literal(runtime::object_ref const)
   {
     return {};
   }

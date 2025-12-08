@@ -366,11 +366,28 @@ namespace jank::analyze
   {
     if(args.size() == 2)
     {
-      auto const is_arg0_ptr{ Cpp::IsPointerType(Cpp::GetNonReferenceType(args[0].m_Type)) };
-      if((is_arg0_ptr
-          && is_arg0_ptr != Cpp::IsPointerType(Cpp::GetNonReferenceType(args[1].m_Type)))
-         || !Cpp::IsImplicitlyConvertible(Cpp::GetNonReferenceType(args[0].m_Type),
-                                          Cpp::GetNonReferenceType(args[1].m_Type)))
+      auto const arg0_type{ Cpp::GetNonReferenceType(args[0].m_Type) };
+      auto const arg1_type{ Cpp::GetNonReferenceType(args[1].m_Type) };
+      auto const is_arg0_ptr{ Cpp::IsPointerType(arg0_type) };
+      auto const is_arg1_ptr{ Cpp::IsPointerType(arg1_type) };
+      auto const is_arg1_arr{ Cpp::IsArrayType(arg1_type) };
+
+      /* Handle array-to-pointer decay: arrays are compatible with pointers
+       * when the array element type matches the pointer's pointee type.
+       * This handles cases like: const char* = "string literal" */
+      if(is_arg0_ptr && is_arg1_arr)
+      {
+        auto const pointee_type{ Cpp::GetPointeeType(arg0_type) };
+        auto const elem_type{ Cpp::GetArrayElementType(arg1_type) };
+        if(pointee_type && elem_type
+           && Cpp::IsImplicitlyConvertible(elem_type, pointee_type))
+        {
+          return ok();
+        }
+      }
+
+      if((is_arg0_ptr && is_arg0_ptr != is_arg1_ptr)
+         || !Cpp::IsImplicitlyConvertible(arg0_type, arg1_type))
       {
         return invalid(args, op_name, val, macro_expansions);
       }
@@ -2055,6 +2072,7 @@ namespace jank::analyze
     {
       auto const last_expression{ body_do->values.back() };
       auto const last_expression_type{ cpp_util::expression_type(last_expression) };
+
       if(!cpp_util::is_any_object(last_expression_type)
          && !cpp_util::is_trait_convertible(last_expression_type))
       {
@@ -2081,7 +2099,8 @@ namespace jank::analyze
     return ok(expr::function_arity{ std::move(param_symbols),
                                     body_do,
                                     std::move(frame),
-                                    std::move(fn_ctx) });
+                                    std::move(fn_ctx),
+                                    jtl::none });
   }
 
   processor::expression_result
@@ -3321,6 +3340,7 @@ namespace jank::analyze
     jtl::ptr<expression> source;
     bool needs_ret_box{ true };
     bool needs_arg_box{ true };
+    jtl::ptr<void> return_tag_type{};
 
     /* TODO: If this is a recursive call, note that and skip the var lookup. */
     if(first->type == runtime::object_type::symbol)
@@ -3818,6 +3838,16 @@ namespace jank::analyze
           /* TODO: Rename key. */
           (get(arity_meta, __rt_ctx->intern_keyword("", "unboxed-output?", true).expect_ok())));
 
+        /* Extract :tag from arity metadata for return type hint.
+         * Use tag_to_cpp_type_literal to respect exact user-specified types:
+         * :i32 -> int, :i32* -> int*, not :i32 -> int* */
+        auto const tag_val(
+          get(arity_meta, __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
+        if(!runtime::is_nil(tag_val))
+        {
+          return_tag_type = cpp_util::tag_to_cpp_type_literal(tag_val);
+        }
+
         if(supports_unboxed_input || supports_unboxed_output)
         {
           auto const fn_res(vars.find(var_deref->var));
@@ -3837,6 +3867,19 @@ namespace jank::analyze
 
           needs_arg_box = !supports_unboxed_input;
           needs_ret_box = needs_box | !supports_unboxed_output;
+        }
+
+        /* If no :tag in arity metadata, check for :tag directly on var metadata.
+         * This handles ^{:tag "Type*"} on defn for single-arity functions. */
+        if(!return_tag_type && var_deref->var->meta.is_some())
+        {
+          auto const direct_tag_val(
+            get(var_deref->var->meta.unwrap(),
+                __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
+          if(!runtime::is_nil(direct_tag_val))
+          {
+            return_tag_type = cpp_util::tag_to_cpp_type_literal(direct_tag_val);
+          }
         }
       }
     }
@@ -3945,7 +3988,8 @@ namespace jank::analyze
                                        needs_ret_box,
                                        source.as_ref(),
                                        std::move(arg_exprs),
-                                       o);
+                                       o,
+                                       return_tag_type);
     }
   }
 
@@ -4827,13 +4871,19 @@ namespace jank::analyze
 
       auto const value_expr{ value_expr_res.expect_ok() };
 
-      /* Get the unbox target type from var_deref's tag_type.
-       * This is the boxed_type stored on the var (e.g., bool* for v->p false). */
+      /* Get the unbox target type from var_deref's tag_type or call's return_tag_type.
+       * This is the boxed_type stored on the var (e.g., bool* for v->p false),
+       * or the :tag metadata on a function being called. */
       jtl::ptr<void> inferred_type{ nullptr };
       if(value_expr->kind == expression_kind::var_deref)
       {
         auto const var_deref_expr{ llvm::cast<expr::var_deref>(value_expr.data) };
         inferred_type = var_deref_expr->tag_type;
+      }
+      else if(value_expr->kind == expression_kind::call)
+      {
+        auto const call_expr{ llvm::cast<expr::call>(value_expr.data) };
+        inferred_type = call_expr->return_tag_type;
       }
 
       /* Check if we got a useful type */
