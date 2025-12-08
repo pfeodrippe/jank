@@ -3127,6 +3127,179 @@ TEST_CASE("complete returns multiple global C functions with prefix")
   CHECK(found_draw_line_v);
 }
 
+TEST_CASE("complete returns typedef structs from C header with global scope")
+{
+  /* This test verifies that typedef'd structs from C headers
+   * (like `typedef struct {...} Name;`) are included in completions.
+   * This is the common pattern for C structs in headers like flecs.h
+   * (e.g., ecs_entity_desc_t). */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias with :scope "" for global scope */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Test completion for rl/Vec -> should find Vector2, Vector3 */
+  auto responses(eng.handle(make_message({
+    {     "op", "complete" },
+    { "prefix",   "rl/Vec" },
+    {     "ns",     "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+  auto const &completions(payload.at("completions").as_list());
+
+  std::cerr << "C header struct completions for Vec*: " << completions.size() << "\n";
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    std::cerr << "  - " << dict.at("candidate").as_string()
+              << " (type: " << dict.at("type").as_string() << ")\n";
+  }
+
+  /* Typedef struct completion should work */
+  REQUIRE_FALSE(completions.empty());
+
+  bool found_vector2{ false };
+  bool found_vector3{ false };
+  for(auto const &entry : completions)
+  {
+    auto const &dict(entry.as_dict());
+    auto const &candidate(dict.at("candidate").as_string());
+    if(candidate == "rl/Vector2")
+    {
+      found_vector2 = true;
+      CHECK(dict.at("type").as_string() == "type");
+    }
+    else if(candidate == "rl/Vector3")
+    {
+      found_vector3 = true;
+      CHECK(dict.at("type").as_string() == "type");
+    }
+  }
+
+  CHECK(found_vector2);
+  CHECK(found_vector3);
+
+  /* Also test completion for Color struct */
+  auto color_responses(eng.handle(make_message({
+    {     "op", "complete" },
+    { "prefix",   "rl/Col" },
+    {     "ns",     "user" }
+  })));
+
+  REQUIRE(color_responses.size() == 1);
+  auto const &color_payload(color_responses.front());
+  auto const &color_completions(color_payload.at("completions").as_list());
+
+  bool found_color{ false };
+  for(auto const &entry : color_completions)
+  {
+    auto const &dict(entry.as_dict());
+    if(dict.at("candidate").as_string() == "rl/Color")
+    {
+      found_color = true;
+      CHECK(dict.at("type").as_string() == "type");
+      break;
+    }
+  }
+  CHECK(found_color);
+}
+
+TEST_CASE("info returns fields for typedef structs from C header")
+{
+  /* Test that typedef'd C structs show their fields in the info response */
+  engine eng;
+
+  /* Include the C header */
+  eng.handle(make_message({
+    {   "op",                                                           "eval" },
+    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+  }));
+
+  /* Create a native alias with :scope "" for global scope using require */
+  eng.handle(make_message({
+    {   "op",                                                                  "eval" },
+    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+  }));
+
+  /* Get info for Vector2 */
+  auto responses(eng.handle(make_message({
+    {     "op",     "info" },
+    { "symbol", "rl/Vector2" },
+    {     "ns",      "user" }
+  })));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+
+  /* Check that we got a valid response */
+  REQUIRE(payload.find("status") != payload.end());
+
+  /* Check that cpp-fields is present */
+  auto const fields_it = payload.find("cpp-fields");
+  std::cerr << "Vector2 info has cpp-fields: " << (fields_it != payload.end()) << '\n';
+
+  if(fields_it != payload.end())
+  {
+    auto const &fields = fields_it->second.as_list();
+    std::cerr << "Vector2 has " << fields.size() << " fields\n";
+    for(auto const &field : fields)
+    {
+      auto const &dict = field.as_dict();
+      std::cerr << "  - " << dict.at("name").as_string() << " (" << dict.at("type").as_string() << ")\n";
+    }
+
+    /* Vector2 should have 2 fields: x, y */
+    CHECK(fields.size() == 2);
+
+    bool found_x{ false };
+    bool found_y{ false };
+    for(auto const &field : fields)
+    {
+      auto const &dict = field.as_dict();
+      auto const &name = dict.at("name").as_string();
+      auto const &type = dict.at("type").as_string();
+      if(name == "x")
+      {
+        found_x = true;
+        CHECK(type == "float");
+      }
+      else if(name == "y")
+      {
+        found_y = true;
+        CHECK(type == "float");
+      }
+    }
+    CHECK(found_x);
+    CHECK(found_y);
+  }
+  else
+  {
+    /* Check if doc contains Fields section as fallback */
+    auto const doc_it = payload.find("doc");
+    if(doc_it != payload.end())
+    {
+      auto const &doc = doc_it->second.as_string();
+      std::cerr << "Vector2 doc: " << doc << '\n';
+      CHECK(doc.find("Fields:") != std::string::npos);
+    }
+    else
+    {
+      FAIL("Neither cpp-fields nor doc with Fields found");
+    }
+  }
+}
+
 TEST_CASE("info returns metadata for global C functions")
 {
   /* Test that we can get function info (arglists, etc.) for global C functions */

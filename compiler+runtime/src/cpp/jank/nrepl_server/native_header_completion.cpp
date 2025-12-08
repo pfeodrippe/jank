@@ -11,6 +11,7 @@
 #include <clang/AST/DeclCXX.h>
 #include <clang/AST/DeclBase.h>
 #include <clang/AST/DeclLookups.h>
+#include <clang/AST/Type.h>
 #include <clang/Basic/SourceManager.h>
 
 /* Include Clang Preprocessor headers for macro support */
@@ -595,21 +596,53 @@ namespace jank::nrepl_server::asio
         }
 
         // Check if it's a type (class, struct, or enum)
-        auto const child_scope = Cpp::GetScope(name, scope_handle);
-        if(child_scope && (Cpp::IsClass(child_scope) || Cpp::IsEnumScope(child_scope)))
+        auto child_scope = Cpp::GetScope(name, scope_handle);
+
+        if(child_scope)
         {
-          /* For global scope, filter by header file */
-          if(!header_name.empty())
+          bool is_class = Cpp::IsClass(child_scope);
+          bool is_enum = Cpp::IsEnumScope(child_scope);
+
+          /* Handle C-style typedef structs: typedef struct {...} Name;
+           * In this case, GetScope("Name") returns the TypedefDecl, not the RecordDecl.
+           * We need to check if it's a typedef and get the underlying type. */
+          if(!is_class && !is_enum)
           {
-            if(!is_decl_from_header(static_cast<clang::Decl const *>(child_scope), header_name))
+            auto *decl = static_cast<clang::Decl *>(child_scope);
+            if(auto *typedef_decl = clang::dyn_cast<clang::TypedefNameDecl>(decl))
             {
-              continue;
+              auto underlying_type = typedef_decl->getUnderlyingType();
+              /* Try to get the underlying tag (struct/class/enum) declaration */
+              if(auto *tag_decl = underlying_type->getAsTagDecl())
+              {
+                if(clang::isa<clang::RecordDecl>(tag_decl))
+                {
+                  is_class = true;
+                  child_scope = tag_decl;
+                }
+                else if(clang::isa<clang::EnumDecl>(tag_decl))
+                {
+                  is_enum = true;
+                  child_scope = tag_decl;
+                }
+              }
             }
           }
-
-          if(seen.insert(name).second)
+          if(is_class || is_enum)
           {
-            matches.emplace_back(name);
+            /* For global scope, filter by header file */
+            if(!header_name.empty())
+            {
+              if(!is_decl_from_header(static_cast<clang::Decl const *>(child_scope), header_name))
+              {
+                continue;
+              }
+            }
+
+            if(seen.insert(name).second)
+            {
+              matches.emplace_back(name);
+            }
           }
         }
       }

@@ -54,6 +54,7 @@
 #include <clang/AST/DeclTemplate.h>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/RawCommentList.h>
+#include <clang/AST/Type.h>
 #include <clang/Basic/SourceManager.h>
 #include <llvm/Support/Casting.h>
 #include <llvm/Demangle/Demangle.h>
@@ -2918,16 +2919,53 @@ namespace jank::nrepl_server::asio
     {
       /* Try to find the type using CppInterOp's scope resolution. The symbol_name
        * is just the base name (e.g., "world"), but we need to look it up within
-       * the namespace scope (e.g., flecs::world). */
-      auto const qualified_name(to_std_string(alias.scope) + "::" + symbol_name);
-      auto const type_scope(Cpp::GetScopeFromCompleteName(qualified_name));
+       * the namespace scope (e.g., flecs::world). For global scope (empty alias.scope),
+       * just use the symbol name directly. */
+      std::string qualified_name;
+      if(alias.scope.empty())
+      {
+        qualified_name = symbol_name;
+      }
+      else
+      {
+        qualified_name = to_std_string(alias.scope) + "::" + symbol_name;
+      }
+      auto type_scope(Cpp::GetScopeFromCompleteName(qualified_name));
       if(!type_scope)
       {
         return std::nullopt;
       }
 
+      bool is_class = Cpp::IsClass(type_scope);
+      bool is_enum = Cpp::IsEnumScope(type_scope);
+
+      /* Handle C-style typedef structs: typedef struct {...} Name;
+       * In this case, GetScopeFromCompleteName returns the TypedefDecl, not the RecordDecl.
+       * We need to check if it's a typedef and get the underlying type. */
+      if(!is_class && !is_enum)
+      {
+        auto *decl = static_cast<clang::Decl *>(type_scope);
+        if(auto *typedef_decl = clang::dyn_cast<clang::TypedefNameDecl>(decl))
+        {
+          auto underlying_type = typedef_decl->getUnderlyingType();
+          if(auto *tag_decl = underlying_type->getAsTagDecl())
+          {
+            if(clang::isa<clang::RecordDecl>(tag_decl))
+            {
+              is_class = true;
+              type_scope = tag_decl;
+            }
+            else if(clang::isa<clang::EnumDecl>(tag_decl))
+            {
+              is_enum = true;
+              type_scope = tag_decl;
+            }
+          }
+        }
+      }
+
       /* Verify it's actually a class/struct or enum */
-      if(!Cpp::IsClass(type_scope) && !Cpp::IsEnumScope(type_scope))
+      if(!is_class && !is_enum)
       {
         return std::nullopt;
       }
@@ -3030,6 +3068,32 @@ namespace jank::nrepl_server::asio
         if(info.arglists.empty())
         {
           info.arglists.emplace_back("[]");
+        }
+      }
+
+      /* Enumerate struct/class fields for the Fields: section.
+       * This uses Clang AST directly to handle both C++ classes and C structs.
+       * Cpp::GetDatamembers() only works for CXXRecordDecl, not plain RecordDecl. */
+      {
+        auto *decl = static_cast<clang::Decl *>(type_scope);
+        if(auto *record_decl = clang::dyn_cast<clang::RecordDecl>(decl))
+        {
+          for(auto *field : record_decl->fields())
+          {
+            if(!field)
+            {
+              continue;
+            }
+
+            var_documentation::cpp_field field_doc;
+            field_doc.name = field->getNameAsString();
+
+            /* Get the field type */
+            auto const field_type = field->getType();
+            field_doc.type = field_type.getAsString();
+
+            info.cpp_fields.emplace_back(std::move(field_doc));
+          }
         }
       }
 

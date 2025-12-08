@@ -32,21 +32,23 @@
 - [x] imgui
   - [x] native
   - [x] wasm
+- [ ] flecs
+  - [ ] ecs_entity_desc_t autocomplete
+  - [ ] improve error
 - [ ] integrate raylib + flecs + imgui + jolt
   - [x] raylib + imgui + jolt
   - [x] + flecs
   - [x] wasm
-  - [ ] convert more things to jank instead of using cpp/raw
+  - [x] convert more things to jank instead of using cpp/raw
     - [ ] imgui
-      - [ ] native-draw-imgui-panel
-        - [ ] "Paused" checbox automatic unboxing
-        - [ ] jolt_world_get_num_bodies
-    - [ ] flecs
+      - [x] native-draw-imgui-panel
+        - [x] "Paused" checbox automatic unboxing
+        - [x] jolt_world_get_num_bodies
     - [ ] raylib
   - [ ] nREPL
     - [x] native
     - [ ] wasm
-  - [ ] fix nREPL goto info
+  - [x] fix nREPL goto info
 - [ ] jank issues
   - [x] when we eval any form, state is lost (is-paused)
     - use cpp/new (GC-allocated) instead of, for example, cpp/bool. (which is stack-allocated)
@@ -58,6 +60,7 @@
   - [ ] add docstring/metadata support to ns forms
   - [ ] we need to get a way to get rid of almost all of the cpp/... we should be able to do `.-Data` instead of `cpp/.-Data`
   - [ ] deref (@) could be used in lieu of cpp/*
+  - [ ] improve perf (jank-phase-1 takes a long time!)
 - nREPL
   - [x] autocompletion for ns
   - [x] switch to a ns automatically when evaluating from there
