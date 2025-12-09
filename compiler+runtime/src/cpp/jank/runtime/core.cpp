@@ -7,6 +7,7 @@
 
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/visit.hpp>
+#include <jank/runtime/obj/user_type.hpp>
 #include <jank/runtime/behavior/nameable.hpp>
 #include <jank/runtime/behavior/derefable.hpp>
 #include <jank/runtime/behavior/ref_like.hpp>
@@ -928,6 +929,12 @@ namespace jank::runtime
 
     return reference;
   }
+
+  object_ref make_user_type(object_ref const type_name, object_ref const constructor_fn)
+  {
+    return obj::make_user_type(type_name, constructor_fn);
+  }
+
 }
 
 /* Implementation of scoped_stderr_redirect using file descriptor redirection. */

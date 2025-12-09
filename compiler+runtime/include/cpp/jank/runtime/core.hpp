@@ -140,4 +140,6 @@ namespace jank::runtime
 
   object_ref add_watch(object_ref reference, object_ref key, object_ref fn);
   object_ref remove_watch(object_ref reference, object_ref key);
+
+  object_ref make_user_type(object_ref type_name, object_ref constructor_fn);
 }

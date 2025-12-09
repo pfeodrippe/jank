@@ -3843,7 +3843,7 @@ namespace jank::analyze
          * :i32 -> int, :i32* -> int*, not :i32 -> int* */
         auto const tag_val(
           get(arity_meta, __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
-        if(!runtime::is_nil(tag_val))
+        if(!tag_val.is_nil())
         {
           return_tag_type = cpp_util::tag_to_cpp_type_literal(tag_val);
         }
@@ -3876,7 +3876,7 @@ namespace jank::analyze
           auto const direct_tag_val(
             get(var_deref->var->meta.unwrap(),
                 __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
-          if(!runtime::is_nil(direct_tag_val))
+          if(!direct_tag_val.is_nil())
           {
             return_tag_type = cpp_util::tag_to_cpp_type_literal(direct_tag_val);
           }

@@ -580,6 +580,7 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/obj/uuid.cpp
   src/cpp/jank/runtime/obj/inst.cpp
   src/cpp/jank/runtime/obj/opaque_box.cpp
+  src/cpp/jank/runtime/obj/user_type.cpp
   src/cpp/jank/runtime/obj/character.cpp
   src/cpp/jank/runtime/obj/big_integer.cpp
   src/cpp/jank/runtime/obj/big_decimal.cpp

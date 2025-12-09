@@ -89,6 +89,7 @@ namespace jank::runtime
     inst,
 
     opaque_box,
+    user_type,
   };
 
   [[gnu::visibility("default")]]
@@ -237,6 +238,8 @@ namespace jank::runtime
 
       case object_type::opaque_box:
         return "opaque_box";
+      case object_type::user_type:
+        return "user_type";
     }
     return "unknown";
   }
