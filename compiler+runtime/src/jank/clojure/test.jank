@@ -435,28 +435,32 @@
   'actual' argument will contain the form with all its sub-forms
   evaluated.  If the predicate returns false, the 'actual' form will
   be wrapped in (not...)."
-  [msg form]
+  [msg form file line]
   (let [args (rest form)
         pred (first form)]
     `(let [values# (list ~@args)
            result# (apply ~pred values#)]
        (if result#
          (do-report {:type :pass :message ~msg
-                     :expected '~form :actual (cons '~pred values#)})
+                     :expected '~form :actual (cons '~pred values#)
+                     :file ~file :line ~line})
          (do-report {:type :fail :message ~msg
-                     :expected '~form :actual (list '~'not (cons '~pred values#))}))
+                     :expected '~form :actual (list '~'not (cons '~pred values#))
+                     :file ~file :line ~line}))
        result#)))
 
 (defn assert-any
   "Returns generic assertion code for any test, including macros, Java
   method calls, or isolated symbols."
-  [msg form]
+  [msg form file line]
   `(let [value# ~form]
      (if value#
        (do-report {:type :pass :message ~msg
-                   :expected '~form :actual value#})
+                   :expected '~form :actual value#
+                   :file ~file :line ~line})
        (do-report {:type :fail :message ~msg
-                   :expected '~form :actual value#}))
+                   :expected '~form :actual value#
+                   :file ~file :line ~line}))
      value#))
 
 
@@ -467,48 +471,52 @@
 ;; macro.  These define different kinds of tests, based on the first
 ;; symbol in the test expression.
 
-(defmulti assert-expr 
-  (fn [msg form]
+(defmulti assert-expr
+  (fn [msg form file line]
     (cond
       (nil? form) :always-fail
       (seq? form) (first form)
       :else :default)))
 
-(defmethod assert-expr :always-fail [msg form]
+(defmethod assert-expr :always-fail [msg form file line]
   ;; nil test: always fail
-  `(do-report {:type :fail :message ~msg}))
+  `(do-report {:type :fail :message ~msg :file ~file :line ~line}))
 
-(defmethod assert-expr :default [msg form]
+(defmethod assert-expr :default [msg form file line]
   (if (and (sequential? form) (function? (first form)))
-    (assert-predicate msg form)
-    (assert-any msg form)))
+    (assert-predicate msg form file line)
+    (assert-any msg form file line)))
 
-(defmethod assert-expr 'instance? [msg form]
+(defmethod assert-expr 'instance? [msg form file line]
   ;; Test if x is an instance of y.
   `(let [klass# ~(nth form 1)
          object# ~(nth form 2)]
      (let [result# (instance? klass# object#)]
        (if result#
          (do-report {:type :pass :message ~msg
-                     :expected '~form :actual (class object#)})
+                     :expected '~form :actual (class object#)
+                     :file ~file :line ~line})
          (do-report {:type :fail :message ~msg
-                     :expected '~form :actual (class object#)}))
+                     :expected '~form :actual (class object#)
+                     :file ~file :line ~line}))
        result#)))
 
-(defmethod assert-expr 'thrown? [msg form]
+(defmethod assert-expr 'thrown? [msg form file line]
   ;; (is (thrown? expr))
   ;; Asserts that evaluating expr throws something.
   ;; Returns the thing thrown or nil.
   (let [body (nthnext form 1)]
     `(try (do ~@body)
           (do-report {:type :fail :message ~msg
-                      :expected '~form :actual nil})
+                      :expected '~form :actual nil
+                      :file ~file :line ~line})
           (catch e#
             (do-report {:type :pass :message ~msg
-                        :expected '~form :actual e#})
+                        :expected '~form :actual e#
+                        :file ~file :line ~line})
             e#))))
 
-(defmethod assert-expr 'thrown-with-msg? [msg form]
+(defmethod assert-expr 'thrown-with-msg? [msg form file line]
   ;; (is (thrown-with-msg? re expr))
   ;; Asserts that evaluating expr throws something.
   ;; Also asserts that the message string of the exception matches
@@ -516,25 +524,29 @@
   (let [re (nth form 1)
         body (nthnext form 2)]
     `(try (do ~@body)
-          (do-report {:type :fail :message ~msg :expected '~form :actual nil})
+          (do-report {:type :fail :message ~msg :expected '~form :actual nil
+                      :file ~file :line ~line})
           (catch e#
             (let [m# (ex-message e#)]
               (if (and (string? m#) (re-find ~re m#))
                 (do-report {:type :pass :message ~msg
-                            :expected '~form :actual e#})
+                            :expected '~form :actual e#
+                            :file ~file :line ~line})
                 (do-report {:type :fail :message ~msg
-                            :expected '~form :actual e#})))
+                            :expected '~form :actual e#
+                            :file ~file :line ~line})))
             e#))))
 
 
 (defmacro try-expr
   "Used by the 'is' macro to catch unexpected exceptions.
   You don't call this."
-  [msg form]
-  `(try (do ~(assert-expr msg form))
+  [msg form file line]
+  `(try (do ~(assert-expr msg form file line))
         (catch t#
           (do-report {:type :error :message ~msg
-                      :expected '~form :actual t#}))))
+                      :expected '~form :actual t#
+                      :file ~file :line ~line}))))
 
 
 
@@ -545,7 +557,7 @@
 (defmacro is
   "Generic assertion macro.  'form' is any predicate test.
   'msg' is an optional message to attach to the assertion.
-  
+
   Example: (is (= 4 (+ 2 2)) \"Two plus two should be 4\")
 
   Special forms:
@@ -557,7 +569,13 @@
   thrown AND that the message on the exception matches (with
   re-find) the regular expression re."
   ([form] `(is ~form nil))
-  ([form msg] `(try-expr ~msg ~form)))
+  ([form msg]
+   ;; Extract file/line from form metadata once here
+   (let [form-meta (meta form)
+         jank-source (get form-meta :jank/source)
+         file-val (get jank-source :file)
+         line-val (get-in jank-source [:start :line])]
+     `(try-expr ~msg ~form ~file-val ~line-val))))
 
 (defmacro are
   "Checks multiple assertions with a template expression.

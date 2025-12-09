@@ -233,7 +233,9 @@ namespace jank::nrepl_server::asio
     try
     {
       jtl::immutable_string_view const code_view{ code.data(), code.size() };
-      auto const result(__rt_ctx->eval_string(code_view));
+      auto const result(line_hint.has_value() && column_hint.has_value()
+                          ? __rt_ctx->eval_string(code_view, line_hint.value(), column_hint.value())
+                          : __rt_ctx->eval_string(code_view));
 
       // Restore signal handlers after successful eval
       sigaction(SIGSEGV, &sa_old_segv, nullptr);

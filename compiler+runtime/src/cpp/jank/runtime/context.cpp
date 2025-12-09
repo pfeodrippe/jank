@@ -171,8 +171,15 @@ namespace jank::runtime
 
   object_ref context::eval_string(jtl::immutable_string_view const &code)
   {
+    return eval_string(code, 1, 1);
+  }
+
+  object_ref context::eval_string(jtl::immutable_string_view const &code,
+                                  usize const start_line,
+                                  usize const start_col)
+  {
     profile::timer const timer{ "rt eval_string" };
-    read::lex::processor l_prc{ code };
+    read::lex::processor l_prc{ code, start_line, start_col };
     read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
 
     object_ref ret{ jank_nil };

@@ -48,6 +48,45 @@ namespace jank::nrepl_server::asio
       /* clojure.test might already be loaded, ignore errors */
     }
 
+    /* Install custom assert-expr for = that captures actual values directly.
+     * This is similar to what CIDER-nrepl does to provide better test reporting.
+     * Instead of reporting :actual as (not (= expected actual)), we capture
+     * the individual values so editors can display them properly.
+     * Note: The 4-arg signature [msg form file line] matches the updated
+     * clojure.test/assert-expr dispatch function. */
+    try
+    {
+      __rt_ctx->eval_string(R"(
+        (defmethod clojure.test/assert-expr '= [msg form file line]
+          (let [[_ expected & actuals] form
+                file-val (or file *file*)
+                line-val (or line 1)]
+            `(let [expected# ~expected
+                   actuals# (vector ~@actuals)
+                   result# (apply = expected# actuals#)]
+               (if result#
+                 (clojure.test/do-report {:type :pass
+                                          :message ~msg
+                                          :expected expected#
+                                          :actual (first actuals#)
+                                          :file ~file-val
+                                          :line ~line-val})
+                 (clojure.test/do-report {:type :fail
+                                          :message ~msg
+                                          :expected expected#
+                                          :actual (first actuals#)
+                                          :file ~file-val
+                                          :line ~line-val}))
+               result#)))
+        (defmethod clojure.test/assert-expr 'clojure.core/= [msg form file line]
+          (clojure.test/assert-expr msg (cons '= (rest form)) file line))
+      )");
+    }
+    catch(...)
+    {
+      /* If this fails, tests will still work but with standard clojure.test behavior */
+    }
+
     /* Load the target namespace if requested */
     if(load_ns)
     {
@@ -186,6 +225,8 @@ namespace jank::nrepl_server::asio
           auto const fail_kw(__rt_ctx->intern_keyword("fail").expect_ok());
           auto const error_kw(__rt_ctx->intern_keyword("error").expect_ok());
           auto const test_kw(__rt_ctx->intern_keyword("test").expect_ok());
+          auto const file_kw(__rt_ctx->intern_keyword("file").expect_ok());
+          auto const line_kw(__rt_ctx->intern_keyword("line").expect_ok());
 
           auto const results_vec(runtime::get(test_result, results_kw));
           auto const counters(runtime::get(test_result, counters_kw));
@@ -235,8 +276,30 @@ namespace jank::nrepl_server::asio
               result.emplace("var", test_name);
               result.emplace("index", index++);
 
-              /* Add context if available */
-              result.emplace("context", bencode::value{});
+              /* Add context - use "nil" string for CIDER compatibility */
+              result.emplace("context", "nil");
+
+              /* Add file if present in report */
+              auto const file_val(runtime::get(result_map, file_kw));
+              if(!file_val.is_nil())
+              {
+                result.emplace("file", to_std_string(runtime::to_string(file_val)));
+              }
+              else
+              {
+                result.emplace("file", "NO_SOURCE_FILE");
+              }
+
+              /* Add line if present in report */
+              auto const line_val(runtime::get(result_map, line_kw));
+              if(!line_val.is_nil())
+              {
+                result.emplace("line", runtime::to_int(line_val));
+              }
+              else
+              {
+                result.emplace("line", static_cast<std::int64_t>(1));
+              }
 
               /* Add message if present */
               auto const msg_val(runtime::get(result_map, message_kw));
@@ -256,11 +319,13 @@ namespace jank::nrepl_server::asio
                 auto const actual_val(runtime::get(result_map, actual_kw));
                 if(!expected_val.is_nil())
                 {
-                  result.emplace("expected", to_std_string(runtime::to_code_string(expected_val)));
+                  result.emplace("expected",
+                                 to_std_string(runtime::to_code_string(expected_val)) + "\n");
                 }
                 if(!actual_val.is_nil())
                 {
-                  result.emplace("actual", to_std_string(runtime::to_code_string(actual_val)));
+                  result.emplace("actual",
+                                 to_std_string(runtime::to_code_string(actual_val)) + "\n");
                 }
               }
 
@@ -286,7 +351,9 @@ namespace jank::nrepl_server::asio
             result.emplace("var", test_name);
             result.emplace("index", static_cast<std::int64_t>(0));
             result.emplace("message", "");
-            result.emplace("context", bencode::value{});
+            result.emplace("context", "nil");
+            result.emplace("file", "NO_SOURCE_FILE");
+            result.emplace("line", static_cast<std::int64_t>(1));
 
             auto const var_end_time(std::chrono::steady_clock::now());
             auto const var_elapsed_ms(std::chrono::duration_cast<std::chrono::milliseconds>(

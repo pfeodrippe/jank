@@ -5049,6 +5049,112 @@ TEST_CASE("test op handles failing tests")
   }
 }
 
+TEST_CASE("test op returns correct actual/expected format for failing assertions")
+{
+  engine eng;
+
+  /* Define a test namespace with a failing test that uses evaluated expressions */
+  eng.handle(make_message({
+    {   "op",                                              "eval" },
+    { "code", "(ns test-ns-format (:require [clojure.test :refer [deftest is]]))" }
+  }));
+
+  /* Define a helper function and a failing test that compares evaluated values */
+  eng.handle(make_message({
+    {   "op",                      "eval" },
+    { "code", "(defn get-value [] 42)" }
+  }));
+
+  eng.handle(make_message({
+    {   "op",                      "eval" },
+    { "code", "(deftest format-test (is (= 41 (get-value))))" }
+  }));
+
+  /* Run the test op */
+  bencode::value::dict msg_dict;
+  msg_dict.emplace("op", "test");
+  msg_dict.emplace("ns", "test-ns-format");
+  msg_dict.emplace("load?", "false");
+  msg_dict.emplace("fail-fast", "false");
+
+  bencode::value::list tests_list;
+  tests_list.push_back(bencode::value{ std::string{ "format-test" } });
+  msg_dict.emplace("tests", bencode::value{ std::move(tests_list) });
+
+  auto responses(eng.handle(message{ std::move(msg_dict) }));
+
+  REQUIRE(responses.size() == 1);
+  auto const &payload(responses.front());
+
+  /* Navigate to the test result */
+  auto const results_it(payload.find("results"));
+  REQUIRE(results_it != payload.end());
+  REQUIRE(results_it->second.is_dict());
+
+  auto const &ns_results(results_it->second.as_dict());
+  auto const ns_it(ns_results.find("test-ns-format"));
+  REQUIRE(ns_it != ns_results.end());
+  REQUIRE(ns_it->second.is_dict());
+
+  auto const &var_results(ns_it->second.as_dict());
+  auto const var_it(var_results.find("format-test"));
+  REQUIRE(var_it != var_results.end());
+  REQUIRE(var_it->second.is_list());
+
+  auto const &test_results_list(var_it->second.as_list());
+  REQUIRE(!test_results_list.empty());
+
+  /* Find the fail result */
+  bool found_fail = false;
+  for(auto const &result_entry : test_results_list)
+  {
+    REQUIRE(result_entry.is_dict());
+    auto const &result(result_entry.as_dict());
+
+    auto const type_it(result.find("type"));
+    if(type_it != result.end() && type_it->second.as_string() == "fail")
+    {
+      found_fail = true;
+
+      /* Check that "actual" contains the printed value "42\n", not the form "(not (= 41 42))" */
+      auto const actual_it(result.find("actual"));
+      REQUIRE(actual_it != result.end());
+      std::string actual_str(actual_it->second.as_string());
+      CHECK(actual_str.find("42") != std::string::npos);
+      /* Should NOT contain the wrapped form */
+      CHECK(actual_str.find("not") == std::string::npos);
+
+      /* Check that "expected" contains the printed value "41\n", not the form "(= 41 (get-value))" */
+      auto const expected_it(result.find("expected"));
+      REQUIRE(expected_it != result.end());
+      std::string expected_str(expected_it->second.as_string());
+      CHECK(expected_str.find("41") != std::string::npos);
+      /* Should NOT contain the function call */
+      CHECK(expected_str.find("get-value") == std::string::npos);
+
+      /* Check that "context" is the string "nil" for CIDER compatibility */
+      auto const context_it(result.find("context"));
+      REQUIRE(context_it != result.end());
+      CHECK(context_it->second.is_string());
+      CHECK(context_it->second.as_string() == "nil");
+
+      /* Check that "file" is present */
+      auto const file_it(result.find("file"));
+      REQUIRE(file_it != result.end());
+      CHECK(file_it->second.is_string());
+
+      /* Check that "line" is present and is an integer */
+      auto const line_it(result.find("line"));
+      REQUIRE(line_it != result.end());
+      CHECK(line_it->second.is_integer());
+
+      break;
+    }
+  }
+
+  CHECK(found_fail);
+}
+
 TEST_CASE("test op with nil tests runs all tests in namespace")
 {
   engine eng;
