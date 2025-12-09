@@ -1148,6 +1148,13 @@ if(jank_test)
     test/cpp/jank/runtime/obj/integer_range.cpp
     test/cpp/jank/runtime/obj/repeat.cpp
     test/cpp/jank/nrepl/engine.cpp
+    test/cpp/jank/nrepl/eval.cpp
+    test/cpp/jank/nrepl/complete.cpp
+    test/cpp/jank/nrepl/completions.cpp
+    test/cpp/jank/nrepl/info.cpp
+    test/cpp/jank/nrepl/eldoc.cpp
+    test/cpp/jank/nrepl/test.cpp
+    test/cpp/jank/nrepl/native.cpp
     test/cpp/jank/nrepl/native_header_index.cpp
     test/cpp/jank/jit/processor.cpp
   )
