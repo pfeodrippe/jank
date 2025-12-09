@@ -5293,4 +5293,51 @@ TEST_CASE("test-var-query runs all tests in namespace")
   }
 }
 
+TEST_CASE("eval uses custom print function from nrepl.middleware.print/print")
+{
+  engine eng;
+
+  /* Eval something with the nrepl.middleware.print/print parameter.
+   * The middleware auto-requires the namespace from the print function.
+   * Use a large map with long string values that will exceed the 72-char
+   * right margin and trigger multi-line pretty-printed output. */
+  bencode::value::dict msg_dict;
+  msg_dict.emplace("op", bencode::value{ std::string{ "eval" } });
+  msg_dict.emplace(
+    "code",
+    bencode::value{ std::string{
+      "{:name \"test-value\" :description \"a fairly long description\" :count 42 "
+      ":enabled true :tags [:alpha :beta :gamma] :config {:debug false :level 3}}" } });
+  msg_dict.emplace("nrepl.middleware.print/print",
+                   bencode::value{ std::string{ "cider.nrepl.pprint/pprint" } });
+
+  auto responses(eng.handle(message{ std::move(msg_dict) }));
+  REQUIRE(responses.size() >= 1);
+
+  /* Find the value response */
+  auto const value_payload
+    = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+        return payload.find("value") != payload.end();
+      });
+  REQUIRE(value_payload != responses.end());
+
+  auto const &value_str(value_payload->at("value").as_string());
+  INFO("Eval result: " << value_str);
+
+  /* The result should be a map with nested structures */
+  CHECK_FALSE(value_str.empty());
+
+  /* Pretty-printed output should contain newlines for large maps.
+   * This verifies the print middleware is actually being used. */
+  CHECK(value_str.find('\n') != std::string::npos);
+
+  /* Check that eval completed successfully */
+  auto const done_payload
+    = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+        auto const statuses(extract_status(payload));
+        return std::ranges::find(statuses, "done") != statuses.end();
+      });
+  CHECK(done_payload != responses.end());
+}
+
 }

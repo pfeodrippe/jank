@@ -34,8 +34,9 @@
   - [x] wasm
 - [ ] flecs
   - [x] ecs_entity_desc_t autocomplete
-  - [ ] defcomp
-    - [ ] could we use flecs for it?
+  - [x] defcomp
+    - [x] could we use flecs (YES)
+  - [ ] would should be a map as well
   - [ ] arena
 - [ ] integrate raylib + flecs + imgui + jolt
   - [x] raylib + imgui + jolt

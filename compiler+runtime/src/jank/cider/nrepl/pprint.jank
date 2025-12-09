@@ -1,0 +1,6 @@
+(ns cider.nrepl.pprint
+  (:require [clojure.pprint :as pp]))
+
+(defn pprint
+  [value writer]
+  (pp/pprint value))

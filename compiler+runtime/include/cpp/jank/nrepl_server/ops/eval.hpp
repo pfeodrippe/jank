@@ -251,7 +251,69 @@ namespace jank::nrepl_server::asio
       }
       value_msg.emplace("session", session.id);
       value_msg.emplace("ns", current_ns_name(session.current_ns));
-      value_msg.emplace("value", to_std_string(runtime::to_code_string(result)));
+
+      /* Check for custom print function from nrepl.middleware.print/print */
+      auto const print_fn_name(msg.get("nrepl.middleware.print/print"));
+      if(!print_fn_name.empty())
+      {
+        /* Resolve the print function and call it with the result.
+         * The print function writes to *out*, so we capture that output. */
+        try
+        {
+          /* Extract namespace from qualified symbol (e.g., "cider.nrepl.pprint/pprint" -> "cider.nrepl.pprint") */
+          auto const slash_pos(print_fn_name.find('/'));
+          if(slash_pos != std::string::npos)
+          {
+            auto const ns_name(print_fn_name.substr(0, slash_pos));
+            /* Try to require the namespace (ignore errors if already loaded or doesn't exist) */
+            try
+            {
+              std::string require_code = "(require '" + ns_name + ")";
+              __rt_ctx->eval_string(
+                jtl::immutable_string_view{ require_code.data(), require_code.size() });
+            }
+            catch(...)
+            {
+              /* Ignore require errors - namespace may already be loaded or may not exist */
+            }
+          }
+
+          std::string pprint_output;
+          {
+            runtime::scoped_output_redirect const pprint_redirect{
+              [&pprint_output](std::string const &chunk) { pprint_output += chunk; }
+            };
+            std::string resolve_code = "(resolve '" + print_fn_name + ")";
+            auto const print_fn(__rt_ctx->eval_string(
+              jtl::immutable_string_view{ resolve_code.data(), resolve_code.size() }));
+            if(!print_fn.is_nil())
+            {
+              /* Call (print-fn result nil) - nil for writer since we capture *out* */
+              runtime::dynamic_call(print_fn, result, jank_nil);
+            }
+            else
+            {
+              /* Fall back to default if print function not found */
+              pprint_output = to_std_string(runtime::to_code_string(result));
+            }
+          }
+          /* Remove trailing newline if present (pprint adds one) */
+          if(!pprint_output.empty() && pprint_output.back() == '\n')
+          {
+            pprint_output.pop_back();
+          }
+          value_msg.emplace("value", std::move(pprint_output));
+        }
+        catch(...)
+        {
+          /* On any error, fall back to default formatting */
+          value_msg.emplace("value", to_std_string(runtime::to_code_string(result)));
+        }
+      }
+      else
+      {
+        value_msg.emplace("value", to_std_string(runtime::to_code_string(result)));
+      }
       responses.emplace_back(std::move(value_msg));
 
       responses.emplace_back(make_done_response(session.id, msg.id(), { "done" }));
