@@ -14,13 +14,13 @@
 
 namespace jank::runtime::obj
 {
-  user_type::user_type(user_type_vtable const *const vt, object_ref const d)
+  user_type::user_type(user_type_vtable const * const vt, object_ref const d)
     : vtable{ vt }
     , data{ d }
   {
   }
 
-  user_type::user_type(user_type_vtable const *const vt, object_ref const d, object_ref const m)
+  user_type::user_type(user_type_vtable const * const vt, object_ref const d, object_ref const m)
     : vtable{ vt }
     , data{ d }
     , meta{ m }
@@ -135,7 +135,8 @@ namespace jank::runtime::obj
       return make_box<persistent_vector>(std::in_place, key, val);
     }
 
-    throw std::runtime_error{ "user_type '" + vtable->type_name + "' does not implement get_entry" };
+    throw std::runtime_error{ "user_type '" + vtable->type_name
+                              + "' does not implement get_entry" };
   }
 
   bool user_type::contains(object_ref const key) const
@@ -329,7 +330,9 @@ namespace jank::runtime::obj
     if(!vtable->call_fn.is_nil())
     {
       /* dynamic_call only supports up to 10 args (source + 10), so use apply_to for 11. */
-      auto const args{ make_box<persistent_vector>(std::in_place, this, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10) };
+      auto const args{
+        make_box<persistent_vector>(std::in_place, this, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
+      };
       return apply_to(vtable->call_fn, args);
     }
     throw std::runtime_error{ "user_type '" + vtable->type_name + "' is not callable" };
@@ -352,8 +355,8 @@ namespace jank::runtime::obj
 
   /* Helper to create a user_type instance from vtable_map.
    * Called by the factory function returned by make_user_type. */
-  static user_type_ref create_user_type_instance(jtl::immutable_string const &type_name,
-                                                 object_ref const vtable_map)
+  static user_type_ref
+  create_user_type_instance(jtl::immutable_string const &type_name, object_ref const vtable_map)
   {
     auto vt = make_box<user_type_vtable>();
     vt->type_name = type_name;
@@ -430,12 +433,11 @@ namespace jank::runtime::obj
     auto const name_str{ runtime::to_string(type_name) };
 
     /* Return a native function that creates instances when called with data. */
-    std::function<object_ref(object_ref)> factory_fn{
-      [name_str, constructor_fn](object_ref const data) -> object_ref {
-        auto const vtable_map{ dynamic_call(constructor_fn, data) };
-        return create_user_type_instance(name_str, vtable_map);
-      }
-    };
+    std::function<object_ref(object_ref)> factory_fn{ [name_str, constructor_fn](
+                                                        object_ref const data) -> object_ref {
+      auto const vtable_map{ dynamic_call(constructor_fn, data) };
+      return create_user_type_instance(name_str, vtable_map);
+    } };
     return make_box<native_function_wrapper>(std::move(factory_fn));
   }
 }

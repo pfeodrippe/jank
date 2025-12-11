@@ -88,7 +88,8 @@ namespace jank::runtime
 
     object_ref eval_file(jtl::immutable_string const &path);
     object_ref eval_string(jtl::immutable_string_view const &code);
-    object_ref eval_string(jtl::immutable_string_view const &code, usize start_line, usize start_col);
+    object_ref
+    eval_string(jtl::immutable_string_view const &code, usize start_line, usize start_col);
     jtl::result<void, error_ref> eval_cpp_string(jtl::immutable_string_view const &code) const;
     object_ref read_string(jtl::immutable_string_view const &code);
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)

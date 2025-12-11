@@ -381,7 +381,7 @@ namespace jank::nrepl_server::asio
       /* Define a namespace with typedef aliases to primitive types, similar to flecs.h's
        * ecs_bool_t, ecs_char_t, etc. */
       eng.handle(make_message({
-        {   "op","eval"        },
+        {   "op",                "eval"                },
         { "code",
          "(cpp/raw \"namespace typedef_alias_test { typedef bool test_bool_t; typedef int "
          "test_int_t; typedef float test_float_t; }\")" }
@@ -389,15 +389,16 @@ namespace jank::nrepl_server::asio
 
       /* Require it as a native header alias with scope */
       eng.handle(make_message({
-        {   "op",                                                           "eval" },
-        { "code", "(require '[\"<internal>\" :as typedef-test :scope \"typedef_alias_test\"])" }
+        {   "op",                                             "eval"                 },
+        { "code",
+         "(require '[\"<internal>\" :as typedef-test :scope \"typedef_alias_test\"])" }
       }));
 
       /* Test that typedef aliases to primitives appear in completions */
       auto responses(eng.handle(make_message({
-        {     "op",                  "complete" },
-        { "prefix",     "typedef-test/test_boo" },
-        {     "ns",                      "user" }
+        {     "op",              "complete" },
+        { "prefix", "typedef-test/test_boo" },
+        {     "ns",                  "user" }
       })));
 
       REQUIRE(responses.size() == 1);
@@ -884,7 +885,7 @@ namespace jank::nrepl_server::asio
        * - Non-template methods (like progress(), defer_begin())
        * Path is relative from build directory to test directory. */
       eng.handle(make_message({
-        {   "op",                                                           "eval" },
+        {   "op",                                                              "eval" },
         { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_flecs.hpp\""))" }
       }));
 
@@ -1016,7 +1017,7 @@ namespace jank::nrepl_server::asio
 
       /* Include the test header with #include inside class body */
       eng.handle(make_message({
-        {   "op",                                                                 "eval" },
+        {   "op",                                                                    "eval" },
         { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_mixin_class.hpp\""))" }
       }));
 
@@ -1171,552 +1172,551 @@ namespace jank::nrepl_server::asio
       CHECK(found_get_value);
     }
 
-TEST_CASE("complete returns global C functions from header with no scope")
-{
-  /* This test verifies that C headers with global scope functions
+    TEST_CASE("complete returns global C functions from header with no scope")
+    {
+      /* This test verifies that C headers with global scope functions
    * can be used with native header aliases for autocompletion.
    * This is the pattern used by headers like raylib.h where all
    * functions are declared at global scope (not in a namespace). */
-  engine eng;
+      engine eng;
 
-  /* First include the C header via cpp/raw */
-  eng.handle(make_message({
-    {   "op",                                                           "eval" },
-    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
-  }));
+      /* First include the C header via cpp/raw */
+      eng.handle(make_message({
+        {   "op",                                                               "eval" },
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+      }));
 
-  /* Create a native alias WITH :scope "" - this explicitly sets global scope.
+      /* Create a native alias WITH :scope "" - this explicitly sets global scope.
    * For C headers with global functions (like raylib.h), you must use :scope ""
    * because without it, the scope is auto-derived from the header path. */
-  eng.handle(make_message({
-    {   "op",                                                                  "eval" },
-    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
-  }));
+      eng.handle(make_message({
+        {   "op",                                                                      "eval" },
+        { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+      }));
 
-  /* Test completion for rl/Init -> should find InitWindow */
-  auto responses(eng.handle(make_message({
-    {     "op", "complete" },
-    { "prefix",  "rl/Init" },
-    {     "ns",     "user" }
-  })));
+      /* Test completion for rl/Init -> should find InitWindow */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",  "rl/Init" },
+        {     "ns",     "user" }
+      })));
 
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
 
-  std::cerr << "C header global function completions: " << completions.size() << "\n";
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    std::cerr << "  - " << dict.at("candidate").as_string()
-              << " (type: " << dict.at("type").as_string() << ")\n";
-  }
+      std::cerr << "C header global function completions: " << completions.size() << "\n";
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string()
+                  << " (type: " << dict.at("type").as_string() << ")\n";
+      }
 
-  /* Global C function completion may not work in all environments */
-  if(completions.empty())
-  {
-    WARN("Global C function completion not available - this may indicate a bug or build issue");
-    return;
-  }
+      /* Global C function completion may not work in all environments */
+      if(completions.empty())
+      {
+        WARN("Global C function completion not available - this may indicate a bug or build issue");
+        return;
+      }
 
-  bool found_init_window{ false };
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-    if(candidate == "rl/InitWindow")
-    {
-      found_init_window = true;
-      CHECK(dict.at("type").as_string() == "function");
-      break;
+      bool found_init_window{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "rl/InitWindow")
+        {
+          found_init_window = true;
+          CHECK(dict.at("type").as_string() == "function");
+          break;
+        }
+      }
+      CHECK(found_init_window);
     }
-  }
-  CHECK(found_init_window);
-}
 
-TEST_CASE("complete returns multiple global C functions with prefix")
-{
-  /* Test that we get multiple completions for a prefix that matches
+    TEST_CASE("complete returns multiple global C functions with prefix")
+    {
+      /* Test that we get multiple completions for a prefix that matches
    * several global C functions */
-  engine eng;
+      engine eng;
 
-  /* Include the C header */
-  eng.handle(make_message({
-    {   "op",                                                           "eval" },
-    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
-  }));
+      /* Include the C header */
+      eng.handle(make_message({
+        {   "op",                                                               "eval" },
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+      }));
 
-  /* Create a native alias with :scope "" for global scope */
-  eng.handle(make_message({
-    {   "op",                                                                  "eval" },
-    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
-  }));
+      /* Create a native alias with :scope "" for global scope */
+      eng.handle(make_message({
+        {   "op",                                                                      "eval" },
+        { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+      }));
 
-  /* Test completion for rl/Draw -> should find multiple drawing functions */
-  auto responses(eng.handle(make_message({
-    {     "op", "complete" },
-    { "prefix",  "rl/Draw" },
-    {     "ns",     "user" }
-  })));
+      /* Test completion for rl/Draw -> should find multiple drawing functions */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",  "rl/Draw" },
+        {     "ns",     "user" }
+      })));
 
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
 
-  std::cerr << "C header Draw* completions: " << completions.size() << "\n";
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    std::cerr << "  - " << dict.at("candidate").as_string() << "\n";
-  }
+      std::cerr << "C header Draw* completions: " << completions.size() << "\n";
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string() << "\n";
+      }
 
-  if(completions.empty())
-  {
-    WARN("Global C function completion not available");
-    return;
-  }
+      if(completions.empty())
+      {
+        WARN("Global C function completion not available");
+        return;
+      }
 
-  bool found_draw_rectangle{ false };
-  bool found_draw_circle{ false };
-  bool found_draw_text{ false };
-  bool found_draw_line_v{ false };
+      bool found_draw_rectangle{ false };
+      bool found_draw_circle{ false };
+      bool found_draw_text{ false };
+      bool found_draw_line_v{ false };
 
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-    if(candidate == "rl/DrawRectangle")
-    {
-      found_draw_rectangle = true;
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "rl/DrawRectangle")
+        {
+          found_draw_rectangle = true;
+        }
+        else if(candidate == "rl/DrawCircle")
+        {
+          found_draw_circle = true;
+        }
+        else if(candidate == "rl/DrawText")
+        {
+          found_draw_text = true;
+        }
+        else if(candidate == "rl/DrawLineV")
+        {
+          found_draw_line_v = true;
+        }
+      }
+
+      CHECK(found_draw_rectangle);
+      CHECK(found_draw_circle);
+      CHECK(found_draw_text);
+      CHECK(found_draw_line_v);
     }
-    else if(candidate == "rl/DrawCircle")
-    {
-      found_draw_circle = true;
-    }
-    else if(candidate == "rl/DrawText")
-    {
-      found_draw_text = true;
-    }
-    else if(candidate == "rl/DrawLineV")
-    {
-      found_draw_line_v = true;
-    }
-  }
 
-  CHECK(found_draw_rectangle);
-  CHECK(found_draw_circle);
-  CHECK(found_draw_text);
-  CHECK(found_draw_line_v);
-}
-
-TEST_CASE("complete returns typedef structs from C header with global scope")
-{
-  /* This test verifies that typedef'd structs from C headers
+    TEST_CASE("complete returns typedef structs from C header with global scope")
+    {
+      /* This test verifies that typedef'd structs from C headers
    * (like `typedef struct {...} Name;`) are included in completions.
    * This is the common pattern for C structs in headers like flecs.h
    * (e.g., ecs_entity_desc_t). */
-  engine eng;
+      engine eng;
 
-  /* Include the C header */
-  eng.handle(make_message({
-    {   "op",                                                           "eval" },
-    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
-  }));
+      /* Include the C header */
+      eng.handle(make_message({
+        {   "op",                                                               "eval" },
+        { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+      }));
 
-  /* Create a native alias with :scope "" for global scope */
-  eng.handle(make_message({
-    {   "op",                                                                  "eval" },
-    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
-  }));
+      /* Create a native alias with :scope "" for global scope */
+      eng.handle(make_message({
+        {   "op",                                                                      "eval" },
+        { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+      }));
 
-  /* Test completion for rl/Vec -> should find Vector2, Vector3 */
-  auto responses(eng.handle(make_message({
-    {     "op", "complete" },
-    { "prefix",   "rl/Vec" },
-    {     "ns",     "user" }
-  })));
+      /* Test completion for rl/Vec -> should find Vector2, Vector3 */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",   "rl/Vec" },
+        {     "ns",     "user" }
+      })));
 
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
 
-  std::cerr << "C header struct completions for Vec*: " << completions.size() << "\n";
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    std::cerr << "  - " << dict.at("candidate").as_string()
-              << " (type: " << dict.at("type").as_string() << ")\n";
-  }
+      std::cerr << "C header struct completions for Vec*: " << completions.size() << "\n";
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        std::cerr << "  - " << dict.at("candidate").as_string()
+                  << " (type: " << dict.at("type").as_string() << ")\n";
+      }
 
-  /* Typedef struct completion should work */
-  REQUIRE_FALSE(completions.empty());
+      /* Typedef struct completion should work */
+      REQUIRE_FALSE(completions.empty());
 
-  bool found_vector2{ false };
-  bool found_vector3{ false };
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-    if(candidate == "rl/Vector2")
-    {
-      found_vector2 = true;
-      CHECK(dict.at("type").as_string() == "type");
+      bool found_vector2{ false };
+      bool found_vector3{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        if(candidate == "rl/Vector2")
+        {
+          found_vector2 = true;
+          CHECK(dict.at("type").as_string() == "type");
+        }
+        else if(candidate == "rl/Vector3")
+        {
+          found_vector3 = true;
+          CHECK(dict.at("type").as_string() == "type");
+        }
+      }
+
+      CHECK(found_vector2);
+      CHECK(found_vector3);
+
+      /* Also test completion for Color struct */
+      auto color_responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",   "rl/Col" },
+        {     "ns",     "user" }
+      })));
+
+      REQUIRE(color_responses.size() == 1);
+      auto const &color_payload(color_responses.front());
+      auto const &color_completions(color_payload.at("completions").as_list());
+
+      bool found_color{ false };
+      for(auto const &entry : color_completions)
+      {
+        auto const &dict(entry.as_dict());
+        if(dict.at("candidate").as_string() == "rl/Color")
+        {
+          found_color = true;
+          CHECK(dict.at("type").as_string() == "type");
+          break;
+        }
+      }
+      CHECK(found_color);
     }
-    else if(candidate == "rl/Vector3")
+
+    TEST_CASE("complete returns namespaces in require context")
     {
-      found_vector3 = true;
-      CHECK(dict.at("type").as_string() == "type");
+      engine eng;
+
+      /* Create namespaces to complete */
+      eng.handle(make_message({
+        {   "op",                                           "eval" },
+        { "code", "(ns myapp.handlers) (defn handle-request [] 1)" }
+      }));
+      eng.handle(make_message({
+        {   "op",                                   "eval" },
+        { "code", "(ns myapp.middleware) (defn wrap [] 2)" }
+      }));
+      eng.handle(make_message({
+        {   "op",      "eval" },
+        { "code", "(ns user)" }
+      }));
+
+      /* Test complete with require context */
+      auto responses(eng.handle(make_message({
+        {      "op",   "complete" },
+        {  "prefix",     "myapp." },
+        { "context", "(require '" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+      REQUIRE_FALSE(completions.empty());
+
+      bool found_handlers{ false };
+      bool found_middleware{ false };
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        auto const &type(dict.at("type").as_string());
+
+        CHECK(type == "namespace");
+
+        if(candidate == "myapp.handlers")
+        {
+          found_handlers = true;
+        }
+        if(candidate == "myapp.middleware")
+        {
+          found_middleware = true;
+        }
+      }
+
+      CHECK(found_handlers);
+      CHECK(found_middleware);
     }
-  }
 
-  CHECK(found_vector2);
-  CHECK(found_vector3);
-
-  /* Also test completion for Color struct */
-  auto color_responses(eng.handle(make_message({
-    {     "op", "complete" },
-    { "prefix",   "rl/Col" },
-    {     "ns",     "user" }
-  })));
-
-  REQUIRE(color_responses.size() == 1);
-  auto const &color_payload(color_responses.front());
-  auto const &color_completions(color_payload.at("completions").as_list());
-
-  bool found_color{ false };
-  for(auto const &entry : color_completions)
-  {
-    auto const &dict(entry.as_dict());
-    if(dict.at("candidate").as_string() == "rl/Color")
+    TEST_CASE("complete returns static variables from cpp/raw")
     {
-      found_color = true;
-      CHECK(dict.at("type").as_string() == "type");
-      break;
+      engine eng;
+
+      /* Define static variables via cpp/raw, similar to a real game integration */
+      eng.handle(make_message({
+        {   "op",                    "eval"                },
+        { "code",
+         "(cpp/raw \"static void* g_jolt_world = nullptr;\\n"
+         "static float* g_time_scale_ptr = nullptr;\\n"
+         "static int* g_spawn_count_ptr = nullptr;\\n"
+         "static bool* g_reset_requested_ptr = nullptr;\")" }
+      }));
+
+      /* Complete with cpp/g_ prefix - should find the static variables */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",   "cpp/g_" },
+        {     "ns",     "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+
+      /* Static variable completion MUST work - fail if no completions */
+      INFO("Number of completions: " << completions.size());
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        INFO("Got completion: " << candidate);
+      }
+      REQUIRE_FALSE(completions.empty());
+
+      bool found_jolt_world{ false };
+      bool found_time_scale{ false };
+      bool found_spawn_count{ false };
+      bool found_reset_requested{ false };
+
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+
+        if(candidate == "cpp/g_jolt_world")
+        {
+          found_jolt_world = true;
+          CHECK(dict.at("type").as_string() == "variable");
+        }
+        if(candidate == "cpp/g_time_scale_ptr")
+        {
+          found_time_scale = true;
+          CHECK(dict.at("type").as_string() == "variable");
+        }
+        if(candidate == "cpp/g_spawn_count_ptr")
+        {
+          found_spawn_count = true;
+          CHECK(dict.at("type").as_string() == "variable");
+        }
+        if(candidate == "cpp/g_reset_requested_ptr")
+        {
+          found_reset_requested = true;
+          CHECK(dict.at("type").as_string() == "variable");
+        }
+      }
+
+      CHECK(found_jolt_world);
+      CHECK(found_time_scale);
+      CHECK(found_spawn_count);
+      CHECK(found_reset_requested);
     }
-  }
-  CHECK(found_color);
-}
 
-TEST_CASE("complete returns namespaces in require context")
-{
-  engine eng;
-
-  /* Create namespaces to complete */
-  eng.handle(make_message({
-    {   "op",                                          "eval" },
-    { "code", "(ns myapp.handlers) (defn handle-request [] 1)" }
-  }));
-  eng.handle(make_message({
-    {   "op",                                   "eval" },
-    { "code", "(ns myapp.middleware) (defn wrap [] 2)" }
-  }));
-  eng.handle(make_message({
-    {   "op",        "eval" },
-    { "code", "(ns user)" }
-  }));
-
-  /* Test complete with require context */
-  auto responses(eng.handle(make_message({
-    {      "op",   "complete" },
-    {  "prefix",     "myapp." },
-    { "context", "(require '" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
-  REQUIRE_FALSE(completions.empty());
-
-  bool found_handlers{ false };
-  bool found_middleware{ false };
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-    auto const &type(dict.at("type").as_string());
-
-    CHECK(type == "namespace");
-
-    if(candidate == "myapp.handlers")
+    TEST_CASE("complete returns interned keywords with colon prefix")
     {
-      found_handlers = true;
-    }
-    if(candidate == "myapp.middleware")
-    {
-      found_middleware = true;
-    }
-  }
-
-  CHECK(found_handlers);
-  CHECK(found_middleware);
-}
-
-TEST_CASE("complete returns static variables from cpp/raw")
-{
-  engine eng;
-
-  /* Define static variables via cpp/raw, similar to a real game integration */
-  eng.handle(make_message({
-    {   "op",                                                                          "eval" },
-    { "code",
-     "(cpp/raw \"static void* g_jolt_world = nullptr;\\n"
-     "static float* g_time_scale_ptr = nullptr;\\n"
-     "static int* g_spawn_count_ptr = nullptr;\\n"
-     "static bool* g_reset_requested_ptr = nullptr;\")" }
-  }));
-
-  /* Complete with cpp/g_ prefix - should find the static variables */
-  auto responses(eng.handle(make_message({
-    {     "op", "complete" },
-    { "prefix",   "cpp/g_" },
-    {     "ns",     "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
-
-  /* Static variable completion MUST work - fail if no completions */
-  INFO("Number of completions: " << completions.size());
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-    INFO("Got completion: " << candidate);
-  }
-  REQUIRE_FALSE(completions.empty());
-
-  bool found_jolt_world{ false };
-  bool found_time_scale{ false };
-  bool found_spawn_count{ false };
-  bool found_reset_requested{ false };
-
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-
-    if(candidate == "cpp/g_jolt_world")
-    {
-      found_jolt_world = true;
-      CHECK(dict.at("type").as_string() == "variable");
-    }
-    if(candidate == "cpp/g_time_scale_ptr")
-    {
-      found_time_scale = true;
-      CHECK(dict.at("type").as_string() == "variable");
-    }
-    if(candidate == "cpp/g_spawn_count_ptr")
-    {
-      found_spawn_count = true;
-      CHECK(dict.at("type").as_string() == "variable");
-    }
-    if(candidate == "cpp/g_reset_requested_ptr")
-    {
-      found_reset_requested = true;
-      CHECK(dict.at("type").as_string() == "variable");
-    }
-  }
-
-  CHECK(found_jolt_world);
-  CHECK(found_time_scale);
-  CHECK(found_spawn_count);
-  CHECK(found_reset_requested);
-}
-
-TEST_CASE("complete returns interned keywords with colon prefix")
-{
-  /* This test verifies that keyword autocompletion works.
+      /* This test verifies that keyword autocompletion works.
    * Keywords are interned in the runtime context when used.
    * CIDER sends prefix=":my" to complete keywords starting with :my */
-  engine eng;
+      engine eng;
 
-  /* Use some keywords to intern them */
-  eng.handle(make_message({
-    {   "op",                                                    "eval" },
-    { "code", "(def my-map {:my-key 1 :my-other-key 2 :another 3})" }
-  }));
+      /* Use some keywords to intern them */
+      eng.handle(make_message({
+        {   "op",                                                "eval" },
+        { "code", "(def my-map {:my-key 1 :my-other-key 2 :another 3})" }
+      }));
 
-  /* Complete keywords starting with :my */
-  auto responses(eng.handle(make_message({
-    {     "op", "complete" },
-    { "prefix",      ":my" },
-    {     "ns",     "user" }
-  })));
+      /* Complete keywords starting with :my */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",      ":my" },
+        {     "ns",     "user" }
+      })));
 
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
 
-  /* Should find keywords that start with :my */
-  bool found_my_key{ false };
-  bool found_my_other_key{ false };
-  bool found_another{ false };
+      /* Should find keywords that start with :my */
+      bool found_my_key{ false };
+      bool found_my_other_key{ false };
+      bool found_another{ false };
 
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-    INFO("Got keyword completion: " << candidate);
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        INFO("Got keyword completion: " << candidate);
 
-    if(candidate == ":my-key")
-    {
-      found_my_key = true;
-      CHECK(dict.at("type").as_string() == "keyword");
+        if(candidate == ":my-key")
+        {
+          found_my_key = true;
+          CHECK(dict.at("type").as_string() == "keyword");
+        }
+        if(candidate == ":my-other-key")
+        {
+          found_my_other_key = true;
+          CHECK(dict.at("type").as_string() == "keyword");
+        }
+        if(candidate == ":another")
+        {
+          found_another = true; /* Should NOT be found since prefix is :my */
+        }
+      }
+
+      CHECK(found_my_key);
+      CHECK(found_my_other_key);
+      CHECK_FALSE(found_another); /* :another should not match :my prefix */
     }
-    if(candidate == ":my-other-key")
+
+    TEST_CASE("complete returns qualified keywords with namespace prefix")
     {
-      found_my_other_key = true;
-      CHECK(dict.at("type").as_string() == "keyword");
+      /* This test verifies that qualified keywords like :foo/bar are completed */
+      engine eng;
+
+      /* Use qualified keywords to intern them */
+      eng.handle(make_message({
+        {   "op",                                                             "eval" },
+        { "code", "(def my-data {:user/name \"test\" :user/id 1 :system/config {}})" }
+      }));
+
+      /* Complete keywords in :user namespace */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix", ":user/na" },
+        {     "ns",     "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+
+      bool found_user_name{ false };
+
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        INFO("Got qualified keyword completion: " << candidate);
+
+        if(candidate == ":user/name")
+        {
+          found_user_name = true;
+          CHECK(dict.at("type").as_string() == "keyword");
+        }
+      }
+
+      CHECK(found_user_name);
     }
-    if(candidate == ":another")
+
+    TEST_CASE("complete returns auto-resolved keywords with double colon prefix")
     {
-      found_another = true; /* Should NOT be found since prefix is :my */
+      /* This test verifies that ::foo keywords (auto-resolved to current ns) are completed */
+      engine eng;
+
+      /* Use auto-resolved keywords to intern them in the user namespace */
+      eng.handle(make_message({
+        {   "op",                                                 "eval" },
+        { "code", "(def data {::local-key 1 ::local-other 2 :global 3})" }
+      }));
+
+      /* Complete keywords starting with :: (should find user/local-key, user/local-other) */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",    "::loc" },
+        {     "ns",     "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+
+      bool found_local_key{ false };
+      bool found_local_other{ false };
+      bool found_global{ false };
+
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+        INFO("Got :: keyword completion: " << candidate);
+
+        if(candidate == "::local-key")
+        {
+          found_local_key = true;
+          CHECK(dict.at("type").as_string() == "keyword");
+          CHECK(dict.at("ns").as_string() == "user");
+        }
+        if(candidate == "::local-other")
+        {
+          found_local_other = true;
+          CHECK(dict.at("type").as_string() == "keyword");
+        }
+        if(candidate == ":global" || candidate == "::global")
+        {
+          found_global = true; /* Should NOT be found - it's not in user ns */
+        }
+      }
+
+      CHECK(found_local_key);
+      CHECK(found_local_other);
+      CHECK_FALSE(found_global); /* :global should not match ::loc prefix */
     }
-  }
 
-  CHECK(found_my_key);
-  CHECK(found_my_other_key);
-  CHECK_FALSE(found_another); /* :another should not match :my prefix */
-}
-
-TEST_CASE("complete returns qualified keywords with namespace prefix")
-{
-  /* This test verifies that qualified keywords like :foo/bar are completed */
-  engine eng;
-
-  /* Use qualified keywords to intern them */
-  eng.handle(make_message({
-    {   "op",                                                              "eval" },
-    { "code", "(def my-data {:user/name \"test\" :user/id 1 :system/config {}})" }
-  }));
-
-  /* Complete keywords in :user namespace */
-  auto responses(eng.handle(make_message({
-    {     "op",  "complete" },
-    { "prefix", ":user/na" },
-    {     "ns",      "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
-
-  bool found_user_name{ false };
-
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-    INFO("Got qualified keyword completion: " << candidate);
-
-    if(candidate == ":user/name")
+    TEST_CASE("complete returns all auto-resolved keywords with just double colon")
     {
-      found_user_name = true;
-      CHECK(dict.at("type").as_string() == "keyword");
+      /* This test verifies that :: alone completes all keywords in current namespace */
+      engine eng;
+
+      /* Use auto-resolved keywords */
+      eng.handle(make_message({
+        {   "op",                                 "eval" },
+        { "code", "(def data {::ns-key1 1 ::ns-key2 2})" }
+      }));
+
+      /* Complete with just :: */
+      auto responses(eng.handle(make_message({
+        {     "op", "complete" },
+        { "prefix",       "::" },
+        {     "ns",     "user" }
+      })));
+
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
+      auto const &completions(payload.at("completions").as_list());
+
+      bool found_ns_key1{ false };
+      bool found_ns_key2{ false };
+
+      for(auto const &entry : completions)
+      {
+        auto const &dict(entry.as_dict());
+        auto const &candidate(dict.at("candidate").as_string());
+
+        if(candidate == "::ns-key1")
+        {
+          found_ns_key1 = true;
+        }
+        if(candidate == "::ns-key2")
+        {
+          found_ns_key2 = true;
+        }
+      }
+
+      CHECK(found_ns_key1);
+      CHECK(found_ns_key2);
     }
-  }
-
-  CHECK(found_user_name);
-}
-
-TEST_CASE("complete returns auto-resolved keywords with double colon prefix")
-{
-  /* This test verifies that ::foo keywords (auto-resolved to current ns) are completed */
-  engine eng;
-
-  /* Use auto-resolved keywords to intern them in the user namespace */
-  eng.handle(make_message({
-    {   "op",                                                "eval" },
-    { "code", "(def data {::local-key 1 ::local-other 2 :global 3})" }
-  }));
-
-  /* Complete keywords starting with :: (should find user/local-key, user/local-other) */
-  auto responses(eng.handle(make_message({
-    {     "op", "complete" },
-    { "prefix",    "::loc" },
-    {     "ns",     "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
-
-  bool found_local_key{ false };
-  bool found_local_other{ false };
-  bool found_global{ false };
-
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-    INFO("Got :: keyword completion: " << candidate);
-
-    if(candidate == "::local-key")
-    {
-      found_local_key = true;
-      CHECK(dict.at("type").as_string() == "keyword");
-      CHECK(dict.at("ns").as_string() == "user");
-    }
-    if(candidate == "::local-other")
-    {
-      found_local_other = true;
-      CHECK(dict.at("type").as_string() == "keyword");
-    }
-    if(candidate == ":global" || candidate == "::global")
-    {
-      found_global = true; /* Should NOT be found - it's not in user ns */
-    }
-  }
-
-  CHECK(found_local_key);
-  CHECK(found_local_other);
-  CHECK_FALSE(found_global); /* :global should not match ::loc prefix */
-}
-
-TEST_CASE("complete returns all auto-resolved keywords with just double colon")
-{
-  /* This test verifies that :: alone completes all keywords in current namespace */
-  engine eng;
-
-  /* Use auto-resolved keywords */
-  eng.handle(make_message({
-    {   "op",                                    "eval" },
-    { "code", "(def data {::ns-key1 1 ::ns-key2 2})" }
-  }));
-
-  /* Complete with just :: */
-  auto responses(eng.handle(make_message({
-    {     "op", "complete" },
-    { "prefix",       "::" },
-    {     "ns",     "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-  auto const &completions(payload.at("completions").as_list());
-
-  bool found_ns_key1{ false };
-  bool found_ns_key2{ false };
-
-  for(auto const &entry : completions)
-  {
-    auto const &dict(entry.as_dict());
-    auto const &candidate(dict.at("candidate").as_string());
-
-    if(candidate == "::ns-key1")
-    {
-      found_ns_key1 = true;
-    }
-    if(candidate == "::ns-key2")
-    {
-      found_ns_key2 = true;
-    }
-  }
-
-  CHECK(found_ns_key1);
-  CHECK(found_ns_key2);
-}
-
   }
 }

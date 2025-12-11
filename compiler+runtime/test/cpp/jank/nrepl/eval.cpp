@@ -37,19 +37,19 @@ namespace jank::nrepl_server::asio
 
       /* First, create a namespace with some vars */
       eng.handle(make_message({
-        {   "op",                                              "eval" },
+        {   "op",                                                  "eval" },
         { "code", "(ns my-custom-ns) (def my-var 42) (defn my-fn [] 100)" }
       }));
 
       /* Switch back to user namespace for the session */
       eng.handle(make_message({
-        {   "op",        "eval" },
+        {   "op",      "eval" },
         { "code", "(ns user)" }
       }));
 
       /* Now evaluate code with explicit ns field - should work because my-fn is defined there */
       auto responses(eng.handle(make_message({
-        {   "op",          "eval" },
+        {   "op",         "eval" },
         { "code",      "(my-fn)" },
         {   "ns", "my-custom-ns" }
       })));
@@ -77,27 +77,27 @@ namespace jank::nrepl_server::asio
 
       /* Create a library namespace */
       eng.handle(make_message({
-        {   "op",                                    "eval" },
+        {   "op",                                  "eval" },
         { "code", "(ns my-lib) (defn helper [] :success)" }
       }));
 
       /* Create a namespace that requires the lib with an alias */
       eng.handle(make_message({
-        {   "op",                                                  "eval" },
+        {   "op",                                              "eval" },
         { "code", "(ns my-app (:require [my-lib :as lib])) (def x 1)" }
       }));
 
       /* Switch session to user */
       eng.handle(make_message({
-        {   "op",        "eval" },
+        {   "op",      "eval" },
         { "code", "(ns user)" }
       }));
 
       /* Evaluate using the alias - should work when ns is set to my-app */
       auto responses(eng.handle(make_message({
-        {   "op",        "eval" },
+        {   "op",         "eval" },
         { "code", "(lib/helper)" },
-        {   "ns",      "my-app" }
+        {   "ns",       "my-app" }
       })));
 
       REQUIRE(responses.size() == 2);
@@ -417,52 +417,51 @@ namespace jank::nrepl_server::asio
       }
     }
 
-TEST_CASE("eval uses custom print function from nrepl.middleware.print/print")
-{
-  engine eng;
+    TEST_CASE("eval uses custom print function from nrepl.middleware.print/print")
+    {
+      engine eng;
 
-  /* Eval something with the nrepl.middleware.print/print parameter.
+      /* Eval something with the nrepl.middleware.print/print parameter.
    * The middleware auto-requires the namespace from the print function.
    * Use a large map with long string values that will exceed the 72-char
    * right margin and trigger multi-line pretty-printed output. */
-  bencode::value::dict msg_dict;
-  msg_dict.emplace("op", bencode::value{ std::string{ "eval" } });
-  msg_dict.emplace(
-    "code",
-    bencode::value{ std::string{
-      "{:name \"test-value\" :description \"a fairly long description\" :count 42 "
-      ":enabled true :tags [:alpha :beta :gamma] :config {:debug false :level 3}}" } });
-  msg_dict.emplace("nrepl.middleware.print/print",
-                   bencode::value{ std::string{ "cider.nrepl.pprint/pprint" } });
+      bencode::value::dict msg_dict;
+      msg_dict.emplace("op", bencode::value{ std::string{ "eval" } });
+      msg_dict.emplace(
+        "code",
+        bencode::value{ std::string{
+          "{:name \"test-value\" :description \"a fairly long description\" :count 42 "
+          ":enabled true :tags [:alpha :beta :gamma] :config {:debug false :level 3}}" } });
+      msg_dict.emplace("nrepl.middleware.print/print",
+                       bencode::value{ std::string{ "cider.nrepl.pprint/pprint" } });
 
-  auto responses(eng.handle(message{ std::move(msg_dict) }));
-  REQUIRE(responses.size() >= 1);
+      auto responses(eng.handle(message{ std::move(msg_dict) }));
+      REQUIRE(responses.size() >= 1);
 
-  /* Find the value response */
-  auto const value_payload
-    = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
-        return payload.find("value") != payload.end();
-      });
-  REQUIRE(value_payload != responses.end());
+      /* Find the value response */
+      auto const value_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            return payload.find("value") != payload.end();
+          });
+      REQUIRE(value_payload != responses.end());
 
-  auto const &value_str(value_payload->at("value").as_string());
-  INFO("Eval result: " << value_str);
+      auto const &value_str(value_payload->at("value").as_string());
+      INFO("Eval result: " << value_str);
 
-  /* The result should be a map with nested structures */
-  CHECK_FALSE(value_str.empty());
+      /* The result should be a map with nested structures */
+      CHECK_FALSE(value_str.empty());
 
-  /* Pretty-printed output should contain newlines for large maps.
+      /* Pretty-printed output should contain newlines for large maps.
    * This verifies the print middleware is actually being used. */
-  CHECK(value_str.find('\n') != std::string::npos);
+      CHECK(value_str.find('\n') != std::string::npos);
 
-  /* Check that eval completed successfully */
-  auto const done_payload
-    = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
-        auto const statuses(extract_status(payload));
-        return std::ranges::find(statuses, "done") != statuses.end();
-      });
-  CHECK(done_payload != responses.end());
-}
-
+      /* Check that eval completed successfully */
+      auto const done_payload
+        = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
+            auto const statuses(extract_status(payload));
+            return std::ranges::find(statuses, "done") != statuses.end();
+          });
+      CHECK(done_payload != responses.end());
+    }
   }
 }

@@ -295,9 +295,7 @@ namespace jank::jit
       {
         code_preview.append("...(truncated)");
       }
-      throw std::runtime_error{
-        util::format("Failed to evaluate C++ code:\n{}", code_preview)
-      };
+      throw std::runtime_error{ util::format("Failed to evaluate C++ code:\n{}", code_preview) };
     }
     register_jit_stack_frames();
   }

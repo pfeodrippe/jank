@@ -77,7 +77,9 @@ namespace jank::runtime::obj
   /* A user-defined type instance.
    * Uses a vtable for dynamic dispatch to user-provided jank functions.
    */
-  struct user_type : gc, behavior::callable
+  struct user_type
+    : gc
+    , behavior::callable
   {
     static constexpr object_type obj_type{ object_type::user_type };
     static constexpr bool pointer_free{ false };
@@ -123,14 +125,11 @@ namespace jank::runtime::obj
     object_ref call(object_ref, object_ref, object_ref) override;
     object_ref call(object_ref, object_ref, object_ref, object_ref) override;
     object_ref call(object_ref, object_ref, object_ref, object_ref, object_ref) override;
-    object_ref call(object_ref, object_ref, object_ref, object_ref, object_ref, object_ref) override;
-    object_ref call(object_ref,
-                    object_ref,
-                    object_ref,
-                    object_ref,
-                    object_ref,
-                    object_ref,
-                    object_ref) override;
+    object_ref
+      call(object_ref, object_ref, object_ref, object_ref, object_ref, object_ref) override;
+    object_ref
+      call(object_ref, object_ref, object_ref, object_ref, object_ref, object_ref, object_ref)
+        override;
     object_ref call(object_ref,
                     object_ref,
                     object_ref,

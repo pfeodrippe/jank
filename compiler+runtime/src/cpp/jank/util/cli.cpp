@@ -99,11 +99,12 @@ namespace jank::util::cli
                    opts.libs,
                    "Library identifiers, absolute or relative paths eg. -lfoo for libfoo.so or "
                    "foo.dylib. Can be specified multiple times.");
-    cli.add_option("--jit-lib",
-                   opts.jit_libs,
-                   "Libraries to load into JIT only (not passed to AOT linker). "
-                   "Use for symbol resolution during compilation without creating runtime dependency. "
-                   "Can be specified multiple times.");
+    cli.add_option(
+      "--jit-lib",
+      opts.jit_libs,
+      "Libraries to load into JIT only (not passed to AOT linker). "
+      "Use for symbol resolution during compilation without creating runtime dependency. "
+      "Can be specified multiple times.");
     cli.add_option("--link-lib",
                    opts.link_libs,
                    "Libraries to pass to AOT linker only (not loaded into JIT). "

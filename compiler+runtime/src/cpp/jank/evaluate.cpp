@@ -1002,9 +1002,8 @@ namespace jank::evaluate
                  * Subtract the CppInterOp preamble lines and 1 (since line 1 of user code
                  * is the same line as the cpp/raw call). */
                 auto const cpp_line(source_manager.getSpellingLineNumber(loc));
-                metadata.origin_line
-                  = static_cast<std::int64_t>(src.start.line)
-                    + static_cast<std::int64_t>(cpp_line - cpp_interop_preamble_lines - 1);
+                metadata.origin_line = static_cast<std::int64_t>(src.start.line)
+                  + static_cast<std::int64_t>(cpp_line - cpp_interop_preamble_lines - 1);
                 metadata.origin_column = static_cast<std::int64_t>(src.start.col);
               }
 
@@ -1066,9 +1065,8 @@ namespace jank::evaluate
                  * Subtract the CppInterOp preamble lines and 1 (since line 1 of user code
                  * is the same line as the cpp/raw call). */
                 auto const cpp_line(source_manager.getSpellingLineNumber(loc));
-                metadata.origin_line
-                  = static_cast<std::int64_t>(src.start.line)
-                    + static_cast<std::int64_t>(cpp_line - cpp_interop_preamble_lines - 1);
+                metadata.origin_line = static_cast<std::int64_t>(src.start.line)
+                  + static_cast<std::int64_t>(cpp_line - cpp_interop_preamble_lines - 1);
                 metadata.origin_column = static_cast<std::int64_t>(src.start.col);
               }
 

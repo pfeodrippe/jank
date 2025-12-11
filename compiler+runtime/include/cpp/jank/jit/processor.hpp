@@ -47,6 +47,7 @@ namespace jank::jit
     /* The printed representation of the value, similar to clang-repl output. */
     jtl::immutable_string repr;
   };
+
   /* Thread-local recovery point for fatal LLVM errors. This allows callers (like nREPL eval)
    * to register a jmp_buf that the fatal error handler can use to recover instead of exiting.
    * When set, LLVM fatal errors will longjmp to this point with the JIT_FATAL_ERROR_SIGNAL. */

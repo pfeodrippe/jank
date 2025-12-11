@@ -22,8 +22,8 @@ namespace jank::nrepl_server::asio
 
   /* Check if a name is a defined macro (object-like only).
    * Returns true if the macro is defined and was declared in the specified header. */
-  bool is_native_header_macro(jank::runtime::ns::native_alias const &alias,
-                              std::string const &name);
+  bool
+  is_native_header_macro(jank::runtime::ns::native_alias const &alias, std::string const &name);
 
   /* Check if a name is a function-like macro.
    * Returns true if the macro is defined, is function-like, and was declared in the specified header. */

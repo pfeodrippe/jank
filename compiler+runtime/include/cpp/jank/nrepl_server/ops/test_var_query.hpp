@@ -81,7 +81,8 @@ namespace jank::nrepl_server::asio
       try
       {
         std::string require_code = "(require '" + ns_name + ")";
-        __rt_ctx->eval_string(jtl::immutable_string_view{ require_code.data(), require_code.size() });
+        __rt_ctx->eval_string(
+          jtl::immutable_string_view{ require_code.data(), require_code.size() });
       }
       catch(std::exception const &ex)
       {
@@ -110,7 +111,8 @@ namespace jank::nrepl_server::asio
 
       /* Find all test vars in the namespace (vars with :test metadata) */
       std::string find_tests_code = R"(
-        (let [ns-obj (the-ns ')" + ns_name + R"()
+        (let [ns-obj (the-ns ')"
+        + ns_name + R"()
               mappings (ns-interns ns-obj)]
           (->> mappings
                vals
@@ -126,7 +128,8 @@ namespace jank::nrepl_server::asio
 
         if(!test_vars.is_nil())
         {
-          for(auto it = runtime::fresh_seq(test_vars); !it.is_nil(); it = runtime::next_in_place(it))
+          for(auto it = runtime::fresh_seq(test_vars); !it.is_nil();
+              it = runtime::next_in_place(it))
           {
             auto const test_name(runtime::first(it));
             if(!test_name.is_nil())
@@ -169,12 +172,13 @@ namespace jank::nrepl_server::asio
                                               (when (#{:pass :fail :error} (:type m))
                                                 (swap! results conj m))
                                               (old-report m))]
-                (clojure.test/test-var (resolve '))" + fq_var + R"())
+                (clojure.test/test-var (resolve '))"
+            + fq_var + R"())
                 {:results @results
                  :counters @clojure.test/*report-counters*})))";
 
-          auto const test_result(__rt_ctx->eval_string(
-            jtl::immutable_string_view{ run_code.data(), run_code.size() }));
+          auto const test_result(
+            __rt_ctx->eval_string(jtl::immutable_string_view{ run_code.data(), run_code.size() }));
 
           /* Extract results from the returned map */
           auto const results_kw(__rt_ctx->intern_keyword("results").expect_ok());
@@ -212,7 +216,8 @@ namespace jank::nrepl_server::asio
           std::int64_t index = 0;
           if(!results_vec.is_nil())
           {
-            for(auto it = runtime::fresh_seq(results_vec); !it.is_nil(); it = runtime::next_in_place(it))
+            for(auto it = runtime::fresh_seq(results_vec); !it.is_nil();
+                it = runtime::next_in_place(it))
             {
               auto const result_map(runtime::first(it));
               bencode::value::dict result;
@@ -263,12 +268,14 @@ namespace jank::nrepl_server::asio
               }
 
               auto const var_end_time(std::chrono::steady_clock::now());
-              auto const var_elapsed_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
-                var_end_time - var_start_time).count());
+              auto const var_elapsed_ms(
+                std::chrono::duration_cast<std::chrono::milliseconds>(var_end_time - var_start_time)
+                  .count());
 
               bencode::value::dict elapsed_time;
               elapsed_time.emplace("ms", var_elapsed_ms);
-              elapsed_time.emplace("humanized", "Completed in " + std::to_string(var_elapsed_ms) + " ms");
+              elapsed_time.emplace("humanized",
+                                   "Completed in " + std::to_string(var_elapsed_ms) + " ms");
               result.emplace("elapsed-time", bencode::value{ std::move(elapsed_time) });
 
               test_results_list.push_back(bencode::value{ std::move(result) });
@@ -287,12 +294,14 @@ namespace jank::nrepl_server::asio
             result.emplace("context", bencode::value{});
 
             auto const var_end_time(std::chrono::steady_clock::now());
-            auto const var_elapsed_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
-              var_end_time - var_start_time).count());
+            auto const var_elapsed_ms(
+              std::chrono::duration_cast<std::chrono::milliseconds>(var_end_time - var_start_time)
+                .count());
 
             bencode::value::dict elapsed_time;
             elapsed_time.emplace("ms", var_elapsed_ms);
-            elapsed_time.emplace("humanized", "Completed in " + std::to_string(var_elapsed_ms) + " ms");
+            elapsed_time.emplace("humanized",
+                                 "Completed in " + std::to_string(var_elapsed_ms) + " ms");
             result.emplace("elapsed-time", bencode::value{ std::move(elapsed_time) });
 
             test_results_list.push_back(bencode::value{ std::move(result) });
@@ -357,8 +366,8 @@ namespace jank::nrepl_server::asio
     }
 
     auto const end_time(std::chrono::steady_clock::now());
-    auto const total_elapsed_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
-      end_time - start_time).count());
+    auto const total_elapsed_ms(
+      std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count());
 
     /* Build the summary */
     bencode::value::dict summary;

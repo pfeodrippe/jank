@@ -88,8 +88,7 @@ namespace jank::nrepl_server::asio
     }
     else
     {
-      auto const query(
-        prepare_completion_query(session, prefix, requested_ns, msg.get("symbol")));
+      auto const query(prepare_completion_query(session, prefix, requested_ns, msg.get("symbol")));
       auto const candidates(make_completion_candidates(query));
 
       completions.reserve(candidates.size());

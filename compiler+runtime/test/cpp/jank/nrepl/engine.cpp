@@ -350,6 +350,5 @@ namespace jank::nrepl_server::asio
       REQUIRE(second.size() == 1);
       CHECK(second.front().at("unread").as_string() == "foobar");
     }
-
   }
 }

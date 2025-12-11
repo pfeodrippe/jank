@@ -379,8 +379,7 @@ namespace jank::analyze
       {
         auto const pointee_type{ Cpp::GetPointeeType(arg0_type) };
         auto const elem_type{ Cpp::GetArrayElementType(arg1_type) };
-        if(pointee_type && elem_type
-           && Cpp::IsImplicitlyConvertible(elem_type, pointee_type))
+        if(pointee_type && elem_type && Cpp::IsImplicitlyConvertible(elem_type, pointee_type))
         {
           return ok();
         }
@@ -475,7 +474,6 @@ namespace jank::analyze
     return Cpp::GetLValueReferenceType(
       Cpp::GetPointeeType(Cpp::GetNonReferenceType(args[0].m_Type)));
   }
-
 
   /* Returns the native type for a primitive literal expression (integer -> long, real -> double).
    * Also works for local_references that refer to primitive literal bindings.
@@ -631,12 +629,13 @@ namespace jank::analyze
         }
       }
 
-      return jtl::make_ref<expr::cpp_builtin_operator_call>(position,
-                                                            current_frame,
-                                                            needs_box,
-                                                            op,
-                                                            jtl::move(arg_exprs),
-                                                            found->second.type(converted_arg_types));
+      return jtl::make_ref<expr::cpp_builtin_operator_call>(
+        position,
+        current_frame,
+        needs_box,
+        op,
+        jtl::move(arg_exprs),
+        found->second.type(converted_arg_types));
     }
 
     return invalid(converted_arg_types, op_name, val, macro_expansions);
@@ -1520,10 +1519,9 @@ namespace jank::analyze
     if(def_source != read::source::unknown && def_source.file != read::no_source_path)
     {
       auto meta(qualified_sym->meta.unwrap_or(runtime::jank_nil));
-      meta = runtime::assoc(
-        meta,
-        __rt_ctx->intern_keyword("file").expect_ok(),
-        runtime::make_box<runtime::obj::persistent_string>(def_source.file));
+      meta = runtime::assoc(meta,
+                            __rt_ctx->intern_keyword("file").expect_ok(),
+                            runtime::make_box<runtime::obj::persistent_string>(def_source.file));
       meta = runtime::assoc(
         meta,
         __rt_ctx->intern_keyword("line").expect_ok(),
@@ -1928,7 +1926,12 @@ namespace jank::analyze
       tag_type = cpp_util::tag_to_cpp_type(tag_val);
     }
 
-    return jtl::make_ref<expr::var_deref>(position, current_frame, true, var_qualified_sym, var, tag_type);
+    return jtl::make_ref<expr::var_deref>(position,
+                                          current_frame,
+                                          true,
+                                          var_qualified_sym,
+                                          var,
+                                          tag_type);
   }
 
   jtl::result<expr::function_arity, error_ref>
@@ -3373,7 +3376,8 @@ namespace jank::analyze
              * This allows nested function calls like (ecs_new_w_pair (ecs_mini) 3 4) to work. */
             std::function<jtl::option<native_transient_string>(expression_ref const &)>
               expr_to_cpp_code;
-            expr_to_cpp_code = [&](expression_ref const &e) -> jtl::option<native_transient_string> {
+            expr_to_cpp_code
+              = [&](expression_ref const &e) -> jtl::option<native_transient_string> {
               if(e->kind == expression_kind::primitive_literal)
               {
                 auto const lit{ llvm::cast<expr::primitive_literal>(e.data) };
@@ -3561,7 +3565,8 @@ namespace jank::analyze
               auto const wrapper_name{ __rt_ctx->unique_munged_string("__jank_macro_wrapper") };
 
               /* Build mapping: which args need parameters vs embedded C++ code */
-              native_vector<size_t> jank_arg_indices; /* Indices of args that need object_ref params */
+              native_vector<size_t>
+                jank_arg_indices; /* Indices of args that need object_ref params */
               for(size_t i = 0; i < cpp_codes.size(); ++i)
               {
                 if(cpp_codes[i].empty())
@@ -3697,9 +3702,8 @@ namespace jank::analyze
               auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
               clang::DiagnosticErrorTrap const trap{ diag };
 
-              auto parse_res{
-                jit::get_interpreter()->Parse({ wrapper_code.data(), wrapper_code.size() })
-              };
+              auto parse_res{ jit::get_interpreter()->Parse(
+                { wrapper_code.data(), wrapper_code.size() }) };
               if(!parse_res || trap.hasErrorOccurred())
               {
                 return error::analyze_invalid_cpp_value(
@@ -3721,9 +3725,8 @@ namespace jank::analyze
 
               /* Get the function declaration to create cpp_value */
               auto const * const translation_unit{ parse_res->TUPart };
-              auto const f_decl{
-                llvm::cast<clang::FunctionDecl>(*translation_unit->decls_begin())
-              };
+              auto const f_decl{ llvm::cast<clang::FunctionDecl>(
+                *translation_unit->decls_begin()) };
               auto const ret_type{ Cpp::GetFunctionReturnType(f_decl) };
 
               /* Create cpp_value for the wrapper function */
@@ -3841,8 +3844,7 @@ namespace jank::analyze
         /* Extract :tag from arity metadata for return type hint.
          * Use tag_to_cpp_type_literal to respect exact user-specified types:
          * :i32 -> int, :i32* -> int*, not :i32 -> int* */
-        auto const tag_val(
-          get(arity_meta, __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
+        auto const tag_val(get(arity_meta, __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
         if(!tag_val.is_nil())
         {
           return_tag_type = cpp_util::tag_to_cpp_type_literal(tag_val);
@@ -3873,9 +3875,8 @@ namespace jank::analyze
          * This handles ^{:tag "Type*"} on defn for single-arity functions. */
         if(!return_tag_type && var_deref->var->meta.is_some())
         {
-          auto const direct_tag_val(
-            get(var_deref->var->meta.unwrap(),
-                __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
+          auto const direct_tag_val(get(var_deref->var->meta.unwrap(),
+                                        __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
           if(!direct_tag_val.is_nil())
           {
             return_tag_type = cpp_util::tag_to_cpp_type_literal(direct_tag_val);
@@ -4902,9 +4903,10 @@ namespace jank::analyze
       if(!cpp_util::is_any_object(value_type))
       {
         return error::analyze_invalid_cpp_unbox(
-                 util::format("Unable to unbox value of type '{}', since it's not a jank object type."
-                              " You can only unbox the same object you get back from 'cpp/box'.",
-                              Cpp::GetTypeAsString(value_type)),
+                 util::format(
+                   "Unable to unbox value of type '{}', since it's not a jank object type."
+                   " You can only unbox the same object you get back from 'cpp/box'.",
+                   Cpp::GetTypeAsString(value_type)),
                  object_source(value_obj),
                  latest_expansion(macro_expansions))
           ->add_usage(read::parse::reparse_nth(l, 1));

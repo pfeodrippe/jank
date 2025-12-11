@@ -36,7 +36,7 @@
   - [x] ecs_entity_desc_t autocomplete
   - [x] defcomp
     - [x] could we use flecs (YES)
-  - [ ] would should be a map as well
+  - [x] would should be a map as well
   - [ ] arena
 - [ ] integrate raylib + flecs + imgui + jolt
   - [x] raylib + imgui + jolt

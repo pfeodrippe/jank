@@ -556,8 +556,9 @@ namespace jank::nrepl_server::asio
       /* Get the header name for filtering - only filter for global scope (C headers).
        * For namespaced scopes (C++ headers), we don't filter by header since the
        * namespace already provides the scoping. */
-      auto const header_name
-        = scope_name.empty() ? std::string(alias.header.begin(), alias.header.end()) : std::string{};
+      auto const header_name = scope_name.empty()
+        ? std::string(alias.header.begin(), alias.header.end())
+        : std::string{};
 
       for(auto const &name : candidate_names)
       {

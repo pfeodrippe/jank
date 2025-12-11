@@ -40,7 +40,6 @@ namespace jank::nrepl_server::asio
   std::vector<std::string>
   native_header_index::list_functions(native_alias const &alias, std::string const &prefix) const
   {
-
     /* If the prefix contains a dot, this is a nested member access (e.g., "world.").
      * We can't use the cache for this because the cache only contains top-level symbols.
      * Instead, we need to call enumerate_native_header_symbols directly to get the

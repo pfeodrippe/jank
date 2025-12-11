@@ -461,13 +461,13 @@ namespace jank::nrepl_server::asio
 
       /* Include the test header */
       eng.handle(make_message({
-        {   "op",                                                           "eval" },
+        {   "op",                                                              "eval" },
         { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_flecs.hpp\""))" }
       }));
 
       /* Require it as a native header alias. */
       eng.handle(make_message({
-        {   "op",                                                "eval"                 },
+        {   "op",                                                   "eval"                 },
         { "code",
          R"((require '["../test/cpp/jank/nrepl/test_flecs.hpp" :as flecs :scope "flecs"]))" }
       }));
@@ -657,7 +657,7 @@ namespace jank::nrepl_server::asio
        * The header is located at include/cpp/jank/test/template_types.hpp and defines
        * the namespace template_type_test with various template functions for testing. */
       eng.handle(make_message({
-        {   "op", "eval" },
+        {   "op","eval"                },
         { "code",
          "(require '[\"jank/test/template_types.hpp\" :as tmpl-test :scope "
          "\"template_type_test\"])" }
@@ -674,8 +674,7 @@ namespace jank::nrepl_server::asio
       auto const &payload(responses.front());
 
       auto const arglists_str_it(payload.find("arglists-str"));
-      REQUIRE_MESSAGE(arglists_str_it != payload.end(),
-                      "arglists-str not found in info response");
+      REQUIRE_MESSAGE(arglists_str_it != payload.end(), "arglists-str not found in info response");
 
       auto const &arglists_str(arglists_str_it->second.as_string());
       /* Should have the this pointer with proper type */
@@ -689,7 +688,7 @@ namespace jank::nrepl_server::asio
 
       /* Require the template_types.hpp header with :scope for template_type_test namespace */
       eng.handle(make_message({
-        {   "op", "eval" },
+        {   "op","eval"                },
         { "code",
          "(require '[\"jank/test/template_types.hpp\" :as tmpl-test :scope "
          "\"template_type_test\"])" }
@@ -707,8 +706,7 @@ namespace jank::nrepl_server::asio
 
       /* Check arglists-str doesn't contain "auto" */
       auto const arglists_str_it(payload.find("arglists-str"));
-      REQUIRE_MESSAGE(arglists_str_it != payload.end(),
-                      "arglists-str not found in info response");
+      REQUIRE_MESSAGE(arglists_str_it != payload.end(), "arglists-str not found in info response");
 
       auto const &arglists_str(arglists_str_it->second.as_string());
 
@@ -719,14 +717,13 @@ namespace jank::nrepl_server::asio
       /* Should contain "Args" or the actual parameter pack type */
       bool const has_args_param = arglists_str.find("Args") != std::string::npos
         || arglists_str.find("args") != std::string::npos;
-      CHECK_MESSAGE(has_args_param,
-                    "arglists should contain template parameter name 'Args' or 'args', got: "
-                      << arglists_str);
+      CHECK_MESSAGE(
+        has_args_param,
+        "arglists should contain template parameter name 'Args' or 'args', got: " << arglists_str);
 
       /* Also check return type is not "auto" */
       auto const return_type_it(payload.find("return-type"));
-      REQUIRE_MESSAGE(return_type_it != payload.end(),
-                      "return-type not found in info response");
+      REQUIRE_MESSAGE(return_type_it != payload.end(), "return-type not found in info response");
 
       auto const &return_type(return_type_it->second.as_string());
       /* Return type should be "entity" not "auto" */
@@ -740,7 +737,7 @@ namespace jank::nrepl_server::asio
 
       /* Require the template_types.hpp header with :scope for template_type_test namespace */
       eng.handle(make_message({
-        {   "op", "eval" },
+        {   "op","eval"                },
         { "code",
          "(require '[\"jank/test/template_types.hpp\" :as tmpl-test :scope "
          "\"template_type_test\"])" }
@@ -757,8 +754,7 @@ namespace jank::nrepl_server::asio
       auto const &payload(responses.front());
 
       auto const arglists_str_it(payload.find("arglists-str"));
-      REQUIRE_MESSAGE(arglists_str_it != payload.end(),
-                      "arglists-str not found in info response");
+      REQUIRE_MESSAGE(arglists_str_it != payload.end(), "arglists-str not found in info response");
 
       auto const &arglists_str(arglists_str_it->second.as_string());
 
@@ -777,7 +773,7 @@ namespace jank::nrepl_server::asio
 
       /* Require the template_types.hpp header with :scope for template_type_test namespace */
       eng.handle(make_message({
-        {   "op", "eval" },
+        {   "op","eval"                },
         { "code",
          "(require '[\"jank/test/template_types.hpp\" :as tmpl-test :scope "
          "\"template_type_test\"])" }
@@ -794,8 +790,7 @@ namespace jank::nrepl_server::asio
       auto const &payload(responses.front());
 
       auto const arglists_str_it(payload.find("arglists-str"));
-      REQUIRE_MESSAGE(arglists_str_it != payload.end(),
-                      "arglists-str not found in info response");
+      REQUIRE_MESSAGE(arglists_str_it != payload.end(), "arglists-str not found in info response");
 
       auto const &arglists_str(arglists_str_it->second.as_string());
 
@@ -813,371 +808,379 @@ namespace jank::nrepl_server::asio
     }
   }
 
-TEST_CASE("info returns fields for typedef structs from C header")
-{
-  /* Test that typedef'd C structs show their fields in the info response */
-  engine eng;
-
-  /* Include the C header */
-  eng.handle(make_message({
-    {   "op",                                                           "eval" },
-    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
-  }));
-
-  /* Create a native alias with :scope "" for global scope using require */
-  eng.handle(make_message({
-    {   "op",                                                                  "eval" },
-    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
-  }));
-
-  /* Get info for Vector2 */
-  auto responses(eng.handle(make_message({
-    {     "op",     "info" },
-    { "symbol", "rl/Vector2" },
-    {     "ns",      "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-
-  /* Check that we got a valid response */
-  REQUIRE(payload.find("status") != payload.end());
-
-  /* Check that cpp-fields is present */
-  auto const fields_it = payload.find("cpp-fields");
-  std::cerr << "Vector2 info has cpp-fields: " << (fields_it != payload.end()) << '\n';
-
-  if(fields_it != payload.end())
+  TEST_CASE("info returns fields for typedef structs from C header")
   {
-    auto const &fields = fields_it->second.as_list();
-    std::cerr << "Vector2 has " << fields.size() << " fields\n";
-    for(auto const &field : fields)
-    {
-      auto const &dict = field.as_dict();
-      std::cerr << "  - " << dict.at("name").as_string() << " (" << dict.at("type").as_string() << ")\n";
-    }
+    /* Test that typedef'd C structs show their fields in the info response */
+    engine eng;
 
-    /* Vector2 should have 2 fields: x, y */
-    CHECK(fields.size() == 2);
+    /* Include the C header */
+    eng.handle(make_message({
+      {   "op",                                                               "eval" },
+      { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+    }));
 
-    bool found_x{ false };
-    bool found_y{ false };
-    for(auto const &field : fields)
+    /* Create a native alias with :scope "" for global scope using require */
+    eng.handle(make_message({
+      {   "op",                                                                      "eval" },
+      { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+    }));
+
+    /* Get info for Vector2 */
+    auto responses(eng.handle(make_message({
+      {     "op",       "info" },
+      { "symbol", "rl/Vector2" },
+      {     "ns",       "user" }
+    })));
+
+    REQUIRE(responses.size() == 1);
+    auto const &payload(responses.front());
+
+    /* Check that we got a valid response */
+    REQUIRE(payload.find("status") != payload.end());
+
+    /* Check that cpp-fields is present */
+    auto const fields_it = payload.find("cpp-fields");
+    std::cerr << "Vector2 info has cpp-fields: " << (fields_it != payload.end()) << '\n';
+
+    if(fields_it != payload.end())
     {
-      auto const &dict = field.as_dict();
-      auto const &name = dict.at("name").as_string();
-      auto const &type = dict.at("type").as_string();
-      if(name == "x")
+      auto const &fields = fields_it->second.as_list();
+      std::cerr << "Vector2 has " << fields.size() << " fields\n";
+      for(auto const &field : fields)
       {
-        found_x = true;
-        CHECK(type == "float");
+        auto const &dict = field.as_dict();
+        std::cerr << "  - " << dict.at("name").as_string() << " (" << dict.at("type").as_string()
+                  << ")\n";
       }
-      else if(name == "y")
+
+      /* Vector2 should have 2 fields: x, y */
+      CHECK(fields.size() == 2);
+
+      bool found_x{ false };
+      bool found_y{ false };
+      for(auto const &field : fields)
       {
-        found_y = true;
-        CHECK(type == "float");
+        auto const &dict = field.as_dict();
+        auto const &name = dict.at("name").as_string();
+        auto const &type = dict.at("type").as_string();
+        if(name == "x")
+        {
+          found_x = true;
+          CHECK(type == "float");
+        }
+        else if(name == "y")
+        {
+          found_y = true;
+          CHECK(type == "float");
+        }
       }
-    }
-    CHECK(found_x);
-    CHECK(found_y);
-  }
-  else
-  {
-    /* Check if doc contains Fields section as fallback */
-    auto const doc_it = payload.find("doc");
-    if(doc_it != payload.end())
-    {
-      auto const &doc = doc_it->second.as_string();
-      std::cerr << "Vector2 doc: " << doc << '\n';
-      CHECK(doc.find("Fields:") != std::string::npos);
+      CHECK(found_x);
+      CHECK(found_y);
     }
     else
     {
-      FAIL("Neither cpp-fields nor doc with Fields found");
+      /* Check if doc contains Fields section as fallback */
+      auto const doc_it = payload.find("doc");
+      if(doc_it != payload.end())
+      {
+        auto const &doc = doc_it->second.as_string();
+        std::cerr << "Vector2 doc: " << doc << '\n';
+        CHECK(doc.find("Fields:") != std::string::npos);
+      }
+      else
+      {
+        FAIL("Neither cpp-fields nor doc with Fields found");
+      }
     }
   }
-}
 
-TEST_CASE("info returns metadata for global C functions")
-{
-  /* Test that we can get function info (arglists, etc.) for global C functions */
-  engine eng;
-
-  /* Include the C header */
-  eng.handle(make_message({
-    {   "op",                                                           "eval" },
-    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
-  }));
-
-  /* Create a native alias with :scope "" for global scope */
-  eng.handle(make_message({
-    {   "op",                                                                  "eval" },
-    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
-  }));
-
-  /* Get info for InitWindow function */
-  auto responses(eng.handle(make_message({
-    {  "op",          "info" },
-    { "sym", "rl/InitWindow" },
-    {  "ns",          "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-
-  /* In some environments, the info lookup might fail */
-  auto const arglists_it(payload.find("arglists-str"));
-  if(arglists_it == payload.end())
+  TEST_CASE("info returns metadata for global C functions")
   {
-    WARN("arglists-str not found for global C function");
-    return;
+    /* Test that we can get function info (arglists, etc.) for global C functions */
+    engine eng;
+
+    /* Include the C header */
+    eng.handle(make_message({
+      {   "op",                                                               "eval" },
+      { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+    }));
+
+    /* Create a native alias with :scope "" for global scope */
+    eng.handle(make_message({
+      {   "op",                                                                      "eval" },
+      { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+    }));
+
+    /* Get info for InitWindow function */
+    auto responses(eng.handle(make_message({
+      {  "op",          "info" },
+      { "sym", "rl/InitWindow" },
+      {  "ns",          "user" }
+    })));
+
+    REQUIRE(responses.size() == 1);
+    auto const &payload(responses.front());
+
+    /* In some environments, the info lookup might fail */
+    auto const arglists_it(payload.find("arglists-str"));
+    if(arglists_it == payload.end())
+    {
+      WARN("arglists-str not found for global C function");
+      return;
+    }
+
+    auto const &arglists_str(arglists_it->second.as_string());
+    std::cerr << "InitWindow arglists: " << arglists_str << "\n";
+
+    /* Should contain the parameters */
+    bool const has_width_info = arglists_str.find("width") != std::string::npos
+      || arglists_str.find("int") != std::string::npos;
+    CHECK_MESSAGE(has_width_info,
+                  "arglists should contain 'width' or 'int', got: " << arglists_str);
+
+    bool const has_height_info = arglists_str.find("height") != std::string::npos
+      || arglists_str.find("int") != std::string::npos;
+    CHECK_MESSAGE(has_height_info,
+                  "arglists should contain 'height' or 'int', got: " << arglists_str);
+
+    bool const has_title_info = arglists_str.find("title") != std::string::npos
+      || arglists_str.find("char") != std::string::npos;
+    CHECK_MESSAGE(has_title_info,
+                  "arglists should contain 'title' or 'char', got: " << arglists_str);
+
+    /* Check for trailing inline comment (raylib-style) */
+    auto const doc_it(payload.find("doc"));
+    if(doc_it != payload.end())
+    {
+      auto const &doc_str(doc_it->second.as_string());
+      std::cerr << "InitWindow doc: " << doc_str << "\n";
+
+      /* Should contain the inline comment text */
+      bool const has_doc = doc_str.find("Initialize") != std::string::npos
+        || doc_str.find("window") != std::string::npos;
+      CHECK_MESSAGE(has_doc, "doc should contain 'Initialize' or 'window', got: " << doc_str);
+    }
+    else
+    {
+      std::cerr << "InitWindow has no doc field\n";
+    }
   }
 
-  auto const &arglists_str(arglists_it->second.as_string());
-  std::cerr << "InitWindow arglists: " << arglists_str << "\n";
-
-  /* Should contain the parameters */
-  bool const has_width_info = arglists_str.find("width") != std::string::npos
-                                || arglists_str.find("int") != std::string::npos;
-  CHECK_MESSAGE(has_width_info, "arglists should contain 'width' or 'int', got: " << arglists_str);
-
-  bool const has_height_info = arglists_str.find("height") != std::string::npos
-                                 || arglists_str.find("int") != std::string::npos;
-  CHECK_MESSAGE(has_height_info,
-                "arglists should contain 'height' or 'int', got: " << arglists_str);
-
-  bool const has_title_info = arglists_str.find("title") != std::string::npos
-                                || arglists_str.find("char") != std::string::npos;
-  CHECK_MESSAGE(has_title_info, "arglists should contain 'title' or 'char', got: " << arglists_str);
-
-  /* Check for trailing inline comment (raylib-style) */
-  auto const doc_it(payload.find("doc"));
-  if(doc_it != payload.end())
+  TEST_CASE("info returns raylib-style inline comments as doc")
   {
+    /* Test that trailing inline comments (raylib-style) are extracted as documentation */
+    engine eng;
+
+    /* Include the C header */
+    eng.handle(make_message({
+      {   "op",                                                               "eval" },
+      { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+    }));
+
+    /* Create a native alias with :scope "" for global scope */
+    eng.handle(make_message({
+      {   "op",                                                                      "eval" },
+      { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+    }));
+
+    /* Get info for DrawRectangle function - has inline comment */
+    auto responses(eng.handle(make_message({
+      {  "op",             "info" },
+      { "sym", "rl/DrawRectangle" },
+      {  "ns",             "user" }
+    })));
+
+    REQUIRE(responses.size() == 1);
+    auto const &payload(responses.front());
+
+    auto const doc_it(payload.find("doc"));
+    if(doc_it == payload.end())
+    {
+      WARN("doc not found for DrawRectangle - trailing comment extraction may not be working");
+      return;
+    }
+
     auto const &doc_str(doc_it->second.as_string());
-    std::cerr << "InitWindow doc: " << doc_str << "\n";
+    std::cerr << "DrawRectangle doc: '" << doc_str << "'\n";
 
-    /* Should contain the inline comment text */
-    bool const has_doc = doc_str.find("Initialize") != std::string::npos
-                           || doc_str.find("window") != std::string::npos;
-    CHECK_MESSAGE(has_doc, "doc should contain 'Initialize' or 'window', got: " << doc_str);
-  }
-  else
-  {
-    std::cerr << "InitWindow has no doc field\n";
-  }
-}
-
-TEST_CASE("info returns raylib-style inline comments as doc")
-{
-  /* Test that trailing inline comments (raylib-style) are extracted as documentation */
-  engine eng;
-
-  /* Include the C header */
-  eng.handle(make_message({
-    {   "op",                                                           "eval" },
-    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
-  }));
-
-  /* Create a native alias with :scope "" for global scope */
-  eng.handle(make_message({
-    {   "op",                                                                  "eval" },
-    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
-  }));
-
-  /* Get info for DrawRectangle function - has inline comment */
-  auto responses(eng.handle(make_message({
-    {  "op",              "info" },
-    { "sym", "rl/DrawRectangle" },
-    {  "ns",              "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-
-  auto const doc_it(payload.find("doc"));
-  if(doc_it == payload.end())
-  {
-    WARN("doc not found for DrawRectangle - trailing comment extraction may not be working");
-    return;
-  }
-
-  auto const &doc_str(doc_it->second.as_string());
-  std::cerr << "DrawRectangle doc: '" << doc_str << "'\n";
-
-  /* Should contain the inline comment text from the header:
+    /* Should contain the inline comment text from the header:
    * void DrawRectangle(...);  // Draw a color-filled rectangle */
-  bool const has_draw = doc_str.find("Draw") != std::string::npos;
-  bool const has_rectangle = doc_str.find("rectangle") != std::string::npos;
-  bool const has_expected_content = has_draw || has_rectangle;
-  CHECK_MESSAGE(has_expected_content,
-                "doc should contain 'Draw' or 'rectangle', got: " << doc_str);
-}
-
-TEST_CASE("info shows variadic indicator for C variadic functions")
-{
-  /* Test that variadic C functions show ... in their arglists */
-  engine eng;
-
-  /* Include the C header */
-  eng.handle(make_message({
-    {   "op",                                                           "eval" },
-    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
-  }));
-
-  /* Create a native alias with :scope "" for global scope */
-  eng.handle(make_message({
-    {   "op",                                                                  "eval" },
-    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
-  }));
-
-  /* Get info for TraceLog - a variadic function */
-  auto responses(eng.handle(make_message({
-    {  "op",         "info" },
-    { "sym", "rl/TraceLog" },
-    {  "ns",         "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-
-  auto const arglists_it(payload.find("arglists-str"));
-  if(arglists_it == payload.end())
-  {
-    WARN("arglists-str not found for TraceLog");
-    return;
+    bool const has_draw = doc_str.find("Draw") != std::string::npos;
+    bool const has_rectangle = doc_str.find("rectangle") != std::string::npos;
+    bool const has_expected_content = has_draw || has_rectangle;
+    CHECK_MESSAGE(has_expected_content,
+                  "doc should contain 'Draw' or 'rectangle', got: " << doc_str);
   }
 
-  auto const &arglists_str(arglists_it->second.as_string());
-  std::cerr << "TraceLog arglists: " << arglists_str << "\n";
-
-  /* Should contain the variadic indicator */
-  bool const has_variadic = arglists_str.find("...") != std::string::npos;
-  CHECK_MESSAGE(has_variadic, "arglists should contain '...' for variadic function, got: " << arglists_str);
-
-  /* Should also have the fixed parameters */
-  bool const has_log_level = arglists_str.find("logLevel") != std::string::npos
-                               || arglists_str.find("int") != std::string::npos;
-  CHECK_MESSAGE(has_log_level, "arglists should contain logLevel or int, got: " << arglists_str);
-
-  bool const has_text = arglists_str.find("text") != std::string::npos
-                          || arglists_str.find("char") != std::string::npos;
-  CHECK_MESSAGE(has_text, "arglists should contain text or char, got: " << arglists_str);
-}
-
-TEST_CASE("info shows default parameter values for C++ functions")
-{
-  /* Test that C++ functions with default parameters show {:default ...} in arglists */
-  engine eng;
-
-  /* Include the C header (which has C++ functions with defaults) */
-  eng.handle(make_message({
-    {   "op",                                                           "eval" },
-    { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
-  }));
-
-  /* Create a native alias with :scope "" for global scope */
-  eng.handle(make_message({
-    {   "op",                                                                  "eval" },
-    { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
-  }));
-
-  /* Get info for DrawTextEx - a function with multiple default parameters */
-  auto responses(eng.handle(make_message({
-    {  "op",          "info" },
-    { "sym", "rl/DrawTextEx" },
-    {  "ns",          "user" }
-  })));
-
-  REQUIRE(responses.size() == 1);
-  auto const &payload(responses.front());
-
-  auto const arglists_it(payload.find("arglists-str"));
-  if(arglists_it == payload.end())
+  TEST_CASE("info shows variadic indicator for C variadic functions")
   {
-    WARN("arglists-str not found for DrawTextEx");
-    return;
+    /* Test that variadic C functions show ... in their arglists */
+    engine eng;
+
+    /* Include the C header */
+    eng.handle(make_message({
+      {   "op",                                                               "eval" },
+      { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+    }));
+
+    /* Create a native alias with :scope "" for global scope */
+    eng.handle(make_message({
+      {   "op",                                                                      "eval" },
+      { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+    }));
+
+    /* Get info for TraceLog - a variadic function */
+    auto responses(eng.handle(make_message({
+      {  "op",        "info" },
+      { "sym", "rl/TraceLog" },
+      {  "ns",        "user" }
+    })));
+
+    REQUIRE(responses.size() == 1);
+    auto const &payload(responses.front());
+
+    auto const arglists_it(payload.find("arglists-str"));
+    if(arglists_it == payload.end())
+    {
+      WARN("arglists-str not found for TraceLog");
+      return;
+    }
+
+    auto const &arglists_str(arglists_it->second.as_string());
+    std::cerr << "TraceLog arglists: " << arglists_str << "\n";
+
+    /* Should contain the variadic indicator */
+    bool const has_variadic = arglists_str.find("...") != std::string::npos;
+    CHECK_MESSAGE(has_variadic,
+                  "arglists should contain '...' for variadic function, got: " << arglists_str);
+
+    /* Should also have the fixed parameters */
+    bool const has_log_level = arglists_str.find("logLevel") != std::string::npos
+      || arglists_str.find("int") != std::string::npos;
+    CHECK_MESSAGE(has_log_level, "arglists should contain logLevel or int, got: " << arglists_str);
+
+    bool const has_text = arglists_str.find("text") != std::string::npos
+      || arglists_str.find("char") != std::string::npos;
+    CHECK_MESSAGE(has_text, "arglists should contain text or char, got: " << arglists_str);
   }
 
-  auto const &arglists_str(arglists_it->second.as_string());
-  std::cerr << "DrawTextEx arglists: " << arglists_str << "\n";
+  TEST_CASE("info shows default parameter values for C++ functions")
+  {
+    /* Test that C++ functions with default parameters show {:default ...} in arglists */
+    engine eng;
 
-  /* Should contain {:default ...} for parameters with defaults */
-  bool const has_default = arglists_str.find("{:default") != std::string::npos;
-  CHECK_MESSAGE(has_default, "arglists should contain '{:default' for function with default params, got: " << arglists_str);
+    /* Include the C header (which has C++ functions with defaults) */
+    eng.handle(make_message({
+      {   "op",                                                               "eval" },
+      { "code", R"((cpp/raw "#include \"../test/cpp/jank/nrepl/test_c_header.h\""))" }
+    }));
 
-  /* Check for specific default values */
-  bool const has_default_0 = arglists_str.find("{:default 0}") != std::string::npos;
-  CHECK_MESSAGE(has_default_0, "arglists should contain '{:default 0}' for posX/posY/color, got: " << arglists_str);
+    /* Create a native alias with :scope "" for global scope */
+    eng.handle(make_message({
+      {   "op",                                                                      "eval" },
+      { "code", R"((require '["../test/cpp/jank/nrepl/test_c_header.h" :as rl :scope ""]))" }
+    }));
 
-  bool const has_default_20 = arglists_str.find("{:default 20}") != std::string::npos;
-  CHECK_MESSAGE(has_default_20, "arglists should contain '{:default 20}' for fontSize, got: " << arglists_str);
-}
+    /* Get info for DrawTextEx - a function with multiple default parameters */
+    auto responses(eng.handle(make_message({
+      {  "op",          "info" },
+      { "sym", "rl/DrawTextEx" },
+      {  "ns",          "user" }
+    })));
 
-TEST_CASE("info returns jank source location for cpp/raw functions")
-{
-  /* This test verifies that functions defined in cpp/raw blocks
+    REQUIRE(responses.size() == 1);
+    auto const &payload(responses.front());
+
+    auto const arglists_it(payload.find("arglists-str"));
+    if(arglists_it == payload.end())
+    {
+      WARN("arglists-str not found for DrawTextEx");
+      return;
+    }
+
+    auto const &arglists_str(arglists_it->second.as_string());
+    std::cerr << "DrawTextEx arglists: " << arglists_str << "\n";
+
+    /* Should contain {:default ...} for parameters with defaults */
+    bool const has_default = arglists_str.find("{:default") != std::string::npos;
+    CHECK_MESSAGE(has_default,
+                  "arglists should contain '{:default' for function with default params, got: "
+                    << arglists_str);
+
+    /* Check for specific default values */
+    bool const has_default_0 = arglists_str.find("{:default 0}") != std::string::npos;
+    CHECK_MESSAGE(
+      has_default_0,
+      "arglists should contain '{:default 0}' for posX/posY/color, got: " << arglists_str);
+
+    bool const has_default_20 = arglists_str.find("{:default 20}") != std::string::npos;
+    CHECK_MESSAGE(has_default_20,
+                  "arglists should contain '{:default 20}' for fontSize, got: " << arglists_str);
+  }
+
+  TEST_CASE("info returns jank source location for cpp/raw functions")
+  {
+    /* This test verifies that functions defined in cpp/raw blocks
    * return the correct line within the C++ code (not just the cpp/raw line),
    * enabling goto-definition to jump to the exact declaration. */
-  engine eng;
+    engine eng;
 
-  /* Load a jank file that contains multiple cpp/raw function definitions.
+    /* Load a jank file that contains multiple cpp/raw function definitions.
    * The cpp/raw call is on line 4 of the test file.
    * - first_fn is on line 1 of C++ code = jank line 4
    * - second_fn is on line 2 of C++ code = jank line 5 */
-  std::string const jank_file_path{ "test/jank/nrepl/cpp_raw_location.jank" };
-  std::string const file_contents =
-    "; Test file for cpp/raw source location tracking\n"
-    "; The cpp/raw call on line 4 should have its location stored\n"
-    "\n"
-    "(cpp/raw \"inline void test_first_fn(int x) { }\n"
-    "inline void test_second_fn(int y) { }\")\n";
+    std::string const jank_file_path{ "test/jank/nrepl/cpp_raw_location.jank" };
+    std::string const file_contents
+      = "; Test file for cpp/raw source location tracking\n"
+        "; The cpp/raw call on line 4 should have its location stored\n"
+        "\n"
+        "(cpp/raw \"inline void test_first_fn(int x) { }\n"
+        "inline void test_second_fn(int y) { }\")\n";
 
-  eng.handle(make_message({
-    {        "op",     "load-file" },
-    {      "file",   file_contents },
-    { "file-path", jank_file_path }
-  }));
+    eng.handle(make_message({
+      {        "op",    "load-file" },
+      {      "file",  file_contents },
+      { "file-path", jank_file_path }
+    }));
 
-  /* Test first function - should be on line 4 (same line as cpp/raw) */
-  {
-    auto responses(eng.handle(make_message({
-      {  "op",                "info" },
-      { "sym", "cpp/test_first_fn" },
-      {  "ns",                "user" }
-    })));
+    /* Test first function - should be on line 4 (same line as cpp/raw) */
+    {
+      auto responses(eng.handle(make_message({
+        {  "op",              "info" },
+        { "sym", "cpp/test_first_fn" },
+        {  "ns",              "user" }
+      })));
 
-    REQUIRE(responses.size() == 1);
-    auto const &payload(responses.front());
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
 
-    auto const name_it(payload.find("name"));
-    REQUIRE(name_it != payload.end());
-    CHECK(name_it->second.as_string() == "test_first_fn");
+      auto const name_it(payload.find("name"));
+      REQUIRE(name_it != payload.end());
+      CHECK(name_it->second.as_string() == "test_first_fn");
 
-    auto const line_it(payload.find("line"));
-    REQUIRE(line_it != payload.end());
-    CHECK(line_it->second.as_integer() == 4);
-  }
+      auto const line_it(payload.find("line"));
+      REQUIRE(line_it != payload.end());
+      CHECK(line_it->second.as_integer() == 4);
+    }
 
-  /* Test second function - should be on line 5 (one line after cpp/raw) */
-  {
-    auto responses(eng.handle(make_message({
-      {  "op",                 "info" },
-      { "sym", "cpp/test_second_fn" },
-      {  "ns",                 "user" }
-    })));
+    /* Test second function - should be on line 5 (one line after cpp/raw) */
+    {
+      auto responses(eng.handle(make_message({
+        {  "op",               "info" },
+        { "sym", "cpp/test_second_fn" },
+        {  "ns",               "user" }
+      })));
 
-    REQUIRE(responses.size() == 1);
-    auto const &payload(responses.front());
+      REQUIRE(responses.size() == 1);
+      auto const &payload(responses.front());
 
-    auto const name_it(payload.find("name"));
-    REQUIRE(name_it != payload.end());
-    CHECK(name_it->second.as_string() == "test_second_fn");
+      auto const name_it(payload.find("name"));
+      REQUIRE(name_it != payload.end());
+      CHECK(name_it->second.as_string() == "test_second_fn");
 
-    auto const line_it(payload.find("line"));
-    REQUIRE(line_it != payload.end());
-    CHECK(line_it->second.as_integer() == 5);
-}
-
+      auto const line_it(payload.find("line"));
+      REQUIRE(line_it != payload.end());
+      CHECK(line_it->second.as_integer() == 5);
+    }
   }
 }

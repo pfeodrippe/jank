@@ -47,9 +47,9 @@ namespace jank::util::cli
     std::string profiler_file{ "jank.profile" };
     bool profiler_enabled{};
     bool profiler_fns_enabled{};
-    bool profiler_core_enabled{};  /* Profile clojure.core functions */
-    bool profiler_interop_enabled{};  /* Profile cpp/ interop (box/unbox/method calls) */
-    u32 profiler_sample_rate{};  /* Sample 1 in N events (0=all, 10=10%, 100=1%, etc.) */
+    bool profiler_core_enabled{}; /* Profile clojure.core functions */
+    bool profiler_interop_enabled{}; /* Profile cpp/ interop (box/unbox/method calls) */
+    u32 profiler_sample_rate{}; /* Sample 1 in N events (0=all, 10=10%, 100=1%, etc.) */
     bool perf_profiling_enabled{};
     bool gc_incremental{};
     codegen_type codegen{ codegen_type::cpp };
@@ -59,7 +59,7 @@ namespace jank::util::cli
     native_vector<jtl::immutable_string> library_dirs;
     native_vector<jtl::immutable_string> define_macros;
     native_vector<jtl::immutable_string> libs;
-    native_vector<jtl::immutable_string> jit_libs;  /* Libraries for JIT only (not AOT linker) */
+    native_vector<jtl::immutable_string> jit_libs; /* Libraries for JIT only (not AOT linker) */
     native_vector<jtl::immutable_string> link_libs; /* Libraries for AOT linker only (not JIT) */
     native_vector<jtl::immutable_string> object_files;
     native_vector<jtl::immutable_string> frameworks; /* macOS frameworks */

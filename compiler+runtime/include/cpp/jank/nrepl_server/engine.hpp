@@ -1541,8 +1541,8 @@ namespace jank::nrepl_server::asio
     // Helper to extract trailing inline comment on the same line as a declaration
     // This handles raylib-style comments like:
     // RLAPI void InitWindow(int w, int h, const char* title);  // Initialize window
-    std::optional<std::string>
-    extract_trailing_comment(clang::SourceManager const &src_mgr, clang::SourceLocation end_loc) const
+    std::optional<std::string> extract_trailing_comment(clang::SourceManager const &src_mgr,
+                                                        clang::SourceLocation end_loc) const
     {
       if(!end_loc.isValid())
       {

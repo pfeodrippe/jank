@@ -429,7 +429,8 @@ namespace jank::codegen
       emit_line_directive(buffer, source);
     }
 
-    static void emit_line_directive(jtl::string_builder &buffer, jtl::option<read::source> const &source)
+    static void
+    emit_line_directive(jtl::string_builder &buffer, jtl::option<read::source> const &source)
     {
       if(source.is_some())
       {
@@ -681,7 +682,8 @@ namespace jank::codegen
     jtl::immutable_string core_fn_name;
     if(util::cli::opts.profiler_core_enabled)
     {
-      auto const var_deref(analyze::expr_dyn_cast<analyze::expr::var_deref>(expr->source_expr.data));
+      auto const var_deref(
+        analyze::expr_dyn_cast<analyze::expr::var_deref>(expr->source_expr.data));
       if(var_deref)
       {
         auto const &qualified_name(var_deref->qualified_name);
@@ -2341,7 +2343,10 @@ namespace jank::codegen
       if(util::cli::opts.profiler_fns_enabled)
       {
         auto const ns_name{ __rt_ctx->current_ns()->name->to_code_string() };
-        util::format_to(body_buffer, "jank::profile::timer const __fn_timer{{ \"fn:{}/{}\" }};", ns_name, root_fn->name);
+        util::format_to(body_buffer,
+                        "jank::profile::timer const __fn_timer{{ \"fn:{}/{}\" }};",
+                        ns_name,
+                        root_fn->name);
       }
 
       if(!param_shadows_fn)
