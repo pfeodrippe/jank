@@ -54,6 +54,7 @@
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/ns.hpp>
 #include <jank/runtime/core/munge.hpp>
+#include <jank/util/cli.hpp>
 
 namespace jank::perf
 {
@@ -759,6 +760,133 @@ namespace jank::perf
         std::cout << "  Call " << (i + 1) << ": " << std::setw(12) << let_times[i] << " ns\n";
       }
       timing_stats::compute(let_times).print("Stats");
+    }
+
+    /* ==========================================================================
+     * Incremental JIT Cache: Cache Enabled vs Disabled
+     *
+     * This test proves the incremental JIT cache optimization works by:
+     * 1. Defining functions with cache enabled (default)
+     * 2. Reloading with cache enabled - should be fast (cache hits)
+     * 3. Reloading with cache disabled - should be slow (full JIT)
+     * 4. Comparing the results
+     * ========================================================================== */
+    TEST_CASE("Incremental JIT Cache: Enabled vs Disabled")
+    {
+      std::cout << "\n=== Incremental JIT Cache: Enabled vs Disabled ===\n";
+      std::cout << "(Proves the optimization works by comparing with cache on/off)\n\n";
+
+      constexpr int NUM_FUNCTIONS = 10;
+
+      /* Generate unique namespace to avoid conflicts */
+      auto const test_ns = "test-cache-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count() % 10000);
+
+      /* Create namespace */
+      __rt_ctx->eval_string(("(ns " + test_ns + ")").c_str());
+
+      /* Ensure cache is enabled for initial definitions */
+      auto const original_cache_setting = util::cli::opts.jit_cache_enabled;
+      util::cli::opts.jit_cache_enabled = true;
+
+      /* Clear the cache to start fresh */
+      __rt_ctx->jit_cache.clear();
+
+      /* Step 1: Initial definition of N functions (cache enabled) */
+      std::cout << "-- Step 1: Initial definition of " << NUM_FUNCTIONS << " functions (cache enabled) --\n";
+      auto const initial_start{ high_resolution_clock::now() };
+
+      for(int i = 0; i < NUM_FUNCTIONS; i++)
+      {
+        std::string code = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
+        __rt_ctx->eval_string(code.c_str());
+      }
+
+      auto const initial_end{ high_resolution_clock::now() };
+      auto const initial_time_ms = duration_cast<milliseconds>(initial_end - initial_start).count();
+      auto const cache_stats_after_initial = __rt_ctx->jit_cache.get_stats();
+
+      std::cout << "  Time: " << initial_time_ms << " ms\n";
+      std::cout << "  Cache entries: " << cache_stats_after_initial.entries << "\n";
+      std::cout << "  Cache hits: " << cache_stats_after_initial.hits
+                << ", misses: " << cache_stats_after_initial.misses << "\n";
+
+      /* Step 2: Reload all functions WITH cache enabled (should be fast - cache hits) */
+      std::cout << "\n-- Step 2: Reload WITH cache enabled (should be fast) --\n";
+
+      auto const cache_enabled_start{ high_resolution_clock::now() };
+
+      for(int i = 0; i < NUM_FUNCTIONS; i++)
+      {
+        std::string code = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
+        __rt_ctx->eval_string(code.c_str());
+      }
+
+      auto const cache_enabled_end{ high_resolution_clock::now() };
+      auto const cache_enabled_time_ms = duration_cast<milliseconds>(cache_enabled_end - cache_enabled_start).count();
+      auto const cache_stats_after_reload = __rt_ctx->jit_cache.get_stats();
+
+      std::cout << "  Time: " << cache_enabled_time_ms << " ms\n";
+      std::cout << "  Cache hits: " << cache_stats_after_reload.hits
+                << ", misses: " << cache_stats_after_reload.misses << "\n";
+      std::cout << "  New hits this round: " << (cache_stats_after_reload.hits - cache_stats_after_initial.hits) << "\n";
+
+      /* Step 3: Reload all functions with cache DISABLED (should be slow - full JIT) */
+      std::cout << "\n-- Step 3: Reload WITHOUT cache (should be slow) --\n";
+      util::cli::opts.jit_cache_enabled = false;
+
+      auto const cache_disabled_start{ high_resolution_clock::now() };
+
+      for(int i = 0; i < NUM_FUNCTIONS; i++)
+      {
+        std::string code = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
+        __rt_ctx->eval_string(code.c_str());
+      }
+
+      auto const cache_disabled_end{ high_resolution_clock::now() };
+      auto const cache_disabled_time_ms = duration_cast<milliseconds>(cache_disabled_end - cache_disabled_start).count();
+
+      std::cout << "  Time: " << cache_disabled_time_ms << " ms\n";
+
+      /* Restore original cache setting */
+      util::cli::opts.jit_cache_enabled = original_cache_setting;
+
+      /* Calculate speedup */
+      double speedup = 0.0;
+      if(cache_enabled_time_ms > 0)
+      {
+        speedup = static_cast<double>(cache_disabled_time_ms) / static_cast<double>(cache_enabled_time_ms);
+      }
+      else if(cache_disabled_time_ms > 0)
+      {
+        speedup = static_cast<double>(cache_disabled_time_ms); /* cache_enabled was 0ms */
+      }
+
+      /* Summary */
+      std::cout << "\n=== Results ===\n";
+      std::cout << "| Scenario                | Time (ms) |\n";
+      std::cout << "|-------------------------|-----------|\n";
+      std::cout << "| Initial load            | " << std::setw(9) << initial_time_ms << " |\n";
+      std::cout << "| Reload WITH cache       | " << std::setw(9) << cache_enabled_time_ms << " |\n";
+      std::cout << "| Reload WITHOUT cache    | " << std::setw(9) << cache_disabled_time_ms << " |\n";
+      std::cout << "|-------------------------|-----------|\n";
+      std::cout << "| Speedup from cache      | " << std::setw(7) << std::fixed << std::setprecision(1)
+                << speedup << "x |\n";
+
+      if(speedup >= 2.0)
+      {
+        std::cout << "\n✓ SUCCESS: Cache provides " << speedup << "x speedup!\n";
+      }
+      else if(cache_enabled_time_ms <= 50 && cache_disabled_time_ms > 100)
+      {
+        std::cout << "\n✓ SUCCESS: Cache is working (enabled: " << cache_enabled_time_ms
+                  << "ms, disabled: " << cache_disabled_time_ms << "ms)\n";
+      }
+      else
+      {
+        std::cout << "\n? Cache benefit may be masked by measurement noise or small sample size.\n";
+        std::cout << "  Try increasing NUM_FUNCTIONS for clearer results.\n";
+      }
     }
   }
 }

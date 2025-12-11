@@ -9,6 +9,7 @@
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   #include <jank/analyze/processor.hpp>
   #include <jank/jit/processor.hpp>
+  #include <jank/jit/incremental_cache.hpp>
 #endif
 #include <jank/runtime/module/loader.hpp>
 #include <jank/runtime/ns.hpp>
@@ -233,6 +234,8 @@ namespace jank::runtime
       thread_binding_frames;
 
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+    /* Cache for compiled defs to enable incremental JIT. */
+    jit::incremental_cache jit_cache;
     /* This must go last, since it'll try to access other bits in the runtime context during
      * its initialization and we need them to be ready. */
     jit::processor jit_prc;

@@ -30,6 +30,7 @@
 #include <jank/util/clang_format.hpp>
 #include <jank/analyze/visit.hpp>
 #include <jank/analyze/cpp_util.hpp>
+#include <jank/analyze/expression_hash.hpp>
 #include <jank/error/analyze.hpp>
 #include <jank/error/codegen.hpp>
 
@@ -321,6 +322,35 @@ namespace jank::evaluate
       return var;
     }
 
+    /* Incremental JIT: Check if we can skip compilation by using cached version.
+     * Only applies when JIT cache is enabled. */
+    if(util::cli::opts.jit_cache_enabled)
+    {
+      auto const value_expr = expr->value.unwrap();
+      auto const body_hash = hash_expression(value_expr);
+      auto const qualified_name = expr->name;
+
+      /* Check if we already have this exact definition compiled. */
+      if(auto cached_var = __rt_ctx->jit_cache.get(qualified_name, body_hash))
+      {
+        __rt_ctx->jit_cache.record_hit();
+        /* The var is already bound with the correct value - just return it. */
+        return cached_var.unwrap();
+      }
+
+      __rt_ctx->jit_cache.record_miss();
+
+      /* Cache miss - need to compile. */
+      auto const evaluated_value(eval(value_expr));
+      var->bind_root(evaluated_value);
+
+      /* Store in cache for future reuse. */
+      __rt_ctx->jit_cache.store(qualified_name, body_hash, var);
+
+      return var;
+    }
+
+    /* JIT cache disabled - always compile. */
     auto const evaluated_value(eval(expr->value.unwrap()));
     var->bind_root(evaluated_value);
 

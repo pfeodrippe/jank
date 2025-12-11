@@ -652,6 +652,7 @@ if(jank_target_wasm)
       # Analyze files
       src/cpp/jank/analyze/processor.cpp
       src/cpp/jank/analyze/expression.cpp
+      src/cpp/jank/analyze/expression_hash.cpp
       src/cpp/jank/analyze/expr/vector.cpp
       src/cpp/jank/analyze/expr/recursion_reference.cpp
       src/cpp/jank/analyze/expr/map.cpp
@@ -732,6 +733,7 @@ else()
     # Analyze files (require LLVM, not available in WASM)
     src/cpp/jank/analyze/processor.cpp
     src/cpp/jank/analyze/expression.cpp
+    src/cpp/jank/analyze/expression_hash.cpp
     src/cpp/jank/analyze/expr/vector.cpp
     src/cpp/jank/analyze/expr/recursion_reference.cpp
     src/cpp/jank/analyze/expr/map.cpp

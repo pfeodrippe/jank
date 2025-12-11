@@ -52,6 +52,7 @@ namespace jank::util::cli
     u32 profiler_sample_rate{}; /* Sample 1 in N events (0=all, 10=10%, 100=1%, etc.) */
     bool perf_profiling_enabled{};
     bool gc_incremental{};
+    bool jit_cache_enabled{ true }; /* Cache compiled defs to skip redundant JIT */
     codegen_type codegen{ codegen_type::cpp };
 
     /* Native dependencies. */
