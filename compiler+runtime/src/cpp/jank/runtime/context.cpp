@@ -53,6 +53,7 @@ namespace jank::runtime
     : binary_version{ (__rt_ctx = this, util::binary_version()) }
     , binary_cache_dir{ util::binary_cache_dir(binary_version) }
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+    , persistent_jit_cache{ binary_version }
     , jit_prc{ binary_version }
 #endif
   {

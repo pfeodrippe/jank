@@ -793,6 +793,7 @@ if(jank_target_wasm)
 else()
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor.cpp)
   list(APPEND jank_lib_sources src/cpp/jank/jit/interpreter.cpp)
+  list(APPEND jank_lib_sources src/cpp/jank/jit/persistent_cache.cpp)
 endif()
 
 add_library(

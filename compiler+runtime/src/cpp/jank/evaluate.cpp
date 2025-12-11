@@ -33,6 +33,7 @@
 #include <jank/analyze/expression_hash.hpp>
 #include <jank/error/analyze.hpp>
 #include <jank/error/codegen.hpp>
+#include <jank/jit/persistent_cache.hpp>
 
 namespace jank::evaluate
 {
@@ -322,15 +323,24 @@ namespace jank::evaluate
       return var;
     }
 
+    auto const value_expr = expr->value.unwrap();
+    auto const qualified_name = expr->name;
+
+    /* Compute hash if either cache is enabled. */
+    bool const use_jit_cache = util::cli::opts.jit_cache_enabled;
+    bool const use_persistent_cache = util::cli::opts.persistent_jit_cache_enabled;
+    u64 body_hash = 0;
+
+    if(use_jit_cache || use_persistent_cache)
+    {
+      body_hash = hash_expression(value_expr);
+    }
+
     /* Incremental JIT: Check if we can skip compilation by using cached version.
      * Only applies when JIT cache is enabled. */
-    if(util::cli::opts.jit_cache_enabled)
+    if(use_jit_cache)
     {
-      auto const value_expr = expr->value.unwrap();
-      auto const body_hash = hash_expression(value_expr);
-      auto const qualified_name = expr->name;
-
-      /* Check if we already have this exact definition compiled. */
+      /* Check if we already have this exact definition compiled (in-memory cache). */
       if(auto cached_var = __rt_ctx->jit_cache.get(qualified_name, body_hash))
       {
         __rt_ctx->jit_cache.record_hit();
@@ -339,20 +349,97 @@ namespace jank::evaluate
       }
 
       __rt_ctx->jit_cache.record_miss();
-
-      /* Cache miss - need to compile. */
-      auto const evaluated_value(eval(value_expr));
-      var->bind_root(evaluated_value);
-
-      /* Store in cache for future reuse. */
-      __rt_ctx->jit_cache.store(qualified_name, body_hash, var);
-
-      return var;
     }
 
-    /* JIT cache disabled - always compile. */
-    auto const evaluated_value(eval(expr->value.unwrap()));
+    /* Persistent JIT: Check for pre-compiled .o file from previous session.
+     * This is the fast path - skip parse/analyze/codegen/JIT entirely. */
+    if(use_persistent_cache)
+    {
+      auto const &pcache = __rt_ctx->persistent_jit_cache;
+      if(pcache.has_compiled_object(body_hash))
+      {
+        auto const obj_path = pcache.object_path(body_hash);
+        auto const factory_name = jit::persistent_cache::factory_name(body_hash);
+
+        try
+        {
+          /* Load the object file into the JIT. */
+          __rt_ctx->jit_prc.load_object(obj_path.string());
+
+          /* Find the factory function. */
+          auto const sym_result = __rt_ctx->jit_prc.find_symbol(factory_name);
+          if(sym_result.is_ok())
+          {
+            using factory_fn = object_ref (*)();
+            auto const factory = reinterpret_cast<factory_fn>(sym_result.expect_ok());
+            auto const evaluated_value = factory();
+            var->bind_root(evaluated_value);
+
+            /* Store in memory cache for future reuse within this session. */
+            if(use_jit_cache)
+            {
+              __rt_ctx->jit_cache.store(qualified_name, body_hash, var);
+            }
+
+            pcache.record_disk_hit();
+            return var;
+          }
+        }
+        catch(std::exception const &)
+        {
+          /* If loading failed (e.g., file not found, symbol not found),
+           * fall through to normal compilation path.
+           * NOTE: We only catch std::exception, not all exceptions,
+           * because jank throws runtime::object for user exceptions. */
+        }
+      }
+    }
+
+    /* Set up thread-local context for persistent cache.
+     * This allows eval(expr::function_ref) to save the C++ source. */
+    if(use_persistent_cache)
+    {
+      auto &ctx = jit::get_jit_cache_context();
+      ctx.current_hash = body_hash;
+      ctx.is_compiling = true;
+    }
+
+    /* Compile the value expression. */
+    auto const evaluated_value(eval(value_expr));
     var->bind_root(evaluated_value);
+
+    /* Clear the thread-local context and save to disk. */
+    if(use_persistent_cache)
+    {
+      auto &ctx = jit::get_jit_cache_context();
+      /* Save to disk cache if we captured the C++ source. */
+      if(!ctx.current_decl_str.empty())
+      {
+        __rt_ctx->persistent_jit_cache.save_source(body_hash,
+                                                   ctx.current_decl_str,
+                                                   qualified_name->to_string(),
+                                                   ctx.current_unique_name);
+        /* Also save the expression string for factory function generation. */
+        if(!ctx.current_expr_str.empty())
+        {
+          __rt_ctx->persistent_jit_cache.save_expression(body_hash, ctx.current_expr_str);
+          /* Compile to object file so it's ready for the next session.
+           * This happens in the background and doesn't block evaluation. */
+          __rt_ctx->persistent_jit_cache.compile_to_object(body_hash);
+        }
+      }
+      ctx.is_compiling = false;
+      ctx.current_hash = 0;
+      ctx.current_decl_str = jtl::immutable_string{};
+      ctx.current_unique_name = jtl::immutable_string{};
+      ctx.current_expr_str = jtl::immutable_string{};
+    }
+
+    /* Store in memory cache for future reuse within this session. */
+    if(use_jit_cache)
+    {
+      __rt_ctx->jit_cache.store(qualified_name, body_hash, var);
+    }
 
     return var;
   }
@@ -695,11 +782,20 @@ namespace jank::evaluate
       util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
     }
 
+    /* Capture the C++ source for persistent cache if we're in a def compilation context. */
+    auto &cache_ctx = jit::get_jit_cache_context();
+    auto const expr_str{ cg_prc.expression_str() + ".erase()" };
+    if(cache_ctx.is_compiling && util::cli::opts.persistent_jit_cache_enabled)
+    {
+      cache_ctx.current_decl_str = cg_prc.declaration_str();
+      cache_ctx.current_unique_name = expr->unique_name;
+      cache_ctx.current_expr_str = expr_str;
+    }
+
     {
       profile::timer const jtimer{ "eval:fn:cpp_jit_decl" };
       __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
     }
-    auto const expr_str{ cg_prc.expression_str() + ".erase()" };
     clang::Value v;
     {
       profile::timer const etimer{ "eval:fn:cpp_jit_expr" };

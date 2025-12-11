@@ -52,6 +52,9 @@ namespace jank::util::cli
     cli.add_flag("!--no-jit-cache",
                  opts.jit_cache_enabled,
                  "Disable JIT cache (cache is enabled by default to skip redundant recompilation).");
+    cli.add_flag("!--no-persistent-cache",
+                 opts.persistent_jit_cache_enabled,
+                 "Disable persistent JIT cache (saves compiled defs to disk for faster startup).");
     cli.add_flag("--debug", opts.debug, "Enable debug symbol generation for generated code.");
     cli.add_flag("--direct-call",
                  opts.direct_call,
