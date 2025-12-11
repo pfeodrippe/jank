@@ -49,3 +49,4 @@ To run specific test cases:
 ## nREPL Tests
 
 nREPL tests are in `/Users/pfeodrippe/dev/jank/compiler+runtime/test/cpp/jank/nrepl/engine.cpp`
+- To fix pch header corruption, use `./bin/configure -GNinja -DCMAKE_BUILD_TYPE=Debug -Djank_test=on -Djank_local_clang=on && ./bin/compile`

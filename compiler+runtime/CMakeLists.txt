@@ -1157,6 +1157,7 @@ if(jank_test)
     test/cpp/jank/nrepl/native.cpp
     test/cpp/jank/nrepl/native_header_index.cpp
     test/cpp/jank/jit/processor.cpp
+    test/cpp/jank/perf/eval_benchmark.cpp
   )
   add_executable(jank::test_exe ALIAS jank_test_exe)
   add_dependencies(jank_test_exe jank_exe_phase_1 jank_core_libraries)
