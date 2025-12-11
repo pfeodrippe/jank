@@ -53,7 +53,6 @@ namespace jank::util::cli
     bool perf_profiling_enabled{};
     bool gc_incremental{};
     bool jit_cache_enabled{ true }; /* Cache compiled defs to skip redundant JIT */
-    bool persistent_jit_cache_enabled{ true }; /* Save JIT cache to disk across sessions */
     codegen_type codegen{ codegen_type::cpp };
 
     /* Native dependencies. */
