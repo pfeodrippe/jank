@@ -314,6 +314,8 @@ namespace jank::nrepl_server::asio
       {
         value_msg.emplace("value", to_std_string(runtime::to_code_string(result)));
       }
+      /* Emit any output captured during require/pprint before the value */
+      emit_pending_output();
       responses.emplace_back(std::move(value_msg));
 
       responses.emplace_back(make_done_response(session.id, msg.id(), { "done" }));

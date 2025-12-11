@@ -146,7 +146,7 @@
     (vector? x) (pprint-coll x "[" "]" indent level max-width)
     (sequential? x) (pprint-coll x "(" ")" indent level max-width)
     (fn? x) "#<fn>"
-    (var? x) (str "#'" x)
+    (var? x) (str x)
     :else (pr-str x)))
 
 (defn pprint-str
