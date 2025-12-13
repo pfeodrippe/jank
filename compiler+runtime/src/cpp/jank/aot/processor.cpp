@@ -1142,10 +1142,12 @@ namespace
       }
     }
 
-    /* Add user-specified object files from --obj flags. */
+    /* Add user-specified object files from --obj flags.
+     * Use -Wl, prefix to pass them directly to the linker, avoiding
+     * clang treating them as source files after the -x c++ flag. */
     for(auto const &obj : util::cli::opts.object_files)
     {
-      compiler_args.push_back(strdup(obj.c_str()));
+      compiler_args.push_back(strdup(util::format("-Wl,{}", obj).c_str()));
     }
 
     /* Add user-specified macOS frameworks. */
