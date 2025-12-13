@@ -1,4 +1,5 @@
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
@@ -215,6 +216,11 @@ namespace jank::nrepl_server::asio
     bool writing_{ false };
   };
 
+  /* Global flag to track application shutdown.
+   * When true, IO threads should NOT call GC_unregister_my_thread() since
+   * the GC may already be partially destroyed during atexit() processing. */
+  std::atomic<bool> shutting_down{ false };
+
   // Server class to manage an embeddable nREPL server instance
   class server
   {
@@ -245,16 +251,13 @@ namespace jank::nrepl_server::asio
       constexpr size_t LARGE_STACK_SIZE = static_cast<size_t>(16) * 1024 * 1024;
       pthread_attr_setstacksize(&attr, LARGE_STACK_SIZE);
 
+      /* Note: With GC_THREADS defined, pthread_create is redirected to GC_pthread_create,
+       * which automatically handles GC thread registration/unregistration via its wrapper.
+       * We should NOT manually call GC_register_my_thread/GC_unregister_my_thread as this
+       * causes conflicts with the automatic wrapper and can crash during shutdown. */
       auto thread_func = [](void *arg) -> void * {
         auto *self = static_cast<server *>(arg);
-
-        GC_stack_base sb{};
-        GC_get_stack_base(&sb);
-        GC_register_my_thread(&sb);
-
         self->io_context_.run();
-
-        GC_unregister_my_thread();
         return nullptr;
       };
 
@@ -290,7 +293,18 @@ namespace jank::nrepl_server::asio
 
       io_context_.stop();
 
-      pthread_join(io_thread_, nullptr);
+      /* During application shutdown (atexit or static destruction), the GC's thread
+       * wrapper (GC_pthread_start_inner) will call cleanup functions that may crash
+       * if the GC is being torn down. To avoid this, we detach the thread during
+       * shutdown instead of joining - the process is exiting anyway. */
+      if(shutting_down.load(std::memory_order_acquire))
+      {
+        pthread_detach(io_thread_);
+      }
+      else
+      {
+        pthread_join(io_thread_, nullptr);
+      }
     }
 
     int get_port() const
@@ -334,6 +348,29 @@ namespace jank::nrepl_server::asio
     bool running_{ true };
   };
 
+  /* Forward declarations for shutdown handling. These are defined in the anonymous namespace
+   * below but need to be callable from here for the static initialization. */
+  namespace
+  {
+    std::map<std::uintptr_t, std::shared_ptr<server>> &server_registry();
+    void shutdown_all_servers();
+  }
+
+  /* Static initialization to ensure the atexit handler is always registered when any code
+   * using nREPL servers is loaded. This runs before main() and guarantees cleanup happens
+   * before the GC is torn down during process exit. */
+  namespace
+  {
+    struct shutdown_handler_registrar
+    {
+      shutdown_handler_registrar()
+      {
+        std::atexit(&shutdown_all_servers);
+      }
+    };
+    static shutdown_handler_registrar const registrar_instance{};
+  }
+
   namespace
   {
     class port_file_guard
@@ -370,8 +407,43 @@ namespace jank::nrepl_server::asio
 
     std::map<std::uintptr_t, std::shared_ptr<server>> &server_registry()
     {
-      static std::map<std::uintptr_t, std::shared_ptr<server>> servers;
-      return servers;
+      /* IMPORTANT: We intentionally heap-allocate and LEAK this map.
+       * Using a static local would cause the map's destructor to run during
+       * __cxa_finalize_ranges, which crashes because:
+       * 1. The destructor calls clear() to destroy each server
+       * 2. Server destructors may access GC-managed memory that's already freed
+       * 3. Even with pthread_detach, the map tree traversal itself can crash
+       *    if the allocator or memory has been torn down
+       *
+       * By leaking the map, we avoid the destructor entirely. The process is
+       * exiting anyway, so the OS will reclaim all memory. */
+      static auto *servers = new std::map<std::uintptr_t, std::shared_ptr<server>>();
+      return *servers;
+    }
+
+    /* Shutdown handler called via atexit() to signal that application shutdown is in progress.
+     * IMPORTANT: We ONLY set the flag here - we do NOT try to clear the server_registry.
+     * The registry will be cleaned up by normal static destruction. If we try to clear()
+     * the map here, we race with static destructors and may access already-freed memory.
+     *
+     * The flag tells server destructors to use pthread_detach instead of pthread_join,
+     * which avoids blocking on GC cleanup during shutdown. */
+    void shutdown_all_servers()
+    {
+      shutting_down.store(true, std::memory_order_release);
+      /* Do NOT call server_registry().clear() here - it races with static destruction
+       * and causes crashes when the map's internal tree nodes are already destroyed. */
+    }
+
+    /* Ensure the shutdown handler is registered exactly once.
+     * Uses a static local for thread-safe one-time initialization. */
+    void ensure_shutdown_handler_registered()
+    {
+      static bool const registered = []() {
+        std::atexit(&shutdown_all_servers);
+        return true;
+      }();
+      (void)registered;
     }
 
     object_ref run_server(object_ref const port_obj)
@@ -419,6 +491,7 @@ namespace jank::nrepl_server::asio
     object_ref start_server(object_ref const port_obj, object_ref const bind_obj)
     {
       bootstrap_runtime_once();
+      ensure_shutdown_handler_registered();
 
       auto const port(to_int(port_obj));
       auto const bind_address(to_std_string(runtime::to_string(bind_obj)));
