@@ -288,6 +288,7 @@ namespace jank::jit
     if(err)
     {
       llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");
+      llvm::errs().flush();
       /* Include the code in the error message for better debugging */
       auto const preview_len{ std::min<size_t>(formatted.size(), 500) };
       native_transient_string code_preview{ formatted.data(), preview_len };
@@ -417,6 +418,7 @@ namespace jank::jit
     if(!ir_module)
     {
       err.print("jank", llvm::errs());
+      llvm::errs().flush();
       /* TODO: Return a result. */
       throw std::runtime_error{ util::format("unable to load module") };
     }

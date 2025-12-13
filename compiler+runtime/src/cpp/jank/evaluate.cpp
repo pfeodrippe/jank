@@ -710,6 +710,7 @@ namespace jank::evaluate
         /* TODO: Helper to turn an llvm::Error into a string. */
         jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
         llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
+        llvm::errs().flush();
         throw error::internal_codegen_failure(msg);
       }
     }
@@ -823,6 +824,7 @@ namespace jank::evaluate
     {
       /* Parse failed - report the error */
       llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "cpp/raw parse error: ");
+      llvm::errs().flush();
       throw make_box("Failed to parse cpp/raw code").erase();
     }
     if(parse_res)
@@ -1139,6 +1141,7 @@ namespace jank::evaluate
       if(err)
       {
         llvm::logAllUnhandledErrors(jtl::move(err), llvm::errs(), "cpp/raw execute error: ");
+        llvm::errs().flush();
         throw make_box("Failed to execute cpp/raw code").erase();
       }
     }

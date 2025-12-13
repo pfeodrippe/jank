@@ -63,6 +63,11 @@ namespace jank::runtime
     scoped_stderr_redirect &operator=(scoped_stderr_redirect &&) = delete;
     ~scoped_stderr_redirect();
 
+    /* Manually flush captured stderr content to the output redirect.
+     * Call this before sending error responses to ensure stderr content is included.
+     * Can be called multiple times - only forwards new content since last flush. */
+    void flush();
+
     struct impl;
     std::unique_ptr<impl> pimpl;
   };

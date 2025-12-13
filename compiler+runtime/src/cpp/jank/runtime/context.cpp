@@ -382,6 +382,7 @@ namespace jank::runtime
           {
             jtl::immutable_string const res{ "Unable to compile generated C++ source." };
             llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "error: ");
+            llvm::errs().flush();
             throw error::internal_codegen_failure(res);
           }
           auto &partial_tu{ parse_res.get() };
@@ -415,6 +416,9 @@ namespace jank::runtime
     {
       /* TODO: Helper to turn an llvm::Error into a string. */
       llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "error: ");
+      /* Flush LLVM's error stream to ensure the error reaches the fd before
+       * scoped_stderr_redirect reads from its temp file. */
+      llvm::errs().flush();
       return error::runtime_invalid_cpp_eval();
     }
     auto &partial_tu{ parse_res.get() };
@@ -431,6 +435,9 @@ namespace jank::runtime
     if(exec_res)
     {
       llvm::logAllUnhandledErrors(std::move(exec_res), llvm::errs(), "error: ");
+      /* Flush LLVM's error stream to ensure the error reaches the fd before
+       * scoped_stderr_redirect reads from its temp file. */
+      llvm::errs().flush();
       return error::runtime_invalid_cpp_eval();
     }
     return ok();

@@ -979,66 +979,80 @@ namespace jank::runtime
         return;
       }
 
-      /* Flush any remaining data to the temporary file. */
-      fflush(stderr);
+      /* Flush and forward any remaining content. */
+      try
+      {
+        flush_impl();
+      }
+      catch(...) // NOLINT(bugprone-empty-catch)
+      {
+        /* Silently ignore errors during destructor cleanup to maintain noexcept guarantee. */
+      }
 
       /* Restore the original stderr. */
       dup2(original_stderr_fd, STDERR_FILENO);
       close(original_stderr_fd);
 
-      /* Read the captured content from the temporary file. */
-      fseek(temp_file, 0L, SEEK_END);
-      long const bufsize{ ftell(temp_file) };
-      if(bufsize > 0)
+      fclose(temp_file);
+    }
+
+    void flush_impl()
+    {
+      if(!temp_file || original_stderr_fd < 0)
       {
-        fseek(temp_file, 0L, SEEK_SET);
-
-        /* Use a fixed-size buffer to avoid allocations in noexcept destructor.
-         * Read in chunks if the content is larger than the buffer. */
-        constexpr size_t buffer_size{ 4096 };
-        char buffer[buffer_size];
-
-        bool const has_redirects{ !output_redirects().empty() };
-
-        size_t remaining{ static_cast<size_t>(bufsize) };
-        while(remaining > 0)
-        {
-          size_t const to_read{ remaining < buffer_size ? remaining : buffer_size };
-          size_t const bytes_read{ fread(buffer, sizeof(char), to_read, temp_file) };
-          if(bytes_read == 0)
-          {
-            break;
-          }
-
-          /* Forward the captured stderr content.
-           * If redirects are active, use them; otherwise write directly to stderr.
-           * Wrap in try-catch since this is noexcept. */
-          try
-          {
-            if(has_redirects)
-            {
-              forward_error(std::string_view{ buffer, bytes_read });
-            }
-            else
-            {
-              /* No redirects active, write directly to stderr. */
-              fwrite(buffer, sizeof(char), bytes_read, stderr);
-            }
-          }
-          catch(...) // NOLINT(bugprone-empty-catch)
-          {
-            /* Silently ignore errors during destructor cleanup to maintain noexcept guarantee. */
-          }
-
-          remaining -= bytes_read;
-        }
+        return;
       }
 
-      fclose(temp_file);
+      /* Flush any remaining data to the temporary file. */
+      fflush(stderr);
+
+      /* Read the captured content from the temporary file (only new content since last read). */
+      fseek(temp_file, 0L, SEEK_END);
+      long const file_size{ ftell(temp_file) };
+      if(file_size <= static_cast<long>(bytes_already_read))
+      {
+        return;
+      }
+
+      fseek(temp_file, static_cast<long>(bytes_already_read), SEEK_SET);
+
+      /* Use a fixed-size buffer. Read in chunks if the content is larger than the buffer. */
+      constexpr size_t buffer_size{ 4096 };
+      char buffer[buffer_size];
+
+      bool const has_redirects{ !output_redirects().empty() };
+
+      size_t remaining{ static_cast<size_t>(file_size) - bytes_already_read };
+      while(remaining > 0)
+      {
+        size_t const to_read{ remaining < buffer_size ? remaining : buffer_size };
+        size_t const bytes_read{ fread(buffer, sizeof(char), to_read, temp_file) };
+        if(bytes_read == 0)
+        {
+          break;
+        }
+
+        bytes_already_read += bytes_read;
+
+        /* Forward the captured stderr content.
+         * If redirects are active, use them; otherwise write directly to stderr. */
+        if(has_redirects)
+        {
+          forward_error(std::string_view{ buffer, bytes_read });
+        }
+        else
+        {
+          /* No redirects active, write directly to stderr. */
+          fwrite(buffer, sizeof(char), bytes_read, stderr);
+        }
+
+        remaining -= bytes_read;
+      }
     }
 
     FILE *temp_file{};
     int original_stderr_fd{ -1 };
+    size_t bytes_already_read{};
   };
 
   scoped_stderr_redirect::scoped_stderr_redirect()
@@ -1047,4 +1061,9 @@ namespace jank::runtime
   }
 
   scoped_stderr_redirect::~scoped_stderr_redirect() = default;
+
+  void scoped_stderr_redirect::flush()
+  {
+    pimpl->flush_impl();
+  }
 }

@@ -136,7 +136,7 @@ namespace jank::nrepl_server::asio
     runtime::scoped_output_redirect const redirect{ [&](std::string const &chunk) {
       captured_out += chunk;
     } };
-    runtime::scoped_stderr_redirect const stderr_redirect{};
+    runtime::scoped_stderr_redirect stderr_redirect{};
     auto emit_pending_output([&]() {
       if(captured_out.empty())
       {
@@ -209,6 +209,7 @@ namespace jank::nrepl_server::asio
       }
 
       update_ns();
+      stderr_redirect.flush();
       emit_pending_output();
       std::string const ex_type{ "signal" };
       record_exception(session, std::string{ sig_buf }, ex_type, std::nullopt);
@@ -326,6 +327,7 @@ namespace jank::nrepl_server::asio
       sigaction(SIGABRT, &sa_old_abrt, nullptr);
       sigaction(SIGBUS, &sa_old_bus, nullptr);
       update_ns();
+      stderr_redirect.flush();
       emit_pending_output();
       auto const err_string(to_std_string(runtime::to_code_string(ex_obj)));
       auto const ex_type(object_type_str(ex_obj->type));
@@ -348,12 +350,7 @@ namespace jank::nrepl_server::asio
       sigaction(SIGABRT, &sa_old_abrt, nullptr);
       sigaction(SIGBUS, &sa_old_bus, nullptr);
       update_ns();
-      emit_pending_output();
-      std::cerr << "err source line: " << err->source.start.line << '\n';
-      if(!err->notes.empty())
-      {
-        std::cerr << "first err note line: " << err->notes.front().source.start.line << '\n';
-      }
+      stderr_redirect.flush();
       emit_pending_output();
       std::string const base_err_string{ err->message.data(), err->message.size() };
       std::string const err_type{ error::kind_str(err->kind) };
@@ -397,6 +394,7 @@ namespace jank::nrepl_server::asio
       sigaction(SIGABRT, &sa_old_abrt, nullptr);
       sigaction(SIGBUS, &sa_old_bus, nullptr);
       update_ns();
+      stderr_redirect.flush();
       emit_pending_output();
       auto const ex_type(std::string{ typeid(ex).name() });
       record_exception(session, std::string{ ex.what() }, ex_type, std::nullopt);
@@ -418,6 +416,7 @@ namespace jank::nrepl_server::asio
       sigaction(SIGABRT, &sa_old_abrt, nullptr);
       sigaction(SIGBUS, &sa_old_bus, nullptr);
       update_ns();
+      stderr_redirect.flush();
       emit_pending_output();
       std::string const ex_type{ "unknown" };
       record_exception(session, "unknown exception", ex_type, std::nullopt);
