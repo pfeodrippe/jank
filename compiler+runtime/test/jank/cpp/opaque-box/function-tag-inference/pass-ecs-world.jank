@@ -1,0 +1,19 @@
+; Test :tag metadata with ecs_world_t-like type for cpp/unbox type inference.
+; This simulates the pattern used in vybe/flecs.jank
+
+; Define a flecs-like struct
+(cpp/raw "struct ecs_world_t { int entity_count; };")
+(cpp/raw "ecs_world_t* ecs_init() { auto w = new ecs_world_t; w->entity_count = 100; return w; }")
+(cpp/raw "int ecs_new(ecs_world_t* w) { return ++w->entity_count; }")
+
+; Function that boxes a pointer and has :tag metadata
+(defn ^{:tag "ecs_world_t*"} make-world []
+  (cpp/box (cpp/ecs_init)))
+
+; Test using cpp/unbox directly on function call - type should be inferred from :tag
+(let* [world-ptr (cpp/unbox (make-world))  ; Type inferred as ecs_world_t*!
+       entity-id (cpp/ecs_new world-ptr)
+       count (cpp/.-entity_count (cpp/* world-ptr))]
+  (if (and (= entity-id 101) (= count 101))
+    :success
+    :fail))

@@ -1,0 +1,157 @@
+(ns test-all-libs
+  "Test all clojure.* libraries available in WASM"
+  (:require
+   [clojure.set :as set]
+   [clojure.string :as str]
+   [clojure.walk :as walk]
+   [clojure.template :as template]))    
+
+(println "==============================================")
+(println "Testing All Clojure Libraries in WASM")
+(println "==============================================")
+(println)
+
+;; ============================================
+;; Test clojure.set
+;; ============================================
+(println "1. Testing clojure.set")
+(println "----------------------------------------------")
+
+(def s1 #{1 2 3 4 5})
+(def s2 #{3 4 5 6 7})
+
+(println "Set 1:" s1)
+(println "Set 2:" s2)
+(println "Union:" (set/union s1 s2))
+(println "Intersection:" (set/intersection s1 s2))
+(println "Difference:" (set/difference s1 s2))
+(println "Subset?:" (set/subset? #{1 2} s1))
+(println "Superset?:" (set/superset? s1 #{1 2}))
+
+(println)
+
+;; ============================================
+;; Test clojure.string
+;; ============================================
+(println "2. Testing clojure.string")
+(println "----------------------------------------------")
+
+(def test-str "Hello World")
+(println "Original:" test-str)
+(println "Upper-case:" (str/upper-case test-str))
+(println "Lower-case:" (str/lower-case test-str))
+(println "Capitalize:" (str/capitalize "hello world"))
+(println "Reverse:" (str/reverse test-str))
+
+(def whitespace-str "  trim me  ")
+(println "Trim '" whitespace-str "':" (str "'" (str/trim whitespace-str) "'"))
+
+(def csv-str "apple,banana,cherry")
+(println "Split '" csv-str "':" (str/split csv-str #","))
+
+(println "Join:" (str/join ", " ["one" "two" "three"]))
+(println "Starts with 'Hello'?:" (str/starts-with? test-str "Hello"))
+(println "Ends with 'World'?:" (str/ends-with? test-str "World"))
+(println "Includes 'lo Wo'?:" (str/includes? test-str "lo Wo"))
+(println "Blank?:" (str/blank? ""))
+(println "Blank (whitespace)?:" (str/blank? "   "))
+(println "Blank (text)?:" (str/blank? "not blank"))
+
+(println)
+
+;; ============================================
+;; Test clojure.walk
+;; ============================================
+(println "3. Testing clojure.walk")
+(println "----------------------------------------------")
+
+(def test-data {:a 1 :b {:c 2 :a 3}})
+(println "Original data:" test-data)
+
+(def walked (walk/postwalk-replace {:a :REPLACED} test-data))
+(println "After postwalk-replace {:a :REPLACED}:" walked)
+
+(def prewalk-result (walk/prewalk-replace {:a :PREWALK} test-data))
+(println "After prewalk-replace {:a :PREWALK}:" prewalk-result)
+
+(def keywordized (walk/keywordize-keys {"name" "John" "age" {"value" 30}}))
+(println "Keywordize-keys:" keywordized)
+
+(def stringified (walk/stringify-keys {:name "John" :age {:value 30}}))
+(println "Stringify-keys:" stringified)
+
+(println)
+
+;; ============================================
+;; Test clojure.template
+;; ============================================
+(println "4. Testing clojure.template")
+(println "----------------------------------------------")
+
+;; Test apply-template function
+(def template-result (template/apply-template '[x y] '(+ x y) [10 20]))
+(println "apply-template '[x y] '(+ x y) [10 20]:")
+(println "  Result:" template-result)
+(println "  Evaluates to:" (eval template-result))
+
+(println)
+
+;; ============================================
+;; Integration Tests
+;; ============================================
+(println "5. Integration Tests")
+(println "----------------------------------------------")
+
+;; Combine multiple libraries
+(defn process-strings [coll]
+  (let [;; Use clojure.set to find unique strings
+        unique-set (set coll)
+        ;; Use clojure.string to transform
+        uppercased (set (map str/upper-case unique-set))
+        ;; Use clojure.walk to transform data structure
+        transformed (walk/postwalk
+                     (fn [x]
+                       (if (string? x)
+                         (str/reverse x)
+                         x))
+                     (vec uppercased))]
+    transformed))
+
+(def test-strings ["hello" "world" "hello" "test"])
+(println "Process strings:" test-strings)
+(println "Result:" (process-strings test-strings))
+
+;; Complex nested transformation
+(defn transform-nested [data]
+  (walk/postwalk
+   (fn [x]
+     (cond
+       (and (map? x) (contains? x :name))
+       (update x :name str/upper-case)
+
+       (string? x)
+       (str/capitalize x)
+
+       :else x))
+   data))
+
+(def nested-data {:users [{:name "alice" :status "active"}
+                          {:name "bob" :status "inactive"}]
+                  :title "user list"})
+(println "\nNested transformation:")
+(println "Input:" nested-data)
+(println "Output:" (transform-nested nested-data))
+
+(println)
+
+;; ============================================
+;; Summary
+;; ============================================
+(println "==============================================")
+(println "All tests completed successfully!")
+(println "Libraries tested:")
+(println "  ✓ clojure.set")
+(println "  ✓ clojure.string")
+(println "  ✓ clojure.walk")
+(println "  ✓ clojure.template")
+(println "==============================================")

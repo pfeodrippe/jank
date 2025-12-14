@@ -1,0 +1,6 @@
+(require '["clojure/string_native.hpp" :refer [starts_with]])
+
+(let [result (boolean (starts_with "hello" "hel"))]
+  (if result
+    :success
+    :failure))

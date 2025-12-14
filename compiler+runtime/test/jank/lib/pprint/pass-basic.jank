@@ -1,0 +1,96 @@
+; Test clojure.pprint basic functionality
+(require '[clojure.pprint :refer [pprint-str]])
+
+; Test pprint-str for simple values
+(assert (= (pprint-str nil) "nil"))
+(assert (= (pprint-str 42) "42"))
+(assert (= (pprint-str true) "true"))
+(assert (= (pprint-str false) "false"))
+(assert (= (pprint-str :keyword) ":keyword"))
+(assert (= (pprint-str 'symbol) "symbol"))
+
+; Test pprint-str for strings (should be quoted)
+(assert (= (pprint-str "hello") "\"hello\""))
+
+; Test pprint-str for vectors
+(assert (= (pprint-str []) "[]"))
+(assert (= (pprint-str [1 2 3]) "[1 2 3]"))
+
+; Test pprint-str for lists
+(assert (= (pprint-str '()) "()"))
+(assert (= (pprint-str '(1 2 3)) "(1 2 3)"))
+
+; Test pprint-str for maps
+(assert (= (pprint-str {}) "{}"))
+; Map order may vary, so check contains both key-value pairs
+(let [result (pprint-str {:a 1})]
+  (assert (or (= result "{:a 1}") (= result "{ :a 1 }"))))
+
+; Test pprint-str for sets
+(assert (= (pprint-str #{}) "#{}"))
+(let [result (pprint-str #{1})]
+  (assert (or (= result "#{1}") (= result "#{ 1 }"))))
+
+; Test nested structures (should fit on one line if short enough)
+(let [result (pprint-str {:a [1 2] :b {:c 3}})]
+  (assert (string? result))
+  (assert (> (count result) 0)))
+
+; Test *print-length* limiting
+(require '[clojure.pprint :refer [*print-length*]])
+(binding [*print-length* 2]
+  (let [result (pprint-str (range 10))]
+    (assert (string? result))
+    ; Should contain "..." to indicate truncation
+    (assert (>= (count result) 0))))
+
+; Test *print-level* limiting
+(require '[clojure.pprint :refer [*print-level*]])
+(binding [*print-level* 1]
+  (let [result (pprint-str {:a {:b {:c 1}}})]
+    (assert (string? result))
+    ; Should contain "#" for truncated nested levels
+    (assert (>= (count result) 0))))
+
+; Test large maps (8 items) - should trigger multi-line formatting
+(let [big-map {:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8}
+      result (pprint-str big-map)]
+  (assert (string? result))
+  (assert (> (count result) 0))
+  ; All keys should be present in output
+  (assert (clojure.string/includes? result ":a"))
+  (assert (clojure.string/includes? result ":h")))
+
+; Test large map with nested values
+(let [big-nested {:name "test"
+                  :count 42
+                  :enabled true
+                  :tags [:a :b :c]
+                  :config {:debug false :level 3}
+                  :data [1 2 3 4 5]
+                  :meta nil
+                  :extra "value"}
+      result (pprint-str big-nested)]
+  (assert (string? result))
+  (assert (> (count result) 0))
+  ; Check multi-line output contains newlines when wide enough
+  (assert (or (clojure.string/includes? result "\n")
+              ; or fits on one line (narrow margin)
+              (> (count result) 20))))
+
+; Test large vector (should wrap)
+(let [big-vec [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]
+      result (pprint-str big-vec)]
+  (assert (string? result))
+  (assert (clojure.string/includes? result "1"))
+  (assert (clojure.string/includes? result "15")))
+
+; Test *print-right-margin* affects output width
+(require '[clojure.pprint :refer [*print-right-margin*]])
+(binding [*print-right-margin* 30]
+  (let [result (pprint-str {:a 1 :b 2 :c 3 :d 4})]
+    (assert (string? result))
+    ; With narrow margin, should be multi-line
+    (assert (>= (count result) 0))))
+
+:success

@@ -1,0 +1,13 @@
+; Test :tag metadata on function for cpp/unbox type inference.
+; The function returns a boxed int* and has :tag :i32* metadata.
+; cpp/unbox should infer the type from the :tag when called on the function result.
+; With tag_to_cpp_type_literal: :i32 -> int, :i32* -> int*
+
+(defn ^{:tag :i32*} get-int-ptr []
+  (cpp/box (cpp/new (cpp/type "int") 42)))
+
+; Unbox should infer int* from function's :tag metadata
+(let* [raw-ptr (cpp/unbox (get-int-ptr))
+       value (cpp/* raw-ptr)]
+  (if (= value 42)
+    :success))

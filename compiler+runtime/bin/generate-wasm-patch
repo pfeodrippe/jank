@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# generate-wasm-patch - Generate a WASM hot-reload patch from jank code
+#
+# Usage: generate-wasm-patch <namespace/fn-name> <arity> <expr>
+#
+# Example:
+#   generate-wasm-patch eita/ggg 1 "(+ 49 v)"
+#
+# This generates a WASM SIDE_MODULE patch that can be loaded via hot-reload.
+# For now, it handles simple integer arithmetic expressions.
+# More complex expressions require full jank codegen (future work).
+
+set -euo pipefail
+
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BUILD_DIR="${SCRIPT_DIR}/../build-wasm"
+
+usage() {
+  echo "Usage: $0 <namespace/fn-name> <arity> <expression>"
+  echo ""
+  echo "Example:"
+  echo "  $0 eita/ggg 1 '(+ 49 v)'"
+  echo ""
+  echo "Supported expressions:"
+  echo "  (+ <number> <param>)   - Add constant to parameter"
+  echo "  (- <number> <param>)   - Subtract param from constant"
+  echo "  (* <number> <param>)   - Multiply constant and parameter"
+  echo ""
+  echo "Output: <fn-name>_patch.wasm in current directory"
+  exit 1
+}
+
+if [[ $# -lt 3 ]]; then
+  usage
+fi
+
+QUALIFIED_NAME="$1"
+ARITY="$2"
+EXPR="$3"
+
+# Parse namespace/name
+if [[ ! "$QUALIFIED_NAME" =~ ^([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_*+!?<>=-]+)$ ]]; then
+  echo "Error: Invalid qualified name format. Expected 'namespace/fn-name'"
+  exit 1
+fi
+
+NAMESPACE="${BASH_REMATCH[1]}"
+FN_NAME="${BASH_REMATCH[2]}"
+
+# Munge the function name (convert - to _, etc.)
+MUNGED_NS=$(echo "$NAMESPACE" | tr '-' '_' | tr '.' '_')
+MUNGED_NAME=$(echo "$FN_NAME" | tr '-' '_' | sed 's/\?/_QMARK_/g' | sed 's/!/_BANG_/g' | sed 's/\*/_STAR_/g')
+C_FN_NAME="jank_${MUNGED_NS}_${MUNGED_NAME}"
+
+OUTPUT_NAME="${MUNGED_NAME}_patch"
+OUTPUT_CPP="${OUTPUT_NAME}.cpp"
+OUTPUT_WASM="${OUTPUT_NAME}.wasm"
+
+echo "[generate-wasm-patch] Generating patch for: ${QUALIFIED_NAME}"
+echo "[generate-wasm-patch] Expression: ${EXPR}"
+echo "[generate-wasm-patch] Arity: ${ARITY}"
+
+# Parse the expression and generate C++ code
+# For now, handle simple arithmetic: (+ N param), (- N param), (* N param)
+
+generate_body() {
+  local expr="$1"
+  local arity="$2"
+
+  # Remove outer parens and whitespace
+  expr=$(echo "$expr" | sed 's/^[[:space:]]*(//; s/)[[:space:]]*$//')
+
+  # Parse operator and operands
+  local op operand1 operand2
+  read -r op operand1 operand2 <<< "$expr"
+
+  # Handle different operators
+  case "$op" in
+    +)
+      # Check which operand is the number
+      if [[ "$operand1" =~ ^-?[0-9]+$ ]]; then
+        echo "  int64_t value = jank_unbox_integer(p0);"
+        echo "  return jank_box_integer(value + ${operand1});"
+      elif [[ "$operand2" =~ ^-?[0-9]+$ ]]; then
+        echo "  int64_t value = jank_unbox_integer(p0);"
+        echo "  return jank_box_integer(value + ${operand2});"
+      else
+        echo "  // Unsupported: both operands are variables"
+        echo "  return p0; // FIXME"
+      fi
+      ;;
+    -)
+      if [[ "$operand1" =~ ^-?[0-9]+$ ]]; then
+        echo "  int64_t value = jank_unbox_integer(p0);"
+        echo "  return jank_box_integer(${operand1} - value);"
+      elif [[ "$operand2" =~ ^-?[0-9]+$ ]]; then
+        echo "  int64_t value = jank_unbox_integer(p0);"
+        echo "  return jank_box_integer(value - ${operand2});"
+      else
+        echo "  // Unsupported: both operands are variables"
+        echo "  return p0; // FIXME"
+      fi
+      ;;
+    \*)
+      if [[ "$operand1" =~ ^-?[0-9]+$ ]]; then
+        echo "  int64_t value = jank_unbox_integer(p0);"
+        echo "  return jank_box_integer(value * ${operand1});"
+      elif [[ "$operand2" =~ ^-?[0-9]+$ ]]; then
+        echo "  int64_t value = jank_unbox_integer(p0);"
+        echo "  return jank_box_integer(value * ${operand2});"
+      else
+        echo "  // Unsupported: both operands are variables"
+        echo "  return p0; // FIXME"
+      fi
+      ;;
+    *)
+      echo "  // Unsupported operator: $op"
+      echo "  return p0; // FIXME"
+      ;;
+  esac
+}
+
+# Generate parameter list based on arity
+generate_params() {
+  local arity=$1
+  local params=""
+  for ((i=0; i<arity; i++)); do
+    if [[ $i -gt 0 ]]; then
+      params+=", "
+    fi
+    params+="void *p${i}"
+  done
+  echo "$params"
+}
+
+# Generate the patch C++ file
+cat > "$OUTPUT_CPP" << EOF
+// Auto-generated WASM hot-reload patch
+// Function: ${QUALIFIED_NAME}
+// Expression: ${EXPR}
+//
+// Compile with:
+//   emcc ${OUTPUT_CPP} -o ${OUTPUT_WASM} -sSIDE_MODULE=1 -O2 -fPIC
+
+#include <stdint.h>
+
+extern "C" {
+
+// Patch symbol metadata (must match jank's hot_reload.hpp)
+struct patch_symbol {
+  const char *qualified_name;
+  const char *signature;
+  void *fn_ptr;
+};
+
+// Import helper functions from main module
+extern void *jank_box_integer(int64_t value);
+extern int64_t jank_unbox_integer(void *obj);
+
+// The patched function: ${QUALIFIED_NAME}
+// Implements: ${EXPR}
+__attribute__((visibility("default")))
+void *${C_FN_NAME}($(generate_params $ARITY)) {
+$(generate_body "$EXPR" "$ARITY")
+}
+
+// Patch metadata export
+__attribute__((visibility("default")))
+patch_symbol* jank_patch_symbols(int *count) {
+  static patch_symbol symbols[] = {
+    {"${QUALIFIED_NAME}", "${ARITY}", (void*)${C_FN_NAME}}
+  };
+  *count = 1;
+  return symbols;
+}
+
+}
+EOF
+
+echo "[generate-wasm-patch] Generated: ${OUTPUT_CPP}"
+
+# Compile to WASM SIDE_MODULE
+echo "[generate-wasm-patch] Compiling to WASM..."
+emcc "$OUTPUT_CPP" -o "$OUTPUT_WASM" -sSIDE_MODULE=1 -O2 -fPIC
+
+WASM_SIZE=$(stat -f%z "$OUTPUT_WASM" 2>/dev/null || stat -c%s "$OUTPUT_WASM")
+echo "[generate-wasm-patch] Generated: ${OUTPUT_WASM} (${WASM_SIZE} bytes)"
+
+echo ""
+echo "To use this patch:"
+echo "  1. Copy ${OUTPUT_WASM} to the WASM virtual filesystem"
+echo "  2. Call: jank_hot_reload_load_patch('/path/to/${OUTPUT_WASM}')"

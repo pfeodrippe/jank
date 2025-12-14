@@ -34,6 +34,25 @@ namespace clojure::core_native
   object_ref refer(object_ref current_ns, object_ref sym, object_ref var);
   object_ref load_module(object_ref path);
   object_ref compile(object_ref path);
+  object_ref register_native_header(object_ref current_ns,
+                                    object_ref alias,
+                                    object_ref header,
+                                    object_ref scope,
+                                    object_ref include_directive);
+  object_ref register_native_refer(object_ref current_ns,
+                                   object_ref alias,
+                                   object_ref local_sym,
+                                   object_ref member_sym);
+  object_ref register_native_header_wasm(object_ref current_ns,
+                                         object_ref alias,
+                                         object_ref header,
+                                         object_ref scope,
+                                         object_ref include_directive);
+  object_ref register_native_refer_wasm(object_ref current_ns,
+                                        object_ref alias,
+                                        object_ref local_sym,
+                                        object_ref member_sym);
+  object_ref native_header_functions(object_ref current_ns, object_ref alias, object_ref prefix);
 
   object_ref not_(object_ref o);
 
@@ -51,9 +70,13 @@ namespace clojure::core_native
 
   object_ref sleep(object_ref ms);
   object_ref current_time();
+  object_ref profile_enter(object_ref label);
+  object_ref profile_exit(object_ref label);
+  object_ref profile_enabled();
 
   object_ref eval(object_ref expr);
   object_ref read_string(object_ref /* opts */, object_ref str);
+  object_ref read_line();
 
   object_ref lazy_seq(object_ref o);
 

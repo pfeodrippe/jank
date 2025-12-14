@@ -1,8 +1,10 @@
 #pragma once
 
 #include <jtl/ptr.hpp>
+#include <jtl/option.hpp>
 
 #include <jank/runtime/object.hpp>
+#include <jank/read/source.hpp>
 
 namespace jank::analyze
 {
@@ -159,6 +161,11 @@ namespace jank::analyze
                expression_position position,
                local_frame_ptr frame,
                bool needs_box);
+    expression(expression_kind kind,
+               expression_position position,
+               local_frame_ptr frame,
+               bool needs_box,
+               read::source const &source);
     virtual ~expression() = default;
 
     virtual void propagate_position(expression_position const pos);
@@ -169,6 +176,7 @@ namespace jank::analyze
     expression_position position{};
     local_frame_ptr frame;
     bool needs_box{ true };
+    jtl::option<read::source> source;
   };
 
   using expression_ref = jtl::ref<expression>;
@@ -177,4 +185,27 @@ namespace jank::analyze
   /* Captures both expressions and things which inherit from expression. */
   template <typename T>
   concept expression_like = std::convertible_to<T *, expression *>;
+
+  /* Dynamic cast for expression types using kind field.
+   * Returns nullptr if the expression is not of the requested type.
+   * Use this instead of llvm::dyn_cast for jank expression types. */
+  template <expression_like T>
+  T *expr_dyn_cast(expression * const e)
+  {
+    if(e && e->kind == T::expr_kind)
+    {
+      return static_cast<T *>(e);
+    }
+    return nullptr;
+  }
+
+  template <expression_like T>
+  T const *expr_dyn_cast(expression const * const e)
+  {
+    if(e && e->kind == T::expr_kind)
+    {
+      return static_cast<T const *>(e);
+    }
+    return nullptr;
+  }
 }

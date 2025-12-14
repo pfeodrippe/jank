@@ -1,0 +1,4 @@
+;; Simple test without ns form
+(def numbers [1 2 3 (+ 44 49) 5])
+(println "Numbers:" numbers)
+(println "LLVM IR to WASM test completed!")

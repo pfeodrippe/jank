@@ -1,0 +1,404 @@
+# jank WASM AOT Development Snapshot (Operational)
+
+**Date:** November 25, 2025  
+**Branch:** nrepl  
+**Focus:** WebAssembly AOT (Ahead-of-Time) Compilation via C++ Codegen  
+**Agent:** GitHub Copilot (Claude Opus 4.5)
+
+---
+
+## Executive Summary
+
+We're implementing **full WASM AOT compilation** for jank. The key insight is that WASM cannot JIT compile, so we need to:
+
+1. Use the native jank compiler on the **host** to compile jank → C++
+2. Have emscripten compile the C++ → WASM
+3. Run the pre-compiled code in the browser/Node.js
+
+The existing C++ codegen (`--codegen cpp`) generates JIT-style function structs. We'll extend this to generate standalone AOT modules suitable for WASM.
+
+---
+
+## Current Architecture Understanding
+
+### Existing C++ Codegen Flow
+
+```
+jank source
+    ↓
+analyze::processor (analysis phase)
+    ↓
+analyze::expr::function (AST)
+    ↓
+codegen::processor (C++ codegen)
+    ↓
+C++ struct extending jit_function
+    ↓
+CppInterOp JIT compile & execute
+```
+
+### Key Files
+
+1. **`include/cpp/jank/codegen/processor.hpp`** - Codegen processor header
+2. **`src/cpp/jank/codegen/processor.cpp`** - Main C++ codegen (2482 lines)
+3. **`include/cpp/jank/codegen/llvm_processor.hpp`** - Contains `compilation_target` enum
+4. **`include/cpp/jank/util/cli.hpp`** - CLI options including `codegen_type`
+5. **`bin/emscripten-bundle`** - WASM build script
+
+### Current `compilation_target` Enum (from llvm_processor.hpp)
+
+```cpp
+enum class compilation_target : u8
+{
+  eval,      // REPL evaluation
+  function,  // Standalone function
+  module     // Module-level (generates extern "C" load function)
+};
+```
+
+### Current `codegen_type` Enum (from cli.hpp)
+
+```cpp
+enum class codegen_type : u8
+{
+  llvm_ir,
+  cpp
+};
+```
+
+---
+
+## The WASM AOT Strategy
+
+### Problem Statement
+
+WASM has no JIT. Current flow:
+- `jank_eval_string_c()` parses but can't evaluate because evaluation requires JIT
+- We need all code pre-compiled to C++ on the host, then compiled to WASM
+
+### Solution: Host-Time Evaluation + AOT C++
+
+The key trick: **evaluate at host compile time**, emit the result as C++.
+
+```
+Host (macOS/Linux):
+┌─────────────────────────────────────────────────────────────┐
+│ 1. jank source file (e.g., minimal.jank)                    │
+│        ↓                                                    │
+│ 2. Native jank compiler (./build/jank)                      │
+│    - Analyzes the source                                    │
+│    - JIT evaluates to get results                           │
+│    - Generates C++ code for WASM                            │
+│        ↓                                                    │
+│ 3. C++ source (minimal_aot.cpp)                             │
+│        ↓                                                    │
+│ 4. em++ (emscripten)                                        │
+│        ↓                                                    │
+│ 5. minimal.wasm + minimal.js                                │
+└─────────────────────────────────────────────────────────────┘
+
+WASM Runtime (Browser/Node):
+┌─────────────────────────────────────────────────────────────┐
+│ 1. Load minimal.wasm                                        │
+│ 2. Initialize jank runtime (GC, core-native)                │
+│ 3. Call pre-compiled module init                            │
+│ 4. Execute! No JIT needed.                                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Implementation Plan
+
+### Phase 1: New Compilation Target & CLI
+
+Add `wasm_aot` to both enums:
+
+```cpp
+// llvm_processor.hpp
+enum class compilation_target : u8
+{
+  eval,
+  function,
+  module,
+  wasm_aot   // NEW: WASM AOT module
+};
+
+// cli.hpp
+enum class codegen_type : u8
+{
+  llvm_ir,
+  cpp,
+  wasm_aot   // NEW: Generates standalone C++ for WASM
+};
+```
+
+### Phase 2: WASM AOT C++ Codegen
+
+The generated C++ should be:
+
+```cpp
+// Auto-generated AOT module for user/minimal
+#pragma once
+
+#include <jank/runtime/prelude.hpp>
+
+namespace jank::wasm::user {
+
+// Module-level initialization
+static bool __initialized = false;
+static jank::runtime::var_ref __ns_var;
+
+// Pre-compiled function from jank source
+struct minimal__fn__1 : jank::runtime::obj::jit_function {
+  // Constants lifted from analysis
+  jank::runtime::obj::integer_ref const const_42;
+  
+  minimal__fn__1()
+    : jank::runtime::obj::jit_function{ /* meta */ }
+    , const_42{ jank::runtime::make_box<jank::runtime::obj::integer>(42) }
+  {}
+  
+  jank::runtime::object_ref call() final {
+    return const_42;
+  }
+};
+
+// Module init called at WASM startup
+inline void __module_init() {
+  if(__initialized) return;
+  __initialized = true;
+  
+  using namespace jank::runtime;
+  
+  // Create/find namespace
+  auto ns_sym = make_box<obj::symbol>("", "user");
+  __rt_ctx->intern_ns(ns_sym);
+  
+  // Evaluate top-level forms (already compiled to C++)
+  auto fn = make_box<minimal__fn__1>();
+  fn->call();  // Execute top-level
+}
+
+}  // namespace jank::wasm::user
+
+// Registration for WASM runtime
+extern "C" void jank_wasm_register_user_minimal() {
+  jank::wasm::user::__module_init();
+}
+```
+
+### Phase 3: Compile-Time Evaluation
+
+For expressions that need values known at compile time:
+
+```clojure
+;; minimal.jank
+(def x (+ 1 2 3))  ; Result: 6
+(defn double [n] (* n 2))
+(double x)  ; Result: 12
+```
+
+The host jank compiler:
+1. JIT evaluates `(+ 1 2 3)` → gets `6`
+2. Emits C++ constant `const_6 = make_box<integer>(6)`
+3. JIT evaluates `(double x)` → gets `12`
+4. Emits C++ constant `const_12 = make_box<integer>(12)`
+
+This is the magic: **use the JIT at compile time to pre-compute values**.
+
+### Phase 4: Update emscripten-bundle
+
+```bash
+# New workflow:
+native_jank="${native_build_dir}/jank"
+
+# Compile jank to WASM AOT C++
+"${native_jank}" compile-module \
+  --codegen wasm-aot \
+  --output "${output_dir}/${module_name}_aot.cpp" \
+  "${jank_source}"
+
+# Compile C++ to WASM
+em++ -o "${output_dir}/${module_name}.js" \
+  "${output_dir}/${module_name}_aot.cpp" \
+  "${libjank}" "${libjankzip}" "${libgc}" \
+  ...emscripten flags...
+```
+
+---
+
+## Code Locations for Changes
+
+### Files to Modify
+
+1. **`include/cpp/jank/codegen/llvm_processor.hpp`**
+   - Add `wasm_aot` to `compilation_target`
+
+2. **`include/cpp/jank/util/cli.hpp`**
+   - Add `wasm_aot` to `codegen_type`
+
+3. **`src/cpp/jank/util/cli.cpp`**
+   - Parse `--codegen wasm-aot` option
+
+4. **`src/cpp/jank/codegen/processor.cpp`**
+   - Add WASM AOT generation mode
+   - Generate standalone module with `extern "C"` registration
+
+5. **`bin/emscripten-bundle`**
+   - Use native jank with `--codegen wasm-aot`
+   - Compile generated C++ with em++
+
+### Files to Create
+
+1. **`include/cpp/jank/codegen/wasm_aot.hpp`** (optional)
+   - Helper structures for WASM AOT codegen
+
+---
+
+## Key Insights
+
+### 1. jit_function Base Class Works for AOT
+
+The `jit_function` struct is already suitable for AOT:
+- Just a struct with `call()` method
+- No actual JIT involvement
+- Name is a misnomer - it's really "callable function object"
+
+### 2. Runtime Context Initialization
+
+WASM runtime needs to:
+```cpp
+// In WASM main:
+jank_init(...);                      // Sets up __rt_ctx, GC
+jank_load_clojure_core_native();     // Native fns like +, -, etc.
+jank_wasm_register_user_minimal();   // Our AOT module
+// Now ready to call pre-compiled functions
+```
+
+### 3. Var Interning Still Works
+
+The generated code still uses `__rt_ctx->intern_var()`:
+- This works in WASM because it's a runtime call, not JIT
+- Vars are runtime objects, not compile-time
+
+### 4. Module Dependencies
+
+For `(require '[other.ns :as o])`:
+- At host compile time, recursively compile `other.ns` to C++
+- In WASM, call init functions in dependency order
+
+---
+
+## Test Cases
+
+### Minimal (42)
+```clojure
+42
+```
+→ Should just return integer 42
+
+### Loop/Recur (Sum to 5)
+```clojure
+(loop [i 0 sum 0]
+  (if (< i 5)
+    (recur (+ i 1) (+ sum i))
+    sum))
+```
+→ Should return 10
+
+### Function Definition
+```clojure
+(defn greet [name]
+  (str "Hello, " name "!"))
+(greet "WASM")
+```
+→ Should return "Hello, WASM!"
+
+---
+
+## Current State (Pre-Implementation)
+
+### What Exists ✅
+- C++ codegen works for JIT (`--codegen cpp`)
+- Loop/recur codegen fixed (PR #598)
+- WASM runtime builds (libjank.a, GC, etc.)
+- emscripten-bundle script exists
+- clojure.core-native works in WASM
+
+### What's Missing ❌
+- No `--codegen wasm-aot` option
+- Generated C++ not standalone (needs JIT context)
+- emscripten-bundle doesn't use native jank for codegen
+- No module registration for WASM
+
+---
+
+## Next Steps (In Order)
+
+1. **Add `wasm_aot` to enums** in llvm_processor.hpp and cli.hpp
+2. **Modify processor.cpp** to generate standalone C++ when `target == wasm_aot`
+3. **Add module registration** (`extern "C"` init function)
+4. **Update emscripten-bundle** to compile jank → C++ → WASM
+5. **Test with minimal.jank**
+
+---
+
+## Raw Implementation Notes
+
+### Codegen Differences for WASM AOT
+
+| Aspect | JIT (current) | WASM AOT (new) |
+|--------|---------------|----------------|
+| Namespace wrapper | Yes | Yes |
+| Struct definition | Yes | Yes |
+| extern "C" init | Only for modules | Always |
+| CppInterOp eval | Yes | No (compile-time) |
+| Runtime linking | Dynamic | Static |
+
+### Generated Code Structure
+
+```cpp
+// WASM AOT module structure
+namespace jank::wasm::<module_ns> {
+  // 1. Forward declarations (if needed)
+  
+  // 2. Function structs (same as JIT)
+  struct fn_1 : jit_function { ... };
+  struct fn_2 : jit_function { ... };
+  
+  // 3. Module-level vars
+  static var_ref var_x;
+  static var_ref var_y;
+  
+  // 4. Module init function
+  inline void __module_init() {
+    // Intern vars
+    // Execute top-level forms
+    // Bind function values
+  }
+}
+
+// 5. C registration for WASM loader
+extern "C" void jank_wasm_register_<module>() {
+  jank::wasm::<module_ns>::__module_init();
+}
+```
+
+---
+
+## References
+
+- PR #598: Loop/recur codegen fixes
+- `docs/wasm-status.md`: Overall WASM progress
+- `docs/snapshot.md`: Previous snapshot (this extends it)
+- `bin/emscripten-bundle`: Current build script
+- `wasm-examples/minimal.jank`: Test file
+
+---
+
+## Session Notes
+
+Started implementing WASM AOT codegen. Key realization: we don't need a completely new processor - we can extend the existing one with a new compilation target. The `jit_function` base class is actually just a callable struct, perfect for AOT.
+
+The critical insight is using **host-time JIT evaluation** to pre-compute values that would normally be computed at runtime in WASM. This gives us true AOT with no runtime JIT needed.

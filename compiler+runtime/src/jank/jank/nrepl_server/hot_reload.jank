@@ -1,0 +1,99 @@
+(ns jank.nrepl-server.hot-reload
+  "Hot-reload WebSocket server for WASM development.
+
+  Provides REPL-like hot-reload by:
+  1. Receiving eval requests via WebSocket from browser
+  2. Compiling jank code to WASM side modules (~180ms)
+  3. Sending compiled patches back to browser
+  4. Browser loads via jank_hot_reload_load_patch()
+
+  Architecture:
+    Browser (jank.wasm) <--WebSocket--> nREPL Server (native jank)
+                             ↑               ↓
+                       Eval requests    WASM patches
+
+  Usage:
+    (require '[jank.nrepl-server.hot-reload :as hr])
+    (def server (hr/start-hot-reload-server {:port 7888}))
+    ;; ... eval '(defn foo [x] (+ x 1))' from browser
+    (hr/stop-hot-reload-server server)")
+
+;; For now, this is a placeholder that uses native functions.
+;; The actual WebSocket server will be implemented in C++ as native functions.
+;; See: src/cpp/jank/nrepl/hot_reload_server.cpp
+
+(defn start-hot-reload-server
+  "Start the hot-reload WebSocket server.
+
+  Options:
+    :port - WebSocket port (default: 7888)
+    :bind - Bind address (default: 127.0.0.1)
+
+  Returns a server handle that can be passed to stop-hot-reload-server."
+  ([]
+   (start-hot-reload-server {}))
+  ([opts]
+   (let [port (or (:port opts) 7888)
+         bind (or (:bind opts) "127.0.0.1")]
+     (println (str "[hot-reload] Starting WebSocket server on " bind ":" port))
+     (println "[hot-reload] Browser clients can connect to ws://" bind ":" port "/repl")
+     ;; TODO: Call native function to start WebSocket server
+     ;; (jank.nrepl.hot-reload-native/start-server port bind)
+     {:port port
+      :bind bind
+      :active true})))
+
+(defn stop-hot-reload-server
+  "Stop a running hot-reload WebSocket server."
+  [server]
+  (when (:active server)
+    (println "[hot-reload] Stopping WebSocket server")
+    ;; TODO: Call native function to stop server
+    ;; (jank.nrepl.hot-reload-native/stop-server server)
+    (assoc server :active false)))
+
+(defn compile-to-wasm-patch
+  "Compile jank code to a WASM side module patch.
+
+  Takes jank source code and produces a WASM binary that can be loaded
+  via jank_hot_reload_load_patch() in the browser.
+
+  Args:
+    code - jank source code string (e.g., \"(defn foo [x] (+ x 1))\")
+
+  Returns:
+    {:success true
+     :wasm-bytes <binary data>
+     :symbols [{:name \"user/foo\" :arity 1}]}
+    or
+    {:success false
+     :error \"error message\"}"
+  [code]
+  (try
+    ;; TODO: Integrate with jank compiler
+    ;; 1. Parse and analyze code
+    ;; 2. Generate C++ with patch metadata
+    ;; 3. Invoke emcc to compile to WASM
+    ;; 4. Return binary data
+    ;;
+    ;; For now, return a placeholder
+    (println "[hot-reload] Compiling:" code)
+    {:success false
+     :error "Compilation not yet implemented - see src/cpp/jank/nrepl/hot_reload_compiler.cpp"}
+    (catch Exception e
+      {:success false
+       :error (str "Compilation failed: " (.getMessage e))})))
+
+(defn handle-eval-request
+  "Handle an eval request from the browser.
+
+  This is called when a WebSocket client sends an eval request.
+  It compiles the code and sends back a WASM patch."
+  [code]
+  (let [result (compile-to-wasm-patch code)]
+    (if (:success result)
+      {:type :patch
+       :data (:wasm-bytes result)
+       :symbols (:symbols result)}
+      {:type :error
+       :error (:error result)})))

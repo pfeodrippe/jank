@@ -58,6 +58,7 @@
 #include <jank/runtime/obj/uuid.hpp>
 #include <jank/runtime/obj/inst.hpp>
 #include <jank/runtime/obj/opaque_box.hpp>
+#include <jank/runtime/obj/user_type.hpp>
 #include <jank/runtime/ns.hpp>
 #include <jank/runtime/var.hpp>
 #include <jank/runtime/rtti.hpp>
@@ -212,6 +213,8 @@ namespace jank::runtime
         return fn(expect_object<obj::inst>(erased), std::forward<Args>(args)...);
       case object_type::opaque_box:
         return fn(expect_object<obj::opaque_box>(erased), std::forward<Args>(args)...);
+      case object_type::user_type:
+        return fn(expect_object<obj::user_type>(erased), std::forward<Args>(args)...);
       default:
         {
           jtl::string_builder sb;
@@ -307,6 +310,7 @@ namespace jank::runtime
         return fn(expect_object<obj::chunked_cons>(erased), std::forward<Args>(args)...);
       case object_type::persistent_string:
         return fn(expect_object<obj::persistent_string>(erased), std::forward<Args>(args)...);
+      /* Note: user_type implements seq() but delegates to jank, so it's not in visit_seqable. */
 
       /* Not seqable. */
       default:

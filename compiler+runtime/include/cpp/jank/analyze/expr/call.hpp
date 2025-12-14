@@ -20,7 +20,8 @@ namespace jank::analyze::expr
          bool needs_box,
          expression_ref source,
          native_vector<expression_ref> &&arg_exprs,
-         runtime::obj::persistent_list_ref form);
+         runtime::obj::persistent_list_ref form,
+         jtl::ptr<void> return_tag_type = nullptr);
 
     runtime::object_ref to_runtime_data() const override;
     void walk(std::function<void(jtl::ref<expression>)> const &f) override;
@@ -31,5 +32,8 @@ namespace jank::analyze::expr
     /* We keep the original form from the call expression so we can point
      * back to it if an exception is thrown during eval. */
     runtime::obj::persistent_list_ref form{};
+    /* The C++ return type from :tag metadata on the function being called.
+     * nullptr means no type hint available (returns boxed object*). */
+    jtl::ptr<void> return_tag_type{};
   };
 }

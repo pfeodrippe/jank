@@ -1,0 +1,62 @@
+; Test basic user-type creation and map-like behavior
+
+(defn make-user-type [type-name constructor-fn]
+  (cpp/jank.runtime.make_user_type type-name constructor-fn))
+
+; Define the type (returns a factory)
+; Note: We use a fn that returns both the factory and constructor
+; so that conj/assoc can create new instances of the same type
+(declare MyMap)
+
+(def MyMap
+  (make-user-type
+    "MyMap"
+    (fn [data]
+      {:get (fn [this k] (get data k))
+       :contains (fn [this k] (contains? data k))
+       :count (fn [this] (count data))
+       :assoc (fn [this k v] (MyMap (assoc data k v)))
+       :conj (fn [this entry]
+               (if (map-entry? entry)
+                 (MyMap (assoc data (key entry) (val entry)))
+                 (MyMap (conj data entry))))
+       :to-string (fn [this] (str "#MyMap" data))})))
+
+; Create an instance by calling the factory with data
+(def my-map (MyMap {:a 1 :b 2 :c 3}))
+
+; Test get
+(assert (= 1 (get my-map :a)))
+(assert (= 2 (get my-map :b)))
+(assert (= 3 (get my-map :c)))
+(assert (nil? (get my-map :d)))
+
+; Test contains
+(assert (contains? my-map :a))
+(assert (contains? my-map :b))
+(assert (not (contains? my-map :d)))
+
+; Test count
+(assert (= 3 (count my-map)))
+
+; Test to-string
+(assert (string? (str my-map)))
+
+; Test assoc
+(def my-map2 (assoc my-map :d 4))
+(assert (= 4 (get my-map2 :d)))
+(assert (= 4 (count my-map2)))
+(assert (nil? (get my-map :d)))  ; original unchanged
+
+; Test conj with map entry
+(def my-map3 (conj my-map [:e 5]))
+(assert (= 5 (get my-map3 :e)))
+
+; Test merge (uses conj behind the scenes)
+(def my-map4 (merge my-map {:x 10 :y 20}))
+(assert (= 10 (get my-map4 :x)))
+(assert (= 20 (get my-map4 :y)))
+(assert (= 1 (get my-map4 :a)))  ; original values preserved
+(assert (= 5 (count my-map4)))
+
+:success

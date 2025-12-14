@@ -1,0 +1,6 @@
+; Test that string literals (const char[N]) can be assigned to const char* fields.
+; This validates array-to-pointer decay in the binary operator validator.
+(cpp/raw "struct TestCharStruct { const char* name; };")
+(let [s (cpp/new cpp/TestCharStruct)]
+  (cpp/= (cpp/.-name s) #cpp "hello")
+  :success)
