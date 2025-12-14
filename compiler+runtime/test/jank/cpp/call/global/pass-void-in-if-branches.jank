@@ -1,0 +1,24 @@
+(cpp/raw "namespace jank::cpp::call::global::fail_void_in_if_branches
+          {
+            int counter{ 0 };
+
+            void increment()
+            {
+              counter++;
+            }
+
+            void decrement()
+            {
+              counter--;
+            }
+          }")
+
+; Test: if with void function calls in both branches should work
+; Currently fails with: error: variable has incomplete type 'void'
+(let [condition true
+      result (if condition
+               (cpp/jank.cpp.call.global.fail_void_in_if_branches.increment)
+               (cpp/jank.cpp.call.global.fail_void_in_if_branches.decrement))]
+  (assert (nil? result))
+  (assert (= 1 cpp/jank.cpp.call.global.fail_void_in_if_branches.counter))
+  :success)

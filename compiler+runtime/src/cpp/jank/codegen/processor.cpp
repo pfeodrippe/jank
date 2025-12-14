@@ -1342,7 +1342,7 @@ namespace jank::codegen
     detail::emit_line_directive(body_buffer, expr->source);
 
     auto ret_tmp(runtime::munge(__rt_ctx->unique_namespaced_string("if")));
-    auto const expr_type{ cpp_util::expression_type(expr->then) };
+    auto const expr_type{ cpp_util::non_void_expression_type(expr->then) };
     util::format_to(body_buffer,
                     "{} {}{ };",
                     cpp_util::get_qualified_type_name(expr_type),
