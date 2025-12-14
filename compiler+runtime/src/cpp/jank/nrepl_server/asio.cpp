@@ -44,6 +44,10 @@ extern "C"
 /* Boost.Asio injects several inline definitions for private nested helpers.        */
 /* Clang strictly enforces access there when compiling generated snippets, so we   */
 /* temporarily relax the access keywords during the includes.                      */
+/* Pre-include <any> to avoid GCC 14 header bug - its <any> has private forward    */
+/* declarations with public definitions, which Clang rejects when 'private' is     */
+/* redefined to 'public'. Including it first ensures correct access specifiers.    */
+#include <any>
 #if defined(__clang__)
   #pragma clang diagnostic push
   #pragma clang diagnostic ignored "-Wkeyword-macro"
