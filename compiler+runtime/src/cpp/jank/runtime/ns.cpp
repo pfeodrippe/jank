@@ -218,6 +218,12 @@ namespace jank::runtime
     return ret;
   }
 
+  native_unordered_map<obj::symbol_ref, ns::native_alias> ns::native_aliases_map_snapshot() const
+  {
+    auto locked_native_aliases(native_aliases.rlock());
+    return *locked_native_aliases;
+  }
+
   jtl::result<void, jtl::immutable_string> ns::add_native_refer(obj::symbol_ref const sym,
                                                                 obj::symbol_ref const alias_sym,
                                                                 obj::symbol_ref const member)

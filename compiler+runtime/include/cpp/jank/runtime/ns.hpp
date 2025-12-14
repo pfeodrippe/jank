@@ -54,6 +54,7 @@ namespace jank::runtime
     void remove_native_alias(obj::symbol_ref sym);
     jtl::option<native_alias> find_native_alias(obj::symbol_ref sym) const;
     native_vector<native_alias> native_aliases_snapshot() const;
+    native_unordered_map<obj::symbol_ref, native_alias> native_aliases_map_snapshot() const;
 
     jtl::result<void, jtl::immutable_string>
     add_native_refer(obj::symbol_ref sym, obj::symbol_ref alias, obj::symbol_ref member);

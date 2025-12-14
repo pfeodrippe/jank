@@ -377,7 +377,19 @@ namespace clojure::core_native
       auto const res{ __rt_ctx->eval_cpp_string(include_code) };
       if(res.is_err())
       {
-        throw res.expect_err();
+        auto const alias_sym(try_object<obj::symbol>(alias));
+        throw std::runtime_error{ util::format(
+          "Failed to JIT compile native header require.\n"
+          "  Namespace: {}\n"
+          "  Alias: {}\n"
+          "  Header: {}\n"
+          "  Include directive: {}\n\n"
+          "If this is an AOT compiled binary, the header should have been pre-registered.\n"
+          "Check that the AOT compilation included all required modules.",
+          ns_obj->name->to_string(),
+          alias_sym->name,
+          runtime::to_string(header),
+          include_arg) };
       }
     }
     return jank_nil;

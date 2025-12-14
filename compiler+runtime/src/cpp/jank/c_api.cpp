@@ -1241,6 +1241,22 @@ extern "C"
     runtime::__rt_ctx->module_loader.set_is_loaded(module);
   }
 
+  void jank_register_native_alias(char const * const ns_name,
+                                  char const * const alias_name,
+                                  char const * const header,
+                                  char const * const include_directive,
+                                  char const * const scope)
+  {
+    /* Pre-populate native aliases for AOT compiled code.
+     * When called before module load functions run, this ensures that
+     * register_native_header will find the alias already exists and skip
+     * JIT compilation (which would fail since headers aren't bundled). */
+    auto const ns = __rt_ctx->intern_ns(ns_name);
+    auto const alias_sym = make_box<obj::symbol>(alias_name);
+    runtime::ns::native_alias alias_data{ header, include_directive, scope };
+    ns->add_native_alias(alias_sym, std::move(alias_data)).expect_ok();
+  }
+
   int jank_init(int const argc,
                 char const ** const argv,
                 jank_bool const init_default_ctx,

@@ -823,6 +823,11 @@ extern "C" jank_object_ref jank_native_function_wrapper_create(
   jank_object_ref (*invoke)(void *, void *, jank_object_ref const *, jank_usize),
   jank_u8 arg_count);
 extern "C" void *jank_native_function_wrapper_get_pointer(jank_object_ref);
+extern "C" void jank_register_native_alias(char const *ns_name,
+                                           char const *alias_name,
+                                           char const *header,
+                                           char const *include_directive,
+                                           char const *scope);
 )");
 
     auto const modules_rlocked{ __rt_ctx->loaded_modules_in_order.rlock() };
@@ -942,6 +947,27 @@ namespace
           jank_module_set_loaded("/jank.nrepl-server.asio");
 
     )");
+
+    /* Pre-populate native aliases for AOT compiled headers.
+     * This ensures that when module load functions call register_native_header,
+     * the alias already exists and JIT compilation is skipped. */
+    {
+      auto const namespaces_rlocked{ __rt_ctx->namespaces.rlock() };
+      for(auto const &[ns_sym, ns_ref] : *namespaces_rlocked)
+      {
+        auto const aliases = ns_ref->native_aliases_map_snapshot();
+        for(auto const &[alias_sym, alias_data] : aliases)
+        {
+          util::format_to(sb,
+                          R"(jank_register_native_alias("{}", "{}", "{}", "{}", "{}");)" "\n",
+                          ns_ref->name->name,
+                          alias_sym->name,
+                          alias_data.header,
+                          alias_data.include_directive,
+                          alias_data.scope);
+        }
+      }
+    }
 
     for(auto const &it : *modules_rlocked)
     {
