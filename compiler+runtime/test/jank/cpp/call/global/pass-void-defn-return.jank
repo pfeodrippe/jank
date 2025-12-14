@@ -1,0 +1,14 @@
+(cpp/raw "namespace jank::cpp::call::global::pass_void_defn_return
+          {
+            int x{ 0 };
+            void set_x(int v) { x = v; }
+          }")
+
+; Test: defn returning a void C++ call should return nil
+(defn my-fn []
+  (cpp/jank.cpp.call.global.pass_void_defn_return.set_x (cpp/int. 42)))
+
+(let [result (my-fn)]
+  (assert (nil? result))
+  (assert (= 42 cpp/jank.cpp.call.global.pass_void_defn_return.x))
+  :success)

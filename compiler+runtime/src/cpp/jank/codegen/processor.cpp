@@ -1082,7 +1082,7 @@ namespace jank::codegen
     auto const &ret_tmp{ runtime::munge(__rt_ctx->unique_namespaced_string("let")) };
     bool used_option{};
 
-    auto const last_expr_type{ cpp_util::expression_type(
+    auto const last_expr_type{ cpp_util::non_void_expression_type(
       expr->body->values[expr->body->values.size() - 1]) };
 
     auto const &type_name{ cpp_util::get_qualified_type_name(
@@ -1205,7 +1205,7 @@ namespace jank::codegen
     auto const &ret_tmp{ runtime::munge(__rt_ctx->unique_namespaced_string("letfn")) };
     bool used_option{};
 
-    auto const last_expr_type{ cpp_util::expression_type(
+    auto const last_expr_type{ cpp_util::non_void_expression_type(
       expr->body->values[expr->body->values.size() - 1]) };
 
     auto const &type_name{ cpp_util::get_qualified_type_name(
@@ -1634,11 +1634,7 @@ namespace jank::codegen
 
       auto const is_void{ Cpp::IsVoid(Cpp::GetFunctionReturnType(source->scope)) };
 
-      if(is_void)
-      {
-        util::format_to(body_buffer, "jank::runtime::object_ref const {};", ret_tmp);
-      }
-      else
+      if(!is_void)
       {
         util::format_to(body_buffer, "auto &&{}{ ", ret_tmp);
       }
@@ -1673,7 +1669,10 @@ namespace jank::codegen
       }
       else
       {
-        util::format_to(body_buffer, ";");
+        /* For void-returning functions, call the function first, then set return temp to nil. */
+        util::format_to(body_buffer,
+                        ";jank::runtime::object_ref const {}{ jank::runtime::jank_nil };",
+                        ret_tmp);
       }
 
       if(expr->position == expression_position::tail)
@@ -1699,11 +1698,7 @@ namespace jank::codegen
 
       auto const is_void{ Cpp::IsVoid(expr->type) };
 
-      if(is_void)
-      {
-        util::format_to(body_buffer, "jank::runtime::object_ref const {};", ret_tmp);
-      }
-      else
+      if(!is_void)
       {
         util::format_to(body_buffer, "auto &&{}{ ", ret_tmp);
       }
@@ -1729,7 +1724,10 @@ namespace jank::codegen
       }
       else
       {
-        util::format_to(body_buffer, ";");
+        /* For void-returning functions, call the function first, then set return temp to nil. */
+        util::format_to(body_buffer,
+                        ";jank::runtime::object_ref const {}{ jank::runtime::jank_nil };",
+                        ret_tmp);
       }
 
       if(expr->position == expression_position::tail)
