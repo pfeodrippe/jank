@@ -2013,16 +2013,18 @@ namespace jank::codegen
       util::format_to(body_buffer, "jank::profile::enter(\"cpp/unbox<{}>\");", type_name);
     }
 
+    /* Use lazy source parsing - only parse the source string on error (rare path) */
+    auto const source_str{ util::escape(runtime::to_code_string(meta)) };
     util::format_to(body_buffer,
                     "auto {}{ "
-                    "static_cast<{}>(jank_unbox_with_source(\"{}\", {}.data, "
-                    "jank::runtime::__rt_ctx->read_string(\"{}\").data)"
-                    ") };",
+                    "static_cast<{}>(jank_unbox_lazy_source(\"{}\", {}.data, \"",
                     ret_tmp,
                     type_name,
                     type_name,
-                    value_tmp.unwrap().str(false),
-                    util::escape(runtime::to_code_string(meta)));
+                    value_tmp.unwrap().str(false));
+    /* Append source string directly to avoid fmt interpreting braces as placeholders */
+    body_buffer(source_str);
+    body_buffer("\")) };");
 
     if(util::cli::opts.profiler_interop_enabled)
     {

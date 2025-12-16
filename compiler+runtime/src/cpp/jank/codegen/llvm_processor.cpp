@@ -3052,11 +3052,12 @@ namespace jank::codegen
       ctx->builder->getPtrTy(),
       { ctx->builder->getPtrTy(), ctx->builder->getPtrTy(), ctx->builder->getPtrTy() },
       false));
-    auto const fn(llvm_module->getOrInsertFunction("jank_unbox_with_source", fn_type));
+    /* Use lazy source parsing - only parse the source string on error (rare path) */
+    auto const fn(llvm_module->getOrInsertFunction("jank_unbox_lazy_source", fn_type));
 
     auto const type_str{ gen_c_string(Cpp::GetTypeAsString(Cpp::GetCanonicalType(expr->type))) };
-    auto const source_meta{ gen_global_from_read_string(source_to_meta(expr->source)) };
-    llvm::SmallVector<llvm::Value *, 3> const args{ type_str, value, source_meta };
+    auto const source_str{ gen_c_string(to_code_string(source_to_meta(expr->source))) };
+    llvm::SmallVector<llvm::Value *, 3> const args{ type_str, value, source_str };
     auto const call(ctx->builder->CreateCall(fn, args));
     ctx->builder->CreateStore(call, alloc);
 

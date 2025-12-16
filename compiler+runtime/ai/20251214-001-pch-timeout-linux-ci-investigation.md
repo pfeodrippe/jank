@@ -203,6 +203,63 @@ gh run view 20212446444 --repo pfeodrippe/jank-examples --log-failed | tail -150
 gh run view 20212446444 --repo pfeodrippe/jank-examples --json jobs --jq '.jobs[] | select(.name == "Build jank - Linux")'
 ```
 
+## Applied Fix (jank-examples / "something" project)
+
+The fix applied to the CI workflow includes:
+
+### 1. Add PCH to cache paths (Linux only)
+
+```yaml
+- name: Cache jank build
+  uses: actions/cache@v4
+  with:
+    path: |
+      ~/jank/compiler+runtime/build/jank
+      ~/jank/compiler+runtime/build/CMakeCache.txt
+      ~/jank/compiler+runtime/build/CMakeFiles
+      ~/jank/compiler+runtime/build/*.a
+      ~/jank/compiler+runtime/build/*.ninja
+      ~/jank/compiler+runtime/build/lib
+      ~/jank/compiler+runtime/build/incremental.pch  # <-- ADDED
+    key: jank-build-linux-x64-${{ env.JANK_REF }}-v7
+```
+
+### 2. Branch-based cache key (not commit-based)
+
+Changed from commit-based (`${{ needs.get-jank-commit.outputs.commit }}`) to branch-based (`${{ env.JANK_REF }}`).
+This ensures the cache persists across jank commits on the same branch.
+
+### 3. Enable incremental rebuilds
+
+Removed `if: steps.cache-jank.outputs.cache-hit != 'true'` from:
+- "Create swap space" step - always create swap (needed if PCH regenerates)
+- "Build jank" step - always run ninja to detect changes
+
+```yaml
+- name: Create swap space
+  run: |
+    sudo fallocate -l 8G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    free -h
+
+- name: Build jank
+  run: |
+    export CC=$HOME/jank/compiler+runtime/build/llvm-install/usr/local/bin/clang
+    export CXX=$HOME/jank/compiler+runtime/build/llvm-install/usr/local/bin/clang++
+    cd ~/jank/compiler+runtime
+    ./bin/configure -GNinja -DCMAKE_BUILD_TYPE=Release \
+      -Djank_local_clang=on
+    ./bin/compile
+```
+
+**Result:**
+- Cache restores previous build state (including PCH)
+- Ninja compares timestamps and rebuilds only changed files
+- If headers change → PCH regenerates (with swap available)
+- If nothing changed → ninja does nothing (fast no-op)
+
 ## Related Documentation
 
 - [Clang PCH Internals](https://clang.llvm.org/docs/PCHInternals.html)

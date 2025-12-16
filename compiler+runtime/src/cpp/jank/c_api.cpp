@@ -775,6 +775,27 @@ extern "C"
     return op_box->data;
   }
 
+  void *jank_unbox_lazy_source(char const * const type,
+                               jank_object_ref const o,
+                               char const * const source_str)
+  {
+    auto const box_obj(reinterpret_cast<object *>(o));
+    auto const op_box{ try_object<obj::opaque_box>(box_obj) };
+    if(!op_box->canonical_type.empty() && op_box->canonical_type != type)
+    {
+      /* Only parse the source string when an error occurs (rare path) */
+      auto const source_obj(__rt_ctx->read_string(source_str));
+      throw error::runtime_invalid_unbox(
+        util::format("This opaque box holds a '{}', but it was unboxed as a '{}'.",
+                     op_box->canonical_type,
+                     type),
+        meta_source(source_obj.data),
+        object_source(op_box));
+    }
+
+    return op_box->data;
+  }
+
   jank_arity_flags jank_function_build_arity_flags(jank_u8 const highest_fixed_arity,
                                                    jank_bool const is_variadic,
                                                    jank_bool const is_variadic_ambiguous)
