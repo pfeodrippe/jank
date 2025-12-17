@@ -1,0 +1,17 @@
+; Test that re-evaluating ns form works when namespace defines a var
+; that shadows clojure.core (e.g., 'time'). Previously this would fail
+; because refer tried to map clojure.core/time but 'time' was already
+; mapped to the local namespace's var.
+
+(ns test.ns.shadow)
+
+; Define a function that shadows clojure.core/time
+(defn time [x] (* x 2))
+
+; Re-evaluate the ns form - this should NOT fail
+(ns test.ns.shadow)
+
+; Verify our local 'time' function still works
+(if (= (time 21) 42)
+  :success
+  (throw (ex-info "shadowed var not preserved" {})))

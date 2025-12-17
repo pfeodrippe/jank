@@ -280,18 +280,33 @@ namespace jank::runtime
   jtl::result<void, jtl::immutable_string> ns::refer(obj::symbol_ref const sym, var_ref const var)
   {
     auto const clojure_core(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core")));
+    auto const this_ns(ns_ref{ this });
     auto locked_vars(vars.wlock());
     if(auto const found = (*locked_vars)->data.find(sym))
     {
       if(found->data->type == object_type::var)
       {
         auto const found_var(expect_object<runtime::var>(found->data));
-        if(var->n != found_var->n && (found_var->n != clojure_core))
+        /* Allow re-referring if:
+         * 1. The vars are from the same namespace (var->n == found_var->n), OR
+         * 2. The existing var is from clojure.core (can be replaced), OR
+         * 3. The existing var is from the current namespace (local definition shadows clojure.core)
+         *
+         * Case 3 fixes the bug where re-evaluating (ns foo) fails if foo defines
+         * a var that shadows clojure.core (e.g., 'profile'). In Clojure, this is
+         * allowed - local definitions take precedence and we simply skip the refer. */
+        if(var->n != found_var->n && found_var->n != clojure_core && found_var->n != this_ns)
         {
           return err(util::format("{} already refers to {} in ns {}",
                                   sym->to_string(),
                                   expect_object<runtime::var>(*found)->to_string(),
                                   to_string()));
+        }
+        /* If the existing var is from the current namespace, skip this refer
+         * to preserve the local definition (don't overwrite with clojure.core var). */
+        if(found_var->n == this_ns)
+        {
+          return ok();
         }
       }
     }
