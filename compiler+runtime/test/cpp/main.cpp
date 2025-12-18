@@ -1,6 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include <stdexcept>
+
 #include <gc/gc.h>
 #include <gc/gc_cpp.h>
 
@@ -18,6 +20,7 @@
 #include <jank/util/fmt/print.hpp>
 #include <jank/error/report.hpp>
 #include <clojure/core_native.hpp>
+#include <jank/compiler_native.hpp>
 
 /* NOLINTNEXTLINE(bugprone-exception-escape): println can throw. */
 int main(int const argc, char const **argv)
@@ -29,6 +32,7 @@ try
     context.setOption("no-breaks", true);
 
     jank_load_clojure_core_native();
+    jank_load_jank_compiler_native();
     /* We're loading from source always due to a bug in how we generate symbols which is
      * leading to duplicate symbols being generated. */
     jank::runtime::__rt_ctx->load_module("/clojure.core", jank::runtime::module::origin::latest)
@@ -45,6 +49,11 @@ try
 }
 /* Most exceptions are being caught in `jank_init`.
  * This piece here catches rest of them. */
+catch(std::exception const &e)
+{
+  jank::util::println("Exception: {}", e.what());
+  return 1;
+}
 catch(...)
 {
   jank::util::println("Unknown exception thrown");

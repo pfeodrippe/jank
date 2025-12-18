@@ -121,14 +121,36 @@ namespace jank::runtime
     if(!sym->ns.empty())
     {
       ns_ref ns{};
+      bool try_alias{ false };
       {
         auto const locked_namespaces(namespaces.rlock());
         auto const found(locked_namespaces->find(make_box<obj::symbol>("", sym->ns)));
         if(found == locked_namespaces->end())
         {
+          try_alias = true;
+        }
+        else
+        {
+          ns = found->second;
+        }
+      }
+
+      /* Namespace not found directly, try to resolve as alias in current namespace.
+       * This is done outside the lock to avoid potential deadlocks. */
+      if(try_alias)
+      {
+        auto const current_ns_obj(current_ns_var->deref());
+        if(current_ns_obj->type != object_type::ns)
+        {
           return {};
         }
-        ns = found->second;
+        auto const current(expect_object<jank::runtime::ns>(current_ns_obj));
+        auto const alias(current->find_alias(make_box<obj::symbol>(sym->ns)));
+        if(alias.is_nil())
+        {
+          return {};
+        }
+        ns = alias;
       }
 
       return ns->find_var(make_box<obj::symbol>("", sym->name));

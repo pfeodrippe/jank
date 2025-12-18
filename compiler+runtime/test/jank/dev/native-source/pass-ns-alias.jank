@@ -1,0 +1,14 @@
+; Test that native-source works with namespace aliases
+; This tests the fix to context::find_var that resolves namespace aliases
+; Before the fix, native-source would fail with "Unable to resolve symbol"
+; when given quoted code containing aliased namespace references.
+
+(require '[clojure.string :as str])
+(require 'jank.compiler)
+
+; native-source should successfully analyze code with namespace aliases
+; and return the generated source (it returns nil but prints to stdout)
+(let [result (jank.compiler/native-source '(str/join ", " ["a" "b" "c"]))]
+  ; native-source returns nil on success (output goes to stdout)
+  ; If the alias wasn't resolved, it would throw an exception
+  :success)

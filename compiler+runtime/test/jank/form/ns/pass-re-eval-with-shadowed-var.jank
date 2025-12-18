@@ -12,6 +12,10 @@
 (ns test.ns.shadow)
 
 ; Verify our local 'time' function still works
-(if (= (time 21) 42)
-  :success
-  (throw (ex-info "shadowed var not preserved" {})))
+(try
+  (if (= (time 21) 42)
+    :success
+    (throw (ex-info "shadowed var not preserved" {})))
+  ; Cleanup: restore *ns* so subsequent tests in the test suite
+  ; run in clojure.core namespace as expected
+  (finally (in-ns 'clojure.core)))
