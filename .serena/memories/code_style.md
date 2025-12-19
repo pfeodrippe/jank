@@ -21,6 +21,15 @@
 - Use `result<T, E>` for fallible operations
 - `.is_err()` / `.is_ok()` / `.expect_ok()` / `.expect_err()`
 
+## Testing Best Practices
+- **ALWAYS** use `./bin/test 2>&1 | tee .tests-new.txt | tail -N` to capture full output
+- Never run tests twice - capture output once and grep from the saved file
+
+## Format String Escaping
+- **IMPORTANT**: `{{` or `}}` do NOT work with `util::format_to` to escape literal braces
+- Use string concatenation or `push_back` to add literal braces instead
+- **IMPORTANT**: `util::format_to` does NOT support format specifiers like `{:g}`, `{:d}`, etc. - only plain `{}` is supported
+
 ## Testing
 - Doctest framework
 - Tests in `test/cpp/jank/`

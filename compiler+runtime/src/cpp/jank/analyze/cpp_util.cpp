@@ -682,6 +682,76 @@ namespace jank::analyze::cpp_util
       || Cpp::IsEnumType(type);
   }
 
+  bool is_boolean_type(jtl::ptr<void> const type)
+  {
+    if(!type)
+    {
+      return false;
+    }
+    static jtl::ptr<void> const bool_type{ Cpp::GetCanonicalType(Cpp::GetType("bool")) };
+    auto const canon{ Cpp::GetCanonicalType(Cpp::GetNonReferenceType(type)) };
+    return canon == bool_type;
+  }
+
+  bool is_integer_type(jtl::ptr<void> const type)
+  {
+    if(!type)
+    {
+      return false;
+    }
+    /* Cpp::IsIntegral includes bool, char, int, long, etc. but excludes pointers */
+    auto const non_ref{ Cpp::GetNonReferenceType(type) };
+    return Cpp::IsIntegral(non_ref) && !is_boolean_type(non_ref);
+  }
+
+  bool is_floating_type(jtl::ptr<void> const type)
+  {
+    if(!type)
+    {
+      return false;
+    }
+    /* Check for float and double types by comparing canonical types */
+    static jtl::ptr<void> const float_type{ Cpp::GetCanonicalType(Cpp::GetType("float")) };
+    static jtl::ptr<void> const double_type{ Cpp::GetCanonicalType(Cpp::GetType("double")) };
+    static jtl::ptr<void> const long_double_type{ Cpp::GetCanonicalType(
+      Cpp::GetType("long double")) };
+    auto const canon{ Cpp::GetCanonicalType(Cpp::GetNonReferenceType(type)) };
+    return canon == float_type || canon == double_type || canon == long_double_type;
+  }
+
+  bool is_numeric_type(jtl::ptr<void> const type)
+  {
+    return is_integer_type(type) || is_floating_type(type);
+  }
+
+  bool is_void_type(jtl::ptr<void> const type)
+  {
+    if(!type)
+    {
+      return false;
+    }
+    static jtl::ptr<void> const void_type{ Cpp::GetCanonicalType(Cpp::GetType("void")) };
+    return Cpp::GetCanonicalType(Cpp::GetNonReferenceType(type)) == void_type;
+  }
+
+  bool expr_is_cpp_bool(expression_ref const expr)
+  {
+    auto const type{ expression_type(expr) };
+    return is_boolean_type(type);
+  }
+
+  bool expr_is_cpp_numeric(expression_ref const expr)
+  {
+    auto const type{ expression_type(expr) };
+    return is_numeric_type(type);
+  }
+
+  bool expr_is_cpp_primitive(expression_ref const expr)
+  {
+    auto const type{ expression_type(expr) };
+    return is_primitive(type) && !is_any_object(type);
+  }
+
   /* TODO: Just put a type member function in expression_base and read it from there. */
   jtl::ptr<void> expression_type(expression_ref const expr)
   {

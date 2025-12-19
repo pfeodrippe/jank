@@ -37,7 +37,7 @@
   - [x] defcomp
     - [x] could we use flecs (YES)
   - [x] would should be a map as well
-  - [ ] arena
+- [ ] arena
 - [ ] integrate raylib + flecs + imgui + jolt
   - [x] raylib + imgui + jolt
   - [x] + flecs

@@ -74,6 +74,18 @@ namespace jank::analyze::cpp_util
   bool is_nullptr(jtl::ptr<void> type);
   bool is_implicitly_convertible(jtl::ptr<void> from, jtl::ptr<void> to);
 
+  /* Type-specific predicates for optimization purposes */
+  bool is_boolean_type(jtl::ptr<void> type);
+  bool is_integer_type(jtl::ptr<void> type);
+  bool is_floating_type(jtl::ptr<void> type);
+  bool is_numeric_type(jtl::ptr<void> type);
+  bool is_void_type(jtl::ptr<void> type);
+
+  /* Expression type predicates */
+  bool expr_is_cpp_bool(expression_ref expr);
+  bool expr_is_cpp_numeric(expression_ref expr);
+  bool expr_is_cpp_primitive(expression_ref expr);
+
   jtl::ptr<void> untyped_object_ptr_type();
   jtl::ptr<void> untyped_object_ref_type();
 

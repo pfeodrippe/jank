@@ -2751,13 +2751,19 @@ namespace jank::analyze
     {
       return condition_expr.expect_err();
     }
-    /* TODO: Support native types if they're compatible with bool. */
-    condition_expr = apply_implicit_conversion(condition_expr.expect_ok(),
-                                               cpp_util::untyped_object_ptr_type(),
-                                               macro_expansions);
-    if(condition_expr.is_err())
+    /* Optimization: Don't box C++ bool conditions - they can be used directly in if.
+     * This avoids the overhead of boxing and then calling truthy() on the boxed value. */
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+    if(!cpp_util::expr_is_cpp_bool(condition_expr.expect_ok()))
+#endif
     {
-      return condition_expr.expect_err();
+      condition_expr = apply_implicit_conversion(condition_expr.expect_ok(),
+                                                 cpp_util::untyped_object_ptr_type(),
+                                                 macro_expansions);
+      if(condition_expr.is_err())
+      {
+        return condition_expr.expect_err();
+      }
     }
 
     auto const then(o->data.rest().rest().first().unwrap());
@@ -3970,6 +3976,171 @@ namespace jank::analyze
                                                        std::move(packed_arg_exprs),
                                                        none));
     }
+
+    /* Optimization: Route clojure.core arithmetic/comparison operations on C++ numeric types
+     * directly through C++ operators instead of dynamic_call. This avoids boxing overhead. */
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+    auto const arith_var_deref(expr_dyn_cast<expr::var_deref>(source.data));
+    if(arith_var_deref)
+    {
+      auto const &ns_name{ arith_var_deref->var->n->name->name };
+      auto const &fn_name{ arith_var_deref->var->name->name };
+      if(ns_name == "clojure.core" && !arg_exprs.empty())
+      {
+        auto const op{ cpp_util::match_operator(fn_name) };
+        if(op.is_some())
+        {
+          auto const op_val{ op.unwrap() };
+          bool const is_arith_op{ op_val == Cpp::OP_Plus || op_val == Cpp::OP_Minus
+                                  || op_val == Cpp::OP_Star || op_val == Cpp::OP_Slash };
+          bool const is_cmp_op{ op_val == Cpp::OP_Greater || op_val == Cpp::OP_Less
+                                || op_val == Cpp::OP_GreaterEqual
+                                || op_val == Cpp::OP_LessEqual };
+
+          if((is_arith_op || is_cmp_op) && arg_exprs.size() >= 2)
+          {
+            /* Check if arguments can participate in C++ arithmetic.
+             * At least ONE argument must be a C++ numeric type (not just primitive literals).
+             * Primitive literals can be mixed with C++ types.
+             * We also look through cpp_cast with into_object policy to find underlying C++ types. */
+            auto const is_primitive_numeric_literal = [](expression_ref const &arg) -> bool {
+              if(arg->kind == expression_kind::primitive_literal)
+              {
+                auto const lit{ static_cast<expr::primitive_literal *>(arg.data) };
+                return lit->data->type == runtime::object_type::integer
+                       || lit->data->type == runtime::object_type::real;
+              }
+              return false;
+            };
+
+            /* Helper to get the underlying expression, looking through into_object casts */
+            auto const get_underlying_expr = [](expression_ref const &arg) -> expression_ref {
+              if(arg->kind == expression_kind::cpp_cast)
+              {
+                auto const cast{ static_cast<expr::cpp_cast *>(arg.data) };
+                if(cast->policy == conversion_policy::into_object)
+                {
+                  return cast->value_expr;
+                }
+              }
+              return arg;
+            };
+
+            bool has_cpp_numeric{ false };
+            bool all_compatible{ true };
+            native_vector<expression_ref> unboxed_args;
+            unboxed_args.reserve(arg_exprs.size());
+
+            for(auto const &arg : arg_exprs)
+            {
+              auto const underlying{ get_underlying_expr(arg) };
+              unboxed_args.push_back(underlying);
+
+              if(cpp_util::expr_is_cpp_numeric(underlying))
+              {
+                has_cpp_numeric = true;
+              }
+              else if(!is_primitive_numeric_literal(underlying))
+              {
+                all_compatible = false;
+                break;
+              }
+            }
+
+            /* Only optimize if we have at least one actual C++ type (not all literals) */
+            bool all_numeric{ all_compatible && has_cpp_numeric };
+
+            if(all_numeric)
+            {
+              /* Determine result type: comparison operators return bool, arithmetic preserves type */
+              jtl::ptr<void> result_type{};
+              if(is_cmp_op)
+              {
+                result_type = Cpp::GetType("bool");
+              }
+              else
+              {
+                /* Use the first C++ numeric type (we're guaranteed to have one) */
+                for(auto const &arg : unboxed_args)
+                {
+                  if(cpp_util::expr_is_cpp_numeric(arg))
+                  {
+                    result_type = cpp_util::expression_type(arg);
+                    break;
+                  }
+                }
+              }
+
+              /* For binary operators with more than 2 args (like (+ a b c)), chain them */
+              if(unboxed_args.size() == 2)
+              {
+                return jtl::make_ref<expr::cpp_builtin_operator_call>(
+                  position,
+                  current_frame,
+                  needs_ret_box,
+                  static_cast<int>(op_val),
+                  std::move(unboxed_args),
+                  result_type);
+              }
+              else
+              {
+                /* For multiple args, chain: (+ a b c) -> (a + b) + c */
+                expression_ref lhs{ unboxed_args[0] };
+                for(usize i{ 1 }; i < unboxed_args.size(); ++i)
+                {
+                  native_vector<expression_ref> pair_args;
+                  pair_args.push_back(lhs);
+                  pair_args.push_back(unboxed_args[i]);
+                  lhs = jtl::make_ref<expr::cpp_builtin_operator_call>(
+                    position,
+                    current_frame,
+                    false, /* intermediate results don't need boxing */
+                    static_cast<int>(op_val),
+                    std::move(pair_args),
+                    result_type);
+                }
+                /* The final result may need boxing */
+                lhs->needs_box = needs_ret_box;
+                return lhs;
+              }
+            }
+          }
+        }
+
+        /* Helper to get the underlying expression, looking through into_object casts */
+        auto const get_underlying_bool_expr = [](expression_ref const &arg) -> expression_ref {
+          if(arg->kind == expression_kind::cpp_cast)
+          {
+            auto const cast{ static_cast<expr::cpp_cast *>(arg.data) };
+            if(cast->policy == conversion_policy::into_object)
+            {
+              return cast->value_expr;
+            }
+          }
+          return arg;
+        };
+
+        /* Optimization: (not bool-expr) -> !bool-expr for C++ bools */
+        if(fn_name == "not" && arg_exprs.size() == 1)
+        {
+          auto const underlying{ get_underlying_bool_expr(arg_exprs[0]) };
+          if(cpp_util::expr_is_cpp_bool(underlying))
+          {
+            native_vector<expression_ref> not_args;
+            not_args.push_back(underlying);
+            return jtl::make_ref<expr::cpp_builtin_operator_call>(
+              position,
+              current_frame,
+              needs_ret_box,
+              static_cast<int>(Cpp::OP_Exclaim),
+              std::move(not_args),
+              Cpp::GetType("bool"));
+          }
+        }
+
+      }
+    }
+#endif
 
     auto const recursion_ref(expr_dyn_cast<expr::recursion_reference>(source.data));
     if(recursion_ref)

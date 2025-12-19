@@ -1348,9 +1348,20 @@ namespace jank::codegen
                     cpp_util::get_qualified_type_name(expr_type),
                     ret_tmp);
     auto const &condition_tmp(gen(expr->condition, fn_arity));
-    util::format_to(body_buffer,
-                    "if(jank::runtime::truthy({})) {",
-                    condition_tmp.unwrap().str(false));
+    /* Optimization: Skip truthy() for C++ bool conditions */
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+    if(analyze::cpp_util::expr_is_cpp_bool(expr->condition))
+    {
+      util::format_to(body_buffer, "if({}) ", condition_tmp.unwrap().str(false));
+      body_buffer.push_back('{');
+    }
+    else
+#endif
+    {
+      util::format_to(body_buffer, "if(jank::runtime::truthy({}))", condition_tmp.unwrap().str(false));
+      body_buffer.push_back(' ');
+      body_buffer.push_back('{');
+    }
     auto const &then_tmp(gen(expr->then, fn_arity));
     if(then_tmp.is_some())
     {
@@ -1634,7 +1645,9 @@ namespace jank::codegen
 
       auto const is_void{ Cpp::IsVoid(Cpp::GetFunctionReturnType(source->scope)) };
 
-      if(!is_void)
+      /* Optimization: For non-void functions in statement position, don't capture return value */
+      bool const skip_capture{ !is_void && expr->position == expression_position::statement };
+      if(!is_void && !skip_capture)
       {
         util::format_to(body_buffer, "auto &&{}{ ", ret_tmp);
       }
@@ -1663,12 +1676,24 @@ namespace jank::codegen
 
       util::format_to(body_buffer, ")");
 
-      if(!is_void)
+      if(!is_void && !skip_capture)
       {
         util::format_to(body_buffer, "};");
       }
+      else if(skip_capture)
+      {
+        /* Non-void in statement position: call without capturing, return none */
+        util::format_to(body_buffer, ";");
+        return none;
+      }
       else
       {
+        /* Optimization: For void functions in statement position, just emit the call */
+        if(expr->position == expression_position::statement)
+        {
+          util::format_to(body_buffer, ";");
+          return none;
+        }
         /* For void-returning functions, call the function first, then set return temp to nil. */
         util::format_to(body_buffer,
                         ";jank::runtime::object_ref const {}{ jank::runtime::jank_nil };",
@@ -1698,7 +1723,9 @@ namespace jank::codegen
 
       auto const is_void{ Cpp::IsVoid(expr->type) };
 
-      if(!is_void)
+      /* Optimization: For non-void functions in statement position, don't capture return value */
+      bool const skip_capture2{ !is_void && expr->position == expression_position::statement };
+      if(!is_void && !skip_capture2)
       {
         util::format_to(body_buffer, "auto &&{}{ ", ret_tmp);
       }
@@ -1718,12 +1745,24 @@ namespace jank::codegen
 
       util::format_to(body_buffer, ")");
 
-      if(!is_void)
+      if(!is_void && !skip_capture2)
       {
         util::format_to(body_buffer, "};");
       }
+      else if(skip_capture2)
+      {
+        /* Non-void in statement position: call without capturing, return none */
+        util::format_to(body_buffer, ";");
+        return none;
+      }
       else
       {
+        /* Optimization: For void functions in statement position, just emit the call */
+        if(expr->position == expression_position::statement)
+        {
+          util::format_to(body_buffer, ";");
+          return none;
+        }
         /* For void-returning functions, call the function first, then set return temp to nil. */
         util::format_to(body_buffer,
                         ";jank::runtime::object_ref const {}{ jank::runtime::jank_nil };",
@@ -1744,6 +1783,53 @@ namespace jank::codegen
                                      analyze::expr::function_arity const &arity)
   {
     auto ret_tmp(runtime::munge(__rt_ctx->unique_namespaced_string("cpp_ctor")));
+
+    /* Optimization: Constant folding for primitive type constructors with literal arguments.
+     * (cpp/float. 1.0) -> float ret{ 1.0f }; instead of convert<float>::from_object(...)
+     * Only applies when the literal type matches the target type (int->int, float->float). */
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+    if(expr->arg_exprs.size() == 1 && cpp_util::is_primitive(expr->type))
+    {
+      auto const &arg_expr{ expr->arg_exprs[0] };
+      if(arg_expr->kind == analyze::expression_kind::primitive_literal)
+      {
+        auto const lit{ static_cast<analyze::expr::primitive_literal *>(arg_expr.data) };
+        bool emitted{ false };
+        /* Only fold integer literals into integer types */
+        if(lit->data->type == runtime::object_type::integer && cpp_util::is_integer_type(expr->type))
+        {
+          auto const i{ runtime::expect_object<runtime::obj::integer>(lit->data) };
+          auto const type_name{ cpp_util::get_qualified_type_name(expr->type) };
+          util::format_to(body_buffer, "{} {}", type_name, ret_tmp);
+          body_buffer.push_back('{');
+          util::format_to(body_buffer, " static_cast<{}>({})", type_name, i->data);
+          emitted = true;
+        }
+        /* Only fold real literals into floating types */
+        else if(lit->data->type == runtime::object_type::real && cpp_util::is_floating_type(expr->type))
+        {
+          auto const r{ runtime::expect_object<runtime::obj::real>(lit->data) };
+          auto const type_name{ cpp_util::get_qualified_type_name(expr->type) };
+          util::format_to(body_buffer, "{} {}", type_name, ret_tmp);
+          body_buffer.push_back('{');
+          util::format_to(body_buffer, " static_cast<{}>({})", type_name, r->data);
+          emitted = true;
+        }
+        if(emitted)
+        {
+          body_buffer.push_back(' ');
+          body_buffer.push_back('}');
+          body_buffer.push_back(';');
+          if(expr->position == expression_position::tail)
+          {
+            util::format_to(body_buffer, "return {};", ret_tmp);
+            return none;
+          }
+          return ret_tmp;
+        }
+      }
+    }
+#endif
 
     native_vector<handle> arg_tmps;
     arg_tmps.reserve(expr->arg_exprs.size());
@@ -1917,35 +2003,46 @@ namespace jank::codegen
   {
     auto ret_tmp(runtime::munge(__rt_ctx->unique_namespaced_string("cpp_operator")));
 
-    native_vector<handle> arg_tmps;
-    arg_tmps.reserve(expr->arg_exprs.size());
+    /* Helper to get the string representation of an operand.
+     * For primitive literals, emit the raw value; for other exprs, generate normally. */
+    auto const get_operand_str = [&](expression_ref const &arg_expr) -> jtl::immutable_string {
+      if(arg_expr->kind == analyze::expression_kind::primitive_literal)
+      {
+        auto const lit{ static_cast<analyze::expr::primitive_literal *>(arg_expr.data) };
+        if(lit->data->type == runtime::object_type::integer)
+        {
+          auto const i{ runtime::expect_object<runtime::obj::integer>(lit->data) };
+          return util::format("{}LL", i->data);
+        }
+        else if(lit->data->type == runtime::object_type::real)
+        {
+          auto const r{ runtime::expect_object<runtime::obj::real>(lit->data) };
+          return util::format("{}", r->data);
+        }
+      }
+      return gen(arg_expr, arity).unwrap().str(false);
+    };
+
+    native_vector<jtl::immutable_string> arg_strs;
+    arg_strs.reserve(expr->arg_exprs.size());
     for(auto const &arg_expr : expr->arg_exprs)
     {
-      arg_tmps.emplace_back(gen(arg_expr, arity).unwrap());
+      arg_strs.emplace_back(get_operand_str(arg_expr));
     }
 
     auto const op_name{ cpp_util::operator_name(static_cast<Cpp::Operator>(expr->op)).unwrap() };
 
     if(expr->arg_exprs.size() == 1)
     {
-      util::format_to(body_buffer, "auto &&{}( {}{} );", ret_tmp, op_name, arg_tmps[0].str(false));
+      util::format_to(body_buffer, "auto &&{}( {}{} );", ret_tmp, op_name, arg_strs[0]);
     }
     else if(op_name == "aget")
     {
-      util::format_to(body_buffer,
-                      "auto &&{}( {}[{}] );",
-                      ret_tmp,
-                      arg_tmps[0].str(false),
-                      arg_tmps[1].str(false));
+      util::format_to(body_buffer, "auto &&{}( {}[{}] );", ret_tmp, arg_strs[0], arg_strs[1]);
     }
     else
     {
-      util::format_to(body_buffer,
-                      "auto &&{}( {} {} {} );",
-                      ret_tmp,
-                      arg_tmps[0].str(false),
-                      op_name,
-                      arg_tmps[1].str(false));
+      util::format_to(body_buffer, "auto &&{}( {} {} {} );", ret_tmp, arg_strs[0], op_name, arg_strs[1]);
     }
 
     if(expr->position == expression_position::tail)
