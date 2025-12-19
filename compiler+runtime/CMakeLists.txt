@@ -559,6 +559,7 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/core/integer_cache.cpp
   src/cpp/jank/runtime/core/real_cache.cpp
   src/cpp/jank/runtime/core/arena.cpp
+  src/cpp/jank/runtime/core/debug_allocator.cpp
   src/cpp/jank/runtime/core/optimization.cpp
   src/cpp/jank/runtime/core/math.cpp
   src/cpp/jank/runtime/core/meta.cpp
@@ -785,6 +786,7 @@ else()
     src/cpp/clojure/core_native.cpp
     src/cpp/clojure/string_native.cpp
     src/cpp/jank/arena_native.cpp
+    src/cpp/jank/debug_allocator_native.cpp
   )
 endif()
 

@@ -22,6 +22,7 @@
 #include <clojure/core_native.hpp>
 #include <jank/compiler_native.hpp>
 #include <jank/arena_native.hpp>
+#include <jank/debug_allocator_native.hpp>
 
 /* NOLINTNEXTLINE(bugprone-exception-escape): println can throw. */
 int main(int const argc, char const **argv)
@@ -35,6 +36,7 @@ try
     jank_load_clojure_core_native();
     jank_load_jank_compiler_native();
     jank_load_jank_arena_native();
+    jank_load_jank_debug_allocator_native();
     /* We're loading from source always due to a bug in how we generate symbols which is
      * leading to duplicate symbols being generated. */
     jank::runtime::__rt_ctx->load_module("/clojure.core", jank::runtime::module::origin::latest)
