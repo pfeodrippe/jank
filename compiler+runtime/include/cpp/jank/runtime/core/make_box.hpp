@@ -9,6 +9,7 @@
 #include <jank/runtime/obj/persistent_string.hpp>
 #include <jank/runtime/obj/character.hpp>
 #include <jank/runtime/obj/big_decimal.hpp>
+#include <jank/runtime/core/integer_cache.hpp>
 
 namespace jank::runtime
 {
@@ -28,13 +29,13 @@ namespace jank::runtime
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline auto make_box(int const i)
   {
-    return make_box<obj::integer>(static_cast<i64>(i));
+    return integer_cache::get(static_cast<i64>(i));
   }
 
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline auto make_box(i64 const i)
   {
-    return make_box<obj::integer>(i);
+    return integer_cache::get(i);
   }
 
 #ifndef JANK_TARGET_EMSCRIPTEN
@@ -109,7 +110,7 @@ namespace jank::runtime
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline auto make_box(T const d)
   {
-    return make_box<obj::integer>(d);
+    return integer_cache::get(static_cast<i64>(d));
   }
 
   template <typename T>

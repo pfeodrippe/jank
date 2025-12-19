@@ -556,6 +556,7 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/core/seq.cpp
   src/cpp/jank/runtime/core/truthy.cpp
   src/cpp/jank/runtime/core/munge.cpp
+  src/cpp/jank/runtime/core/integer_cache.cpp
   src/cpp/jank/runtime/core/math.cpp
   src/cpp/jank/runtime/core/meta.cpp
   src/cpp/jank/runtime/module/loader.cpp
@@ -1138,6 +1139,8 @@ if(jank_test)
     test/cpp/jank/analyze/box.cpp
     test/cpp/jank/runtime/behavior/callable.cpp
     test/cpp/jank/runtime/core/seq.cpp
+    test/cpp/jank/runtime/core/integer_cache.cpp
+    test/cpp/jank/runtime/core/integer_cache_benchmark.cpp
     test/cpp/jank/runtime/detail/native_persistent_list.cpp
     test/cpp/jank/runtime/obj/big_integer.cpp
     test/cpp/jank/runtime/obj/big_decimal.cpp

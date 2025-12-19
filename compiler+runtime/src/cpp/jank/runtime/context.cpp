@@ -16,6 +16,7 @@
 #include <jank/read/parse.hpp>
 #include <jank/read/source.hpp>
 #include <jank/runtime/context.hpp>
+#include <jank/runtime/core/integer_cache.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/munge.hpp>
@@ -56,6 +57,11 @@ namespace jank::runtime
     , jit_prc{ binary_version }
 #endif
   {
+    /* Initialize the integer cache before any make_box calls.
+     * This pre-allocates boxed integers in range [-128, 1024] to avoid
+     * allocating new objects for commonly used values like loop counters. */
+    integer_cache::initialize();
+
     intern_ns(make_box<obj::symbol>("cpp"));
     auto const core(intern_ns(make_box<obj::symbol>("clojure.core")));
 
