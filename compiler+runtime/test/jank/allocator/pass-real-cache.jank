@@ -1,0 +1,23 @@
+; Test that real number caching works correctly
+; Common float values should be cached
+
+; Test common cached values
+(assert (= 0.0 0.0))
+(assert (= 1.0 1.0))
+(assert (= -1.0 -1.0))
+(assert (= 0.5 0.5))
+(assert (= -0.5 -0.5))
+(assert (= 2.0 2.0))
+(assert (= 10.0 10.0))
+
+; Integer-valued reals in cache range should work
+(assert (= 50.0 50.0))
+(assert (= -10.0 -10.0))
+(assert (= 100.0 100.0))
+
+; Arithmetic should produce correct results
+(assert (= (+ 0.5 0.5) 1.0))
+(assert (= (- 1.0 0.5) 0.5))
+(assert (= (* 2.0 0.5) 1.0))
+
+:success

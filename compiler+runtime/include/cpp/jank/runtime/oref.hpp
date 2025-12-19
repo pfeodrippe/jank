@@ -11,6 +11,15 @@
 
 namespace jank::runtime
 {
+  /* Forward declaration for arena allocator support.
+   * The actual arena type is defined in core/arena.hpp. */
+  struct arena;
+  extern thread_local arena *current_arena;
+
+  /* Try to allocate from the current arena if one is active.
+   * Returns nullptr if no arena is active. Defined in core/arena.cpp. */
+  void *try_arena_alloc(usize size, usize alignment);
+
   namespace obj
   {
     struct nil;
@@ -412,20 +421,39 @@ namespace jank::runtime
   {
     static_assert(sizeof(jtl::ref<T>) == sizeof(T *));
     T *ret{};
+
     if constexpr(requires { T::pointer_free; })
     {
       if constexpr(T::pointer_free)
       {
+        /* pointer_free types (integers, reals, etc.) use caching and
+         * PointerFreeGC - don't allocate from arena to preserve cache semantics. */
         ret = new(PointerFreeGC) T{ std::forward<Args>(args)... };
+      }
+      else
+      {
+        /* Try arena allocation first for non-pointer_free types */
+        if(auto *arena_mem = try_arena_alloc(sizeof(T), alignof(T)))
+        {
+          ret = new(arena_mem) T{ std::forward<Args>(args)... };
+        }
+        else
+        {
+          ret = new(GC) T{ std::forward<Args>(args)... };
+        }
+      }
+    }
+    else
+    {
+      /* Try arena allocation first for types without pointer_free trait */
+      if(auto *arena_mem = try_arena_alloc(sizeof(T), alignof(T)))
+      {
+        ret = new(arena_mem) T{ std::forward<Args>(args)... };
       }
       else
       {
         ret = new(GC) T{ std::forward<Args>(args)... };
       }
-    }
-    else
-    {
-      ret = new(GC) T{ std::forward<Args>(args)... };
     }
 
     if(!ret)
@@ -448,21 +476,40 @@ namespace jank::runtime
   oref<T> make_box(Args &&...args)
   {
     static_assert(sizeof(oref<T>) == sizeof(T *));
-    oref<T> ret;
+    T *ret{};
+
     if constexpr(requires { T::pointer_free; })
     {
       if constexpr(T::pointer_free)
       {
+        /* pointer_free types (integers, reals, etc.) use caching and
+         * PointerFreeGC - don't allocate from arena to preserve cache semantics. */
         ret = new(PointerFreeGC) T{ std::forward<Args>(args)... };
+      }
+      else
+      {
+        /* Try arena allocation first for non-pointer_free types */
+        if(auto *arena_mem = try_arena_alloc(sizeof(T), alignof(T)))
+        {
+          ret = new(arena_mem) T{ std::forward<Args>(args)... };
+        }
+        else
+        {
+          ret = new(GC) T{ std::forward<Args>(args)... };
+        }
+      }
+    }
+    else
+    {
+      /* Try arena allocation first for types without pointer_free trait */
+      if(auto *arena_mem = try_arena_alloc(sizeof(T), alignof(T)))
+      {
+        ret = new(arena_mem) T{ std::forward<Args>(args)... };
       }
       else
       {
         ret = new(GC) T{ std::forward<Args>(args)... };
       }
-    }
-    else
-    {
-      ret = new(GC) T{ std::forward<Args>(args)... };
     }
 
     return ret;

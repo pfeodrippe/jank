@@ -10,6 +10,7 @@
 #include <jank/runtime/obj/character.hpp>
 #include <jank/runtime/obj/big_decimal.hpp>
 #include <jank/runtime/core/integer_cache.hpp>
+#include <jank/runtime/core/real_cache.hpp>
 
 namespace jank::runtime
 {
@@ -69,7 +70,7 @@ namespace jank::runtime
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline obj::real_ref make_box(f64 const r)
   {
-    return make_box<obj::real>(r);
+    return real_cache::get(r);
   }
 
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
@@ -102,7 +103,7 @@ namespace jank::runtime
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline auto make_box(T const d)
   {
-    return make_box<obj::real>(d);
+    return real_cache::get(static_cast<f64>(d));
   }
 
   template <typename T>

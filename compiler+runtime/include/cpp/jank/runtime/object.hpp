@@ -75,6 +75,7 @@ namespace jank::runtime
     volatile_,
     reduced,
     delay,
+    arena,
     ns,
 
     var,
@@ -214,6 +215,8 @@ namespace jank::runtime
         return "reduced";
       case object_type::delay:
         return "delay";
+      case object_type::arena:
+        return "arena";
       case object_type::ns:
         return "ns";
 

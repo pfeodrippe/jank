@@ -557,6 +557,9 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/core/truthy.cpp
   src/cpp/jank/runtime/core/munge.cpp
   src/cpp/jank/runtime/core/integer_cache.cpp
+  src/cpp/jank/runtime/core/real_cache.cpp
+  src/cpp/jank/runtime/core/arena.cpp
+  src/cpp/jank/runtime/core/optimization.cpp
   src/cpp/jank/runtime/core/math.cpp
   src/cpp/jank/runtime/core/meta.cpp
   src/cpp/jank/runtime/module/loader.cpp
@@ -617,6 +620,7 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/obj/native_array_sequence.cpp
   src/cpp/jank/runtime/obj/native_vector_sequence.cpp
   src/cpp/jank/runtime/obj/atom.cpp
+  src/cpp/jank/runtime/obj/arena.cpp
   src/cpp/jank/runtime/obj/volatile.cpp
   src/cpp/jank/runtime/obj/delay.cpp
   src/cpp/jank/runtime/obj/reduced.cpp
@@ -780,6 +784,7 @@ else()
     src/cpp/jank/c_api.cpp
     src/cpp/clojure/core_native.cpp
     src/cpp/clojure/string_native.cpp
+    src/cpp/jank/arena_native.cpp
   )
 endif()
 
@@ -1141,6 +1146,9 @@ if(jank_test)
     test/cpp/jank/runtime/core/seq.cpp
     test/cpp/jank/runtime/core/integer_cache.cpp
     test/cpp/jank/runtime/core/integer_cache_benchmark.cpp
+    test/cpp/jank/runtime/core/real_cache.cpp
+    test/cpp/jank/runtime/core/arena.cpp
+    test/cpp/jank/runtime/core/optimization.cpp
     test/cpp/jank/runtime/detail/native_persistent_list.cpp
     test/cpp/jank/runtime/obj/big_integer.cpp
     test/cpp/jank/runtime/obj/big_decimal.cpp
