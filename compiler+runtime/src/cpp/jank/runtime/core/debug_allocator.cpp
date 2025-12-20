@@ -65,7 +65,8 @@ namespace jank::runtime
     if(it == allocations_.end())
     {
       /* Unknown pointer - might be from a different allocator */
-      util::println("debug_allocator: WARNING - freeing unknown pointer {}", reinterpret_cast<uintptr_t>(ptr));
+      util::println("debug_allocator: WARNING - freeing unknown pointer {}",
+                    reinterpret_cast<uintptr_t>(ptr));
       return;
     }
 

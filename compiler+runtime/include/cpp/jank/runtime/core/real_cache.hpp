@@ -31,16 +31,16 @@ namespace jank::runtime
     static obj::real_ref int_cache[int_cache_size];
 
     /* Special cached values */
-    static obj::real_ref zero;       /* 0.0 */
-    static obj::real_ref one;        /* 1.0 */
-    static obj::real_ref neg_one;    /* -1.0 */
-    static obj::real_ref half;       /* 0.5 */
-    static obj::real_ref neg_half;   /* -0.5 */
-    static obj::real_ref two;        /* 2.0 */
-    static obj::real_ref ten;        /* 10.0 */
-    static obj::real_ref hundred;    /* 100.0 */
-    static obj::real_ref pi;         /* 3.14159... */
-    static obj::real_ref e;          /* 2.71828... */
+    static obj::real_ref zero; /* 0.0 */
+    static obj::real_ref one; /* 1.0 */
+    static obj::real_ref neg_one; /* -1.0 */
+    static obj::real_ref half; /* 0.5 */
+    static obj::real_ref neg_half; /* -0.5 */
+    static obj::real_ref two; /* 2.0 */
+    static obj::real_ref ten; /* 10.0 */
+    static obj::real_ref hundred; /* 100.0 */
+    static obj::real_ref pi; /* 3.14159... */
+    static obj::real_ref e; /* 2.71828... */
 
     /* Whether the cache has been initialized. */
     static bool initialized;
@@ -57,8 +57,7 @@ namespace jank::runtime
     static constexpr bool might_be_cached(f64 value) noexcept
     {
       /* Only integer-valued reals in range might be cached */
-      return value >= static_cast<f64>(int_cache_low)
-             && value <= static_cast<f64>(int_cache_high);
+      return value >= static_cast<f64>(int_cache_low) && value <= static_cast<f64>(int_cache_high);
     }
 
   private:

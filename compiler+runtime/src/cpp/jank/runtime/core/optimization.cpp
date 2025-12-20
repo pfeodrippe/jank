@@ -19,8 +19,8 @@ namespace jank::runtime
       return default_value;
     }
     /* Accept 0, false, no, off as false; everything else as true */
-    if(std::strcmp(val, "0") == 0 || std::strcmp(val, "false") == 0
-       || std::strcmp(val, "no") == 0 || std::strcmp(val, "off") == 0)
+    if(std::strcmp(val, "0") == 0 || std::strcmp(val, "false") == 0 || std::strcmp(val, "no") == 0
+       || std::strcmp(val, "off") == 0)
     {
       return false;
     }

@@ -44,7 +44,8 @@ namespace jank::runtime
   void *arena::chunk::try_alloc(usize const size, usize const alignment)
   {
     /* Align current pointer */
-    auto const aligned_addr = (reinterpret_cast<uintptr_t>(current) + alignment - 1) & ~(alignment - 1);
+    auto const aligned_addr
+      = (reinterpret_cast<uintptr_t>(current) + alignment - 1) & ~(alignment - 1);
     auto *aligned = reinterpret_cast<char *>(aligned_addr);
 
     /* Check if allocation fits */

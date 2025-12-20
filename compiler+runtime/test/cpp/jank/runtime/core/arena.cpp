@@ -24,7 +24,7 @@ namespace jank::runtime
       CHECK(p1 != p2);
 
       auto stats{ a.get_arena_stats() };
-      CHECK(stats.total_used == 192);  /* 64 + 128 */
+      CHECK(stats.total_used == 192); /* 64 + 128 */
       CHECK(stats.chunk_count >= 1);
     }
 
@@ -92,7 +92,7 @@ namespace jank::runtime
       }
 
       auto stats{ a.get_arena_stats() };
-      CHECK(stats.chunk_count >= 5);  /* 5000 bytes needs at least 5 1KB chunks */
+      CHECK(stats.chunk_count >= 5); /* 5000 bytes needs at least 5 1KB chunks */
     }
 
     TEST_CASE("alloc_construct")
@@ -164,7 +164,9 @@ namespace jank::runtime
         last_ptr = a.alloc(alloc_size);
       }
       auto arena_end{ std::chrono::high_resolution_clock::now() };
-      auto arena_us{ std::chrono::duration_cast<std::chrono::microseconds>(arena_end - arena_start).count() };
+      auto arena_us{
+        std::chrono::duration_cast<std::chrono::microseconds>(arena_end - arena_start).count()
+      };
 
       /* Reset arena and benchmark again (to show reuse benefit) */
       a.reset();
@@ -174,14 +176,26 @@ namespace jank::runtime
         last_ptr = a.alloc(alloc_size);
       }
       auto arena_reuse_end{ std::chrono::high_resolution_clock::now() };
-      auto arena_reuse_us{ std::chrono::duration_cast<std::chrono::microseconds>(arena_reuse_end - arena_reuse_start).count() };
+      auto arena_reuse_us{ std::chrono::duration_cast<std::chrono::microseconds>(
+                             arena_reuse_end - arena_reuse_start)
+                             .count() };
 
       MESSAGE("=== Arena Benchmark (", iterations, " allocations of ", alloc_size, " bytes) ===");
-      MESSAGE("Arena (cold): ", arena_us, " us (", static_cast<double>(arena_us) / iterations * 1000, " ns/alloc)");
-      MESSAGE("Arena (warm/reused): ", arena_reuse_us, " us (", static_cast<double>(arena_reuse_us) / iterations * 1000, " ns/alloc)");
+      MESSAGE("Arena (cold): ",
+              arena_us,
+              " us (",
+              static_cast<double>(arena_us) / iterations * 1000,
+              " ns/alloc)");
+      MESSAGE("Arena (warm/reused): ",
+              arena_reuse_us,
+              " us (",
+              static_cast<double>(arena_reuse_us) / iterations * 1000,
+              " ns/alloc)");
       if(arena_us > 0 && arena_reuse_us > 0)
       {
-        MESSAGE("Warm/cold speedup: ", static_cast<double>(arena_us) / static_cast<double>(arena_reuse_us), "x");
+        MESSAGE("Warm/cold speedup: ",
+                static_cast<double>(arena_us) / static_cast<double>(arena_reuse_us),
+                "x");
       }
 
       /* Verify we got valid pointers */

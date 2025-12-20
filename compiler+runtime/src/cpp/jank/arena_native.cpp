@@ -239,7 +239,8 @@ namespace
     {
       return jank_false;
     }
-    return make_box(o->type == object_type::arena || o->type == object_type::native_pointer_wrapper);
+    return make_box(o->type == object_type::arena
+                    || o->type == object_type::native_pointer_wrapper);
   }
 
   /* Create a jank-defined allocator from user functions.
@@ -293,9 +294,9 @@ jank_object_ref jank_load_jank_arena_native()
   auto const intern_fn([=](jtl::immutable_string const &name, auto const fn) {
     ns->intern_var(name)->bind_root(
       make_box<obj::native_function_wrapper>(convert_function(fn))
-        ->with_meta(obj::persistent_hash_map::create_unique(std::make_pair(
-          __rt_ctx->intern_keyword("name").expect_ok(),
-          make_box(obj::symbol{ ns->to_string(), name }.to_string())))));
+        ->with_meta(obj::persistent_hash_map::create_unique(
+          std::make_pair(__rt_ctx->intern_keyword("name").expect_ok(),
+                         make_box(obj::symbol{ ns->to_string(), name }.to_string())))));
   });
 
   intern_fn("create", &create_arena);

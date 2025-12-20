@@ -372,6 +372,7 @@ namespace jank::nrepl_server::asio
         std::atexit(&shutdown_all_servers);
       }
     };
+
     static shutdown_handler_registrar const registrar_instance{};
   }
 

@@ -122,7 +122,8 @@ namespace jank::perf
 
     /* Phase 4: Evaluation */
     auto const eval_start{ high_resolution_clock::now() };
-    [[maybe_unused]] auto const ret{ evaluate::eval(expr) };
+    [[maybe_unused]]
+    auto const ret{ evaluate::eval(expr) };
     auto const eval_end{ high_resolution_clock::now() };
     result.eval_ns = duration_cast<nanoseconds>(eval_end - eval_start).count();
 
@@ -534,7 +535,9 @@ namespace jank::perf
           parsed_form = form.expect_ok().unwrap().ptr;
         }
         analyze::processor an_prc;
-        auto expr{ an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok() };
+        auto expr{
+          an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok()
+        };
 
         /* Now we manually break down the EVAL phase for function expressions.
          * We need to wrap the expression in a function to trigger JIT. */
@@ -564,7 +567,8 @@ namespace jank::perf
         auto const expr_str{ cg_prc.expression_str() + ".erase()" };
         clang::Value v;
         auto const jit_expr_start{ high_resolution_clock::now() };
-        auto res(__rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
+        auto res(
+          __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
         auto const jit_expr_end{ high_resolution_clock::now() };
         jit_expr_ns = duration_cast<nanoseconds>(jit_expr_end - jit_expr_start).count();
 
@@ -599,7 +603,8 @@ namespace jank::perf
       std::cout << "\n-- Fn with let: ((fn [x] (let [y (+ x 1)] (* x y))) 5) --\n";
       measure_eval_breakdown("((fn [x] (let [y (+ x 1)] (* x y))) 5)");
 
-      std::cout << "\n-- Larger fn body: ((fn [a b c] (let [sum (+ a b c)] (* sum sum))) 1 2 3) --\n";
+      std::cout
+        << "\n-- Larger fn body: ((fn [a b c] (let [sum (+ a b c)] (* sum sum))) 1 2 3) --\n";
       measure_eval_breakdown("((fn [a b c] (let [sum (+ a b c)] (* sum sum))) 1 2 3)");
 
       /* ========== DEFN BENCHMARKS ========== */
@@ -608,7 +613,8 @@ namespace jank::perf
       std::cout << "\n-- Small defn: (defn add1 [x] (+ x 1)) --\n";
       measure_eval_breakdown("(defn add1 [x] (+ x 1))");
 
-      std::cout << "\n-- Medium defn with let: (defn calc [x y] (let [sum (+ x y)] (* sum 2))) --\n";
+      std::cout
+        << "\n-- Medium defn with let: (defn calc [x y] (let [sum (+ x y)] (* sum 2))) --\n";
       measure_eval_breakdown("(defn calc [x y] (let [sum (+ x y)] (* sum 2)))");
 
       std::cout << "\n-- Defn with if: (defn abs [x] (if (< x 0) (- x) x)) --\n";
@@ -779,8 +785,8 @@ namespace jank::perf
       constexpr int NUM_FUNCTIONS = 10;
 
       /* Generate unique namespace to avoid conflicts */
-      auto const test_ns = "test-cache-" + std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count() % 10000);
+      auto const test_ns = "test-cache-"
+        + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000);
 
       /* Create namespace */
       __rt_ctx->eval_string(("(ns " + test_ns + ")").c_str());
@@ -793,12 +799,14 @@ namespace jank::perf
       __rt_ctx->jit_cache.clear();
 
       /* Step 1: Initial definition of N functions (cache enabled) */
-      std::cout << "-- Step 1: Initial definition of " << NUM_FUNCTIONS << " functions (cache enabled) --\n";
+      std::cout << "-- Step 1: Initial definition of " << NUM_FUNCTIONS
+                << " functions (cache enabled) --\n";
       auto const initial_start{ high_resolution_clock::now() };
 
       for(int i = 0; i < NUM_FUNCTIONS; i++)
       {
-        std::string code = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
+        std::string code
+          = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
         __rt_ctx->eval_string(code.c_str());
       }
 
@@ -818,18 +826,21 @@ namespace jank::perf
 
       for(int i = 0; i < NUM_FUNCTIONS; i++)
       {
-        std::string code = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
+        std::string code
+          = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
         __rt_ctx->eval_string(code.c_str());
       }
 
       auto const cache_enabled_end{ high_resolution_clock::now() };
-      auto const cache_enabled_time_ms = duration_cast<milliseconds>(cache_enabled_end - cache_enabled_start).count();
+      auto const cache_enabled_time_ms
+        = duration_cast<milliseconds>(cache_enabled_end - cache_enabled_start).count();
       auto const cache_stats_after_reload = __rt_ctx->jit_cache.get_stats();
 
       std::cout << "  Time: " << cache_enabled_time_ms << " ms\n";
       std::cout << "  Cache hits: " << cache_stats_after_reload.hits
                 << ", misses: " << cache_stats_after_reload.misses << "\n";
-      std::cout << "  New hits this round: " << (cache_stats_after_reload.hits - cache_stats_after_initial.hits) << "\n";
+      std::cout << "  New hits this round: "
+                << (cache_stats_after_reload.hits - cache_stats_after_initial.hits) << "\n";
 
       /* Step 3: Reload all functions with cache DISABLED (should be slow - full JIT) */
       std::cout << "\n-- Step 3: Reload WITHOUT cache (should be slow) --\n";
@@ -839,12 +850,14 @@ namespace jank::perf
 
       for(int i = 0; i < NUM_FUNCTIONS; i++)
       {
-        std::string code = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
+        std::string code
+          = "(defn cache-test-fn-" + std::to_string(i) + " [x] (+ x " + std::to_string(i) + "))";
         __rt_ctx->eval_string(code.c_str());
       }
 
       auto const cache_disabled_end{ high_resolution_clock::now() };
-      auto const cache_disabled_time_ms = duration_cast<milliseconds>(cache_disabled_end - cache_disabled_start).count();
+      auto const cache_disabled_time_ms
+        = duration_cast<milliseconds>(cache_disabled_end - cache_disabled_start).count();
 
       std::cout << "  Time: " << cache_disabled_time_ms << " ms\n";
 
@@ -855,7 +868,8 @@ namespace jank::perf
       double speedup = 0.0;
       if(cache_enabled_time_ms > 0)
       {
-        speedup = static_cast<double>(cache_disabled_time_ms) / static_cast<double>(cache_enabled_time_ms);
+        speedup = static_cast<double>(cache_disabled_time_ms)
+          / static_cast<double>(cache_enabled_time_ms);
       }
       else if(cache_disabled_time_ms > 0)
       {
@@ -867,11 +881,13 @@ namespace jank::perf
       std::cout << "| Scenario                | Time (ms) |\n";
       std::cout << "|-------------------------|-----------|\n";
       std::cout << "| Initial load            | " << std::setw(9) << initial_time_ms << " |\n";
-      std::cout << "| Reload WITH cache       | " << std::setw(9) << cache_enabled_time_ms << " |\n";
-      std::cout << "| Reload WITHOUT cache    | " << std::setw(9) << cache_disabled_time_ms << " |\n";
+      std::cout << "| Reload WITH cache       | " << std::setw(9) << cache_enabled_time_ms
+                << " |\n";
+      std::cout << "| Reload WITHOUT cache    | " << std::setw(9) << cache_disabled_time_ms
+                << " |\n";
       std::cout << "|-------------------------|-----------|\n";
-      std::cout << "| Speedup from cache      | " << std::setw(7) << std::fixed << std::setprecision(1)
-                << speedup << "x |\n";
+      std::cout << "| Speedup from cache      | " << std::setw(7) << std::fixed
+                << std::setprecision(1) << speedup << "x |\n";
 
       if(speedup >= 2.0)
       {

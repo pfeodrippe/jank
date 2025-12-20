@@ -52,7 +52,7 @@ namespace jank::runtime
   struct arena : allocator
   {
     static constexpr usize default_chunk_size{ 64 * 1024 }; /* 64KB chunks */
-    static constexpr usize max_small_alloc{ 4096 };         /* Max size for bump allocation */
+    static constexpr usize max_small_alloc{ 4096 }; /* Max size for bump allocation */
 
     arena();
     explicit arena(usize chunk_size);
@@ -90,11 +90,12 @@ namespace jank::runtime
     /* Extended arena-specific stats */
     struct arena_stats
     {
-      usize total_allocated{};   /* Total bytes allocated from system */
-      usize total_used{};        /* Total bytes given to users */
-      usize chunk_count{};       /* Number of chunks */
+      usize total_allocated{}; /* Total bytes allocated from system */
+      usize total_used{}; /* Total bytes given to users */
+      usize chunk_count{}; /* Number of chunks */
       usize large_alloc_count{}; /* Number of large allocations */
     };
+
     arena_stats get_arena_stats() const;
 
   private:

@@ -41,13 +41,13 @@ namespace jank::runtime
     /* Extended stats for debug allocator */
     struct debug_stats
     {
-      usize total_allocated{};     /* Total bytes allocated */
-      usize total_freed{};         /* Total bytes freed */
-      usize current_live{};        /* Currently live bytes */
-      usize allocation_count{};    /* Number of allocations */
-      usize free_count{};          /* Number of frees */
-      usize double_free_count{};   /* Number of double-free attempts detected */
-      usize leak_count{};          /* Number of leaks (updated on detect_leaks) */
+      usize total_allocated{}; /* Total bytes allocated */
+      usize total_freed{}; /* Total bytes freed */
+      usize current_live{}; /* Currently live bytes */
+      usize allocation_count{}; /* Number of allocations */
+      usize free_count{}; /* Number of frees */
+      usize double_free_count{}; /* Number of double-free attempts detected */
+      usize leak_count{}; /* Number of leaks (updated on detect_leaks) */
     };
 
     debug_allocator() = default;

@@ -27,12 +27,15 @@ namespace jank::runtime
       for(i64 i{ 0 }; i < iterations; ++i)
       {
         /* Use values that cycle through cache range */
-        auto const val{ i % (integer_cache::cache_high - integer_cache::cache_low + 1) + integer_cache::cache_low };
+        auto const val{ i % (integer_cache::cache_high - integer_cache::cache_low + 1)
+                        + integer_cache::cache_low };
         auto const boxed{ make_box(val) };
         sink = boxed->data;
       }
       auto const cached_end{ std::chrono::high_resolution_clock::now() };
-      auto const cached_us{ std::chrono::duration_cast<std::chrono::microseconds>(cached_end - cached_start).count() };
+      auto const cached_us{
+        std::chrono::duration_cast<std::chrono::microseconds>(cached_end - cached_start).count()
+      };
 
       /* Benchmark uncached allocations (values outside range) */
       auto const uncached_start{ std::chrono::high_resolution_clock::now() };
@@ -44,7 +47,9 @@ namespace jank::runtime
         sink = boxed->data;
       }
       auto const uncached_end{ std::chrono::high_resolution_clock::now() };
-      auto const uncached_us{ std::chrono::duration_cast<std::chrono::microseconds>(uncached_end - uncached_start).count() };
+      auto const uncached_us{
+        std::chrono::duration_cast<std::chrono::microseconds>(uncached_end - uncached_start).count()
+      };
 
       /* Report via MESSAGE */
       MESSAGE("=== Integer Cache Benchmark (1M iterations) ===");
@@ -52,7 +57,9 @@ namespace jank::runtime
       MESSAGE("Uncached (out of range): ", uncached_us, " us");
       if(uncached_us > 0)
       {
-        MESSAGE("Speedup: ", (static_cast<double>(uncached_us) / static_cast<double>(cached_us)), "x");
+        MESSAGE("Speedup: ",
+                (static_cast<double>(uncached_us) / static_cast<double>(cached_us)),
+                "x");
       }
 
       /* Cached should be significantly faster */
@@ -96,7 +103,9 @@ namespace jank::runtime
       }
 
       auto const end{ std::chrono::high_resolution_clock::now() };
-      auto const duration_us{ std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() };
+      auto const duration_us{
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()
+      };
 
       sink = sum_box->data;
 

@@ -49,9 +49,10 @@ namespace jank::util::cli
       ->default_str(make_default(opts.profiler_file));
     cli.add_flag("--perf", opts.perf_profiling_enabled, "Enable Linux perf event sampling.");
     cli.add_flag("--gc-incremental", opts.gc_incremental, "Enable incremental GC collection.");
-    cli.add_flag("!--no-jit-cache",
-                 opts.jit_cache_enabled,
-                 "Disable JIT cache (cache is enabled by default to skip redundant recompilation).");
+    cli.add_flag(
+      "!--no-jit-cache",
+      opts.jit_cache_enabled,
+      "Disable JIT cache (cache is enabled by default to skip redundant recompilation).");
     cli.add_flag("--debug", opts.debug, "Enable debug symbol generation for generated code.");
     cli.add_flag("--direct-call",
                  opts.direct_call,

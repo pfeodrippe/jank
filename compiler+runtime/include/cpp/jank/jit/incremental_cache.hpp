@@ -43,8 +43,7 @@ namespace jank::jit
 
     /* Get a cached var if the body hash matches.
      * Returns none if not in cache or hash doesn't match. */
-    jtl::option<runtime::var_ref>
-    get(runtime::obj::symbol_ref qualified_name, u64 body_hash) const
+    jtl::option<runtime::var_ref> get(runtime::obj::symbol_ref qualified_name, u64 body_hash) const
     {
       auto const it = defs.find(qualified_name);
       if(it == defs.end() || it->second.body_hash != body_hash)
@@ -99,6 +98,7 @@ namespace jank::jit
     {
       ++hits_;
     }
+
     void record_miss() const
     {
       ++misses_;

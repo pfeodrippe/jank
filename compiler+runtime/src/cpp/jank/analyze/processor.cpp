@@ -3994,8 +3994,7 @@ namespace jank::analyze
           bool const is_arith_op{ op_val == Cpp::OP_Plus || op_val == Cpp::OP_Minus
                                   || op_val == Cpp::OP_Star || op_val == Cpp::OP_Slash };
           bool const is_cmp_op{ op_val == Cpp::OP_Greater || op_val == Cpp::OP_Less
-                                || op_val == Cpp::OP_GreaterEqual
-                                || op_val == Cpp::OP_LessEqual };
+                                || op_val == Cpp::OP_GreaterEqual || op_val == Cpp::OP_LessEqual };
 
           if((is_arith_op || is_cmp_op) && arg_exprs.size() >= 2)
           {
@@ -4008,7 +4007,7 @@ namespace jank::analyze
               {
                 auto const lit{ static_cast<expr::primitive_literal *>(arg.data) };
                 return lit->data->type == runtime::object_type::integer
-                       || lit->data->type == runtime::object_type::real;
+                  || lit->data->type == runtime::object_type::real;
               }
               return false;
             };
@@ -4074,13 +4073,12 @@ namespace jank::analyze
               /* For binary operators with more than 2 args (like (+ a b c)), chain them */
               if(unboxed_args.size() == 2)
               {
-                return jtl::make_ref<expr::cpp_builtin_operator_call>(
-                  position,
-                  current_frame,
-                  needs_ret_box,
-                  static_cast<int>(op_val),
-                  std::move(unboxed_args),
-                  result_type);
+                return jtl::make_ref<expr::cpp_builtin_operator_call>(position,
+                                                                      current_frame,
+                                                                      needs_ret_box,
+                                                                      static_cast<int>(op_val),
+                                                                      std::move(unboxed_args),
+                                                                      result_type);
               }
               else
               {
@@ -4128,16 +4126,14 @@ namespace jank::analyze
           {
             native_vector<expression_ref> not_args;
             not_args.push_back(underlying);
-            return jtl::make_ref<expr::cpp_builtin_operator_call>(
-              position,
-              current_frame,
-              needs_ret_box,
-              static_cast<int>(Cpp::OP_Exclaim),
-              std::move(not_args),
-              Cpp::GetType("bool"));
+            return jtl::make_ref<expr::cpp_builtin_operator_call>(position,
+                                                                  current_frame,
+                                                                  needs_ret_box,
+                                                                  static_cast<int>(Cpp::OP_Exclaim),
+                                                                  std::move(not_args),
+                                                                  Cpp::GetType("bool"));
           }
         }
-
       }
     }
 #endif

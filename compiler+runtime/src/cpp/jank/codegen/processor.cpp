@@ -1358,7 +1358,9 @@ namespace jank::codegen
     else
 #endif
     {
-      util::format_to(body_buffer, "if(jank::runtime::truthy({}))", condition_tmp.unwrap().str(false));
+      util::format_to(body_buffer,
+                      "if(jank::runtime::truthy({}))",
+                      condition_tmp.unwrap().str(false));
       body_buffer.push_back(' ');
       body_buffer.push_back('{');
     }
@@ -1796,7 +1798,8 @@ namespace jank::codegen
         auto const lit{ static_cast<analyze::expr::primitive_literal *>(arg_expr.data) };
         bool emitted{ false };
         /* Only fold integer literals into integer types */
-        if(lit->data->type == runtime::object_type::integer && cpp_util::is_integer_type(expr->type))
+        if(lit->data->type == runtime::object_type::integer
+           && cpp_util::is_integer_type(expr->type))
         {
           auto const i{ runtime::expect_object<runtime::obj::integer>(lit->data) };
           auto const type_name{ cpp_util::get_qualified_type_name(expr->type) };
@@ -1806,7 +1809,8 @@ namespace jank::codegen
           emitted = true;
         }
         /* Only fold real literals into floating types */
-        else if(lit->data->type == runtime::object_type::real && cpp_util::is_floating_type(expr->type))
+        else if(lit->data->type == runtime::object_type::real
+                && cpp_util::is_floating_type(expr->type))
         {
           auto const r{ runtime::expect_object<runtime::obj::real>(lit->data) };
           auto const type_name{ cpp_util::get_qualified_type_name(expr->type) };
@@ -2042,7 +2046,12 @@ namespace jank::codegen
     }
     else
     {
-      util::format_to(body_buffer, "auto &&{}( {} {} {} );", ret_tmp, arg_strs[0], op_name, arg_strs[1]);
+      util::format_to(body_buffer,
+                      "auto &&{}( {} {} {} );",
+                      ret_tmp,
+                      arg_strs[0],
+                      op_name,
+                      arg_strs[1]);
     }
 
     if(expr->position == expression_position::tail)

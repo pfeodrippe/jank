@@ -139,7 +139,8 @@ namespace jank::analyze
     {
       u64 h{ static_cast<u64>(e->kind) };
       /* Hash the recursion reference's function context */
-      h = hash_combine(h, std::hash<std::string_view>{}(e->recursion_ref.fn_ctx->unique_name.data()));
+      h = hash_combine(h,
+                       std::hash<std::string_view>{}(e->recursion_ref.fn_ctx->unique_name.data()));
       h = hash_combine(h, e->arg_exprs.size());
       for(auto const &arg : e->arg_exprs)
       {
@@ -365,9 +366,7 @@ namespace jank::analyze
 
     u64 hash_impl(expression_ref expr)
     {
-      return visit_expr(
-        [](auto const typed_expr) -> u64 { return hash_impl(typed_expr); },
-        expr);
+      return visit_expr([](auto const typed_expr) -> u64 { return hash_impl(typed_expr); }, expr);
     }
   }
 

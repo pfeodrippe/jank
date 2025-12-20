@@ -959,7 +959,8 @@ namespace
         for(auto const &[alias_sym, alias_data] : aliases)
         {
           util::format_to(sb,
-                          R"(jank_register_native_alias("{}", "{}", "{}", "{}", "{}");)" "\n",
+                          R"(jank_register_native_alias("{}", "{}", "{}", "{}", "{}");)"
+                          "\n",
                           ns_ref->name->name,
                           alias_sym->name,
                           alias_data.header,

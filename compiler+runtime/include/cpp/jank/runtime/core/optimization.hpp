@@ -22,9 +22,9 @@ namespace jank::runtime
   struct optimization_config
   {
     /* Allocation optimizations */
-    bool integer_cache{ true };    /* P0: Cache small integers (-128 to 1024) */
-    bool real_cache{ true };       /* P2: Cache common float values */
-    bool arena_enabled{ true };    /* P4: Allow user-controlled arena allocation */
+    bool integer_cache{ true }; /* P0: Cache small integers (-128 to 1024) */
+    bool real_cache{ true }; /* P2: Cache common float values */
+    bool arena_enabled{ true }; /* P4: Allow user-controlled arena allocation */
 
     /* Compiler optimizations (future) */
     bool primitive_loops{ false }; /* P3: Unboxed loop variables */
@@ -32,7 +32,7 @@ namespace jank::runtime
 
     /* Debug/profiling options */
     bool allocation_stats{ false }; /* Track allocation counts per type */
-    bool gc_verbose{ false };       /* Verbose GC logging */
+    bool gc_verbose{ false }; /* Verbose GC logging */
 
     /* Get the global configuration instance. */
     static optimization_config &instance();
