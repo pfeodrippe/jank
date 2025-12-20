@@ -1150,6 +1150,7 @@ if(jank_test)
     test/cpp/jank/runtime/core/integer_cache_benchmark.cpp
     test/cpp/jank/runtime/core/real_cache.cpp
     test/cpp/jank/runtime/core/arena.cpp
+    test/cpp/jank/runtime/core/custom_allocator.cpp
     test/cpp/jank/runtime/core/optimization.cpp
     test/cpp/jank/runtime/detail/native_persistent_list.cpp
     test/cpp/jank/runtime/obj/big_integer.cpp

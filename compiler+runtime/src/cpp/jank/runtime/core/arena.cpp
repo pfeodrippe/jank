@@ -1,10 +1,14 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <gc/gc.h>
 #include <jank/runtime/core/arena.hpp>
 
 namespace jank::runtime
 {
+  /* Thread-local current allocator - definition (declared extern in arena.hpp) */
+  thread_local allocator *current_allocator{ nullptr };
+
   /* ----- chunk implementation ----- */
 
   arena::chunk::chunk(usize const size)
@@ -14,6 +18,13 @@ namespace jank::runtime
     start = static_cast<char *>(std::malloc(size));
     current = start;
     end = start + size;
+
+    /* Register this memory region with GC as a root.
+     * This tells GC that this region may contain pointers to GC-managed objects,
+     * so GC won't collect those objects while this arena chunk exists.
+     * This is essential because immer's structural sharing can mix arena-allocated
+     * nodes with GC-allocated nodes in the same data structure. */
+    GC_add_roots(start, end);
   }
 
   arena::chunk::~chunk()
@@ -21,6 +32,8 @@ namespace jank::runtime
     /* Free the chunk memory (we own it, not the GC) */
     if(start)
     {
+      /* Unregister from GC before freeing */
+      GC_remove_roots(start, end);
       std::free(start);
       start = nullptr;
       current = nullptr;
@@ -80,6 +93,8 @@ namespace jank::runtime
       large_alloc *next{ la->next };
       if(la->ptr)
       {
+        /* Unregister from GC before freeing */
+        GC_remove_roots(la->ptr, static_cast<char *>(la->ptr) + la->size);
         std::free(la->ptr);
       }
       delete la;
@@ -105,6 +120,9 @@ namespace jank::runtime
       void *ptr{ std::malloc(size) };
       if(ptr)
       {
+        /* Register large allocation with GC as a root */
+        GC_add_roots(ptr, static_cast<char *>(ptr) + size);
+
         auto *la = new large_alloc;
         la->ptr = ptr;
         la->size = size;
@@ -156,6 +174,8 @@ namespace jank::runtime
       large_alloc *next{ la->next };
       if(la->ptr)
       {
+        /* Unregister from GC before freeing */
+        GC_remove_roots(la->ptr, static_cast<char *>(la->ptr) + la->size);
         std::free(la->ptr);
       }
       delete la;
@@ -191,27 +211,12 @@ namespace jank::runtime
     current_allocator = previous_;
   }
 
-  /* ----- arena_scope implementation ----- */
-
-  arena_scope::arena_scope(arena *a)
-    : previous_{ current_arena }
+  /* ----- try_allocator_alloc implementation ----- */
+  void *try_allocator_alloc(usize size, usize alignment)
   {
-    current_arena = a;
-  }
-
-  arena_scope::~arena_scope()
-  {
-    current_arena = previous_;
-  }
-
-  /* ----- try_arena_alloc implementation ----- */
-  /* Non-inline version for use by oref.hpp (which forward-declares this).
-   * The inline version in arena.hpp is used when arena.hpp is included directly. */
-  void *try_arena_alloc(usize size, usize alignment)
-  {
-    if(current_arena) [[unlikely]]
+    if(current_allocator) [[unlikely]]
     {
-      return current_arena->alloc(size, alignment);
+      return current_allocator->alloc(size, alignment);
     }
     return nullptr;
   }

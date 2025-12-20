@@ -115,39 +115,39 @@ namespace jank::runtime
 
     TEST_CASE("arena_scope")
     {
-      CHECK(current_arena == nullptr);
+      CHECK(current_allocator == nullptr);
 
       arena a;
       {
         arena_scope scope(&a);
-        CHECK(current_arena == &a);
+        CHECK(current_allocator == &a);
 
         /* Nested scope */
         arena a2;
         {
           arena_scope scope2(&a2);
-          CHECK(current_arena == &a2);
+          CHECK(current_allocator == &a2);
         }
-        CHECK(current_arena == &a);
+        CHECK(current_allocator == &a);
       }
-      CHECK(current_arena == nullptr);
+      CHECK(current_allocator == nullptr);
     }
 
-    TEST_CASE("try_arena_alloc")
+    TEST_CASE("try_allocator_alloc")
     {
-      /* Without active arena */
-      CHECK(try_arena_alloc(100) == nullptr);
+      /* Without active allocator */
+      CHECK(try_allocator_alloc(100) == nullptr);
 
-      /* With active arena */
+      /* With active arena (via allocator interface) */
       arena a;
       {
         arena_scope scope(&a);
-        void *p{ try_arena_alloc(100) };
+        void *p{ try_allocator_alloc(100) };
         CHECK(p != nullptr);
       }
 
       /* After scope exits */
-      CHECK(try_arena_alloc(100) == nullptr);
+      CHECK(try_allocator_alloc(100) == nullptr);
     }
 
     TEST_CASE("benchmark: arena allocation")

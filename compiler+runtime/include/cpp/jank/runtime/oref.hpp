@@ -11,14 +11,14 @@
 
 namespace jank::runtime
 {
-  /* Forward declaration for arena allocator support.
-   * The actual arena type is defined in core/arena.hpp. */
-  struct arena;
-  extern thread_local arena *current_arena;
+  /* Forward declaration for allocator interface support.
+   * The actual allocator type is defined in core/arena.hpp. */
+  struct allocator;
+  extern thread_local allocator *current_allocator;
 
-  /* Try to allocate from the current arena if one is active.
-   * Returns nullptr if no arena is active. Defined in core/arena.cpp. */
-  void *try_arena_alloc(usize size, usize alignment);
+  /* Try to allocate from the current allocator if one is active.
+   * Returns nullptr if no allocator is active. Defined in core/arena.cpp. */
+  void *try_allocator_alloc(usize size, usize alignment);
 
   namespace obj
   {
@@ -432,10 +432,10 @@ namespace jank::runtime
       }
       else
       {
-        /* Try arena allocation first for non-pointer_free types */
-        if(auto *arena_mem = try_arena_alloc(sizeof(T), alignof(T)))
+        /* Try allocator interface first, then GC */
+        if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
         {
-          ret = new(arena_mem) T{ std::forward<Args>(args)... };
+          ret = new(alloc_mem) T{ std::forward<Args>(args)... };
         }
         else
         {
@@ -445,10 +445,10 @@ namespace jank::runtime
     }
     else
     {
-      /* Try arena allocation first for types without pointer_free trait */
-      if(auto *arena_mem = try_arena_alloc(sizeof(T), alignof(T)))
+      /* Try allocator interface first, then GC */
+      if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
       {
-        ret = new(arena_mem) T{ std::forward<Args>(args)... };
+        ret = new(alloc_mem) T{ std::forward<Args>(args)... };
       }
       else
       {
@@ -488,10 +488,10 @@ namespace jank::runtime
       }
       else
       {
-        /* Try arena allocation first for non-pointer_free types */
-        if(auto *arena_mem = try_arena_alloc(sizeof(T), alignof(T)))
+        /* Try allocator interface first, then GC */
+        if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
         {
-          ret = new(arena_mem) T{ std::forward<Args>(args)... };
+          ret = new(alloc_mem) T{ std::forward<Args>(args)... };
         }
         else
         {
@@ -501,10 +501,10 @@ namespace jank::runtime
     }
     else
     {
-      /* Try arena allocation first for types without pointer_free trait */
-      if(auto *arena_mem = try_arena_alloc(sizeof(T), alignof(T)))
+      /* Try allocator interface first, then GC */
+      if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
       {
-        ret = new(arena_mem) T{ std::forward<Args>(args)... };
+        ret = new(alloc_mem) T{ std::forward<Args>(args)... };
       }
       else
       {

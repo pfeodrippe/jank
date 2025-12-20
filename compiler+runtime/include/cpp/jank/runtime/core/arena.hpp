@@ -1,56 +1,10 @@
 #pragma once
 
 #include <jank/runtime/object.hpp>
+#include <jank/runtime/core/allocator_fwd.hpp>
 
 namespace jank::runtime
 {
-  /* Abstract allocator interface that users can implement.
-   *
-   * This allows complete user control over memory allocation strategy.
-   * Implementations can use:
-   * - Bump-pointer allocation (arena)
-   * - Pool allocation
-   * - Custom memory pools
-   * - Specialized allocators for specific use cases
-   *
-   * The allocator is set as thread-local and checked by make_box operations.
-   */
-  struct allocator
-  {
-    virtual ~allocator() = default;
-
-    /* Allocate memory with given size and alignment.
-     * Returns nullptr on failure. */
-    [[gnu::hot]]
-    virtual void *alloc(usize size, usize alignment) = 0;
-
-    /* Free previously allocated memory.
-     * For arena allocators, this is a no-op since arenas don't support individual frees.
-     * For pool allocators, this returns the memory to the pool. */
-    virtual void free(void * /*ptr*/, usize /*size*/, usize /*alignment*/)
-    {
-    }
-
-    /* Optional: reset the allocator (e.g., for arena reuse) */
-    virtual void reset()
-    {
-    }
-
-    /* Optional: get allocation statistics */
-    struct stats
-    {
-      usize total_allocated{};
-      usize total_used{};
-    };
-    virtual stats get_stats() const
-    {
-      return {};
-    }
-  };
-
-  /* Thread-local current allocator (nullptr = use GC) */
-  inline thread_local allocator *current_allocator{ nullptr };
-
   /* Scoped allocator usage - sets thread-local current allocator */
   struct allocator_scope
   {
@@ -68,16 +22,11 @@ namespace jank::runtime
   };
 
   /* Check if an allocator is active and allocate from it if so.
-   * Returns nullptr if no allocator is active (use GC instead). */
+   * Returns nullptr if no allocator is active (use GC instead).
+   * This is the ONLY allocation entry point - all allocators use this interface.
+   * Defined in arena.cpp (not inline) for JIT compatibility. */
   [[gnu::hot]]
-  inline void *try_custom_alloc(usize size, usize alignment = 16)
-  {
-    if(current_allocator) [[unlikely]]
-    {
-      return current_allocator->alloc(size, alignment);
-    }
-    return nullptr;
-  }
+  void *try_allocator_alloc(usize size, usize alignment = 16);
 
   /* ----- Arena implementation ----- */
 
@@ -181,27 +130,16 @@ namespace jank::runtime
     arena_stats stats_{};
   };
 
-  /* Scoped arena usage - sets thread-local current arena */
+  /* Scoped arena usage - convenience wrapper that uses allocator_scope.
+   * Since arena inherits from allocator, this just sets current_allocator. */
   struct arena_scope
   {
-    explicit arena_scope(arena *a);
-    ~arena_scope();
-
-    /* Non-copyable, non-movable */
-    arena_scope(arena_scope const &) = delete;
-    arena_scope(arena_scope &&) = delete;
-    arena_scope &operator=(arena_scope const &) = delete;
-    arena_scope &operator=(arena_scope &&) = delete;
+    explicit arena_scope(arena *a)
+      : scope_{ a }
+    {
+    }
 
   private:
-    arena *previous_;
+    allocator_scope scope_;
   };
-
-  /* Thread-local current arena (nullptr = use normal allocation) */
-  inline thread_local arena *current_arena{ nullptr };
-
-  /* Check if an arena is active and allocate from it if so.
-   * Returns nullptr if no arena is active. Defined in arena.cpp. */
-  [[gnu::hot]]
-  void *try_arena_alloc(usize size, usize alignment = 16);
 }

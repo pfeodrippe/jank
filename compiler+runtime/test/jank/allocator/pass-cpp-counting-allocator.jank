@@ -1,0 +1,298 @@
+; Test creating a custom C++ allocator using cpp/raw
+; Demonstrates that data structures (vectors, maps) now use the allocator
+; when entered, and allocations can be tracked.
+;
+; IMPORTANT: The allocator is active for ALL jank allocations while entered,
+; including runtime allocations. Be careful with reset!
+
+(cpp/raw "
+#include <cstdlib>
+#include <unordered_map>
+#include <jank/runtime/core/allocator_fwd.hpp>
+#include <jank/runtime/obj/native_pointer_wrapper.hpp>
+#include <jank/runtime/obj/persistent_hash_map.hpp>
+#include <jank/runtime/core/make_box.hpp>
+
+namespace test_counting_alloc {
+  using namespace jank;
+  using namespace jank::runtime;
+
+  /* Custom counting allocator - tracks allocation counts AND sizes */
+  struct counting_allocator : allocator
+  {
+    jtl::usize alloc_count_{};
+    jtl::usize free_count_{};
+    jtl::usize total_bytes_{};
+    jtl::usize current_bytes_{};
+    std::unordered_map<void*, jtl::usize> allocations_;
+
+    void *alloc(jtl::usize const size, jtl::usize const alignment) override
+    {
+      void *ptr{ nullptr };
+      if(posix_memalign(&ptr, alignment, size) != 0)
+      {
+        return nullptr;
+      }
+      allocations_[ptr] = size;
+      ++alloc_count_;
+      total_bytes_ += size;
+      current_bytes_ += size;
+      return ptr;
+    }
+
+    void free(void *ptr, jtl::usize size, jtl::usize /*alignment*/) override
+    {
+      if(!ptr) return;
+      auto it = allocations_.find(ptr);
+      if(it != allocations_.end())
+      {
+        jtl::usize freed_size = (it->second > 0) ? it->second : size;
+        current_bytes_ -= freed_size;
+        allocations_.erase(it);
+        ++free_count_;
+        std::free(ptr);
+      }
+    }
+
+    void reset() override
+    {
+      for(auto& [ptr, size] : allocations_)
+      {
+        if(ptr) std::free(ptr);
+      }
+      allocations_.clear();
+      alloc_count_ = 0;
+      free_count_ = 0;
+      total_bytes_ = 0;
+      current_bytes_ = 0;
+    }
+
+    allocator::stats get_stats() const override
+    {
+      return { total_bytes_, current_bytes_ };
+    }
+
+    ~counting_allocator() override
+    {
+      /* Note: We intentionally don't free here because immer nodes allocated
+       * through this allocator may still be referenced by the runtime.
+       * For a proper allocator, you would register memory with GC_add_roots()
+       * like the arena does. For this test allocator, we just leak. */
+      allocations_.clear();
+    }
+  };
+
+  inline object_ref create_counting_allocator()
+  {
+    auto *alloc = new counting_allocator();
+    return make_box<obj::native_pointer_wrapper>(alloc);
+  }
+
+  inline object_ref get_counts(object_ref const alloc_obj)
+  {
+    auto const wrapper{ try_object<obj::native_pointer_wrapper>(alloc_obj) };
+    auto *alloc = static_cast<counting_allocator*>(wrapper->data);
+    return obj::persistent_hash_map::create_unique(
+      std::make_pair(__rt_ctx->intern_keyword(\"alloc-count\").expect_ok(),
+                     make_box(static_cast<i64>(alloc->alloc_count_))),
+      std::make_pair(__rt_ctx->intern_keyword(\"free-count\").expect_ok(),
+                     make_box(static_cast<i64>(alloc->free_count_))),
+      std::make_pair(__rt_ctx->intern_keyword(\"current-bytes\").expect_ok(),
+                     make_box(static_cast<i64>(alloc->current_bytes_))),
+      std::make_pair(__rt_ctx->intern_keyword(\"total-bytes\").expect_ok(),
+                     make_box(static_cast<i64>(alloc->total_bytes_))));
+  }
+}
+")
+
+; Create the custom C++ allocator
+(def my-allocator (cpp/test_counting_alloc.create_counting_allocator))
+
+; Verify it's recognized as an allocator
+(assert (jank.arena-native/allocator? my-allocator) "Should be recognized as allocator")
+
+; =============================================================================
+; TEST 1: Raw memory allocation and freeing (basic test - no scope)
+; =============================================================================
+(println "=== Test 1: Raw memory allocation/freeing ===")
+
+(let* [ptr1 (jank.arena-native/alloc! my-allocator 64)
+       ptr2 (jank.arena-native/alloc! my-allocator 128)
+       ptr3 (jank.arena-native/alloc! my-allocator 256)
+       counts (cpp/test_counting_alloc.get_counts my-allocator)]
+
+  (println "After 3 allocations:")
+  (println "  Alloc count:" (:alloc-count counts))
+  (println "  Current bytes:" (:current-bytes counts))
+
+  (assert (= 3 (:alloc-count counts)) "Should have 3 allocations")
+  (assert (= 448 (:current-bytes counts)) "Should have 64+128+256=448 bytes")
+
+  ; Free first allocation
+  (jank.arena-native/free! my-allocator ptr1)
+  (let* [counts1 (cpp/test_counting_alloc.get_counts my-allocator)]
+    (println "\nAfter freeing 64-byte block:")
+    (println "  Free count:" (:free-count counts1))
+    (println "  Current bytes:" (:current-bytes counts1))
+    (assert (= 1 (:free-count counts1)) "Should have 1 free")
+    (assert (= 384 (:current-bytes counts1)) "Should have 384 bytes remaining")
+
+    ; Free second allocation
+    (jank.arena-native/free! my-allocator ptr2)
+    (let* [counts2 (cpp/test_counting_alloc.get_counts my-allocator)]
+      (println "\nAfter freeing 128-byte block:")
+      (println "  Free count:" (:free-count counts2))
+      (println "  Current bytes:" (:current-bytes counts2))
+      (assert (= 2 (:free-count counts2)) "Should have 2 frees")
+      (assert (= 256 (:current-bytes counts2)) "Should have 256 bytes remaining")
+
+      ; Free third allocation
+      (jank.arena-native/free! my-allocator ptr3)
+      (let* [counts3 (cpp/test_counting_alloc.get_counts my-allocator)]
+        (println "\nAfter freeing 256-byte block:")
+        (println "  Free count:" (:free-count counts3))
+        (println "  Current bytes:" (:current-bytes counts3))
+        (assert (= 3 (:free-count counts3)) "Should have 3 frees")
+        (assert (= 0 (:current-bytes counts3)) "Should have 0 bytes remaining")))))
+
+(println "\n=== Test 1 PASSED! ===")
+
+; =============================================================================
+; TEST 2: Data structures use the allocator when entered
+; This test verifies that immer-backed data structures now allocate through
+; our custom allocator when it's active.
+; =============================================================================
+(println "\n=== Test 2: Data structures use allocator ===")
+
+; Enter the allocator scope - now ALL allocations go through it
+(jank.arena-native/enter! my-allocator)
+
+(let* [before (cpp/test_counting_alloc.get_counts my-allocator)
+       before-allocs (:alloc-count before)
+       before-bytes (:current-bytes before)
+       _ (println "Before creating vector:")
+       _ (println "  Alloc count:" before-allocs)
+       _ (println "  Current bytes:" before-bytes)
+
+       ; Create a vector - this should allocate through our allocator!
+       v1 (conj [] 1 2 3 4 5)
+
+       after-v1 (cpp/test_counting_alloc.get_counts my-allocator)
+       after-v1-allocs (:alloc-count after-v1)
+       _ (println "\nAfter creating vector [1 2 3 4 5]:")
+       _ (println "  Alloc count:" after-v1-allocs)
+       _ (println "  Current bytes:" (:current-bytes after-v1))
+       _ (println "  New allocations:" (- after-v1-allocs before-allocs))
+
+       ; Verify allocations happened
+       _ (assert (> after-v1-allocs before-allocs)
+                 "Vector should have caused allocations")
+
+       ; Create another vector
+       v2 (conj [] :a :b :c)
+
+       after-v2 (cpp/test_counting_alloc.get_counts my-allocator)
+       after-v2-allocs (:alloc-count after-v2)
+       _ (println "\nAfter creating vector [:a :b :c]:")
+       _ (println "  Alloc count:" after-v2-allocs)
+       _ (println "  New allocations:" (- after-v2-allocs after-v1-allocs))
+
+       _ (assert (> after-v2-allocs after-v1-allocs)
+                 "Second vector should cause more allocations")
+
+       ; Create a hash map
+       m1 {:x 1 :y 2 :z 3}
+
+       after-m1 (cpp/test_counting_alloc.get_counts my-allocator)
+       after-m1-allocs (:alloc-count after-m1)
+       _ (println "\nAfter creating map {:x 1 :y 2 :z 3}:")
+       _ (println "  Alloc count:" after-m1-allocs)
+       _ (println "  New allocations:" (- after-m1-allocs after-v2-allocs))
+
+       _ (assert (> after-m1-allocs after-v2-allocs)
+                 "Map should cause more allocations")
+
+       ; Create a set
+       s1 #{:a :b :c}
+
+       after-s1 (cpp/test_counting_alloc.get_counts my-allocator)
+       after-s1-allocs (:alloc-count after-s1)
+       _ (println "\nAfter creating set #{:a :b :c}:")
+       _ (println "  Alloc count:" after-s1-allocs)
+       _ (println "  New allocations:" (- after-s1-allocs after-m1-allocs))
+
+       _ (assert (> after-s1-allocs after-m1-allocs)
+                 "Set should cause more allocations")
+
+       total-new-allocs (- after-s1-allocs before-allocs)
+       _ (println "\nTotal new allocations for data structures:" total-new-allocs)]
+
+  ; Exit allocator scope
+  (jank.arena-native/exit!)
+
+  (println "\n=== Test 2 PASSED! ==="))
+
+; =============================================================================
+; TEST 3: Verify allocations are tracked correctly with isolated scope
+; =============================================================================
+(println "\n=== Test 3: Isolated allocation tracking ===")
+
+; Create a fresh allocator for this test
+(def fresh-allocator (cpp/test_counting_alloc.create_counting_allocator))
+
+; Enter scope
+(jank.arena-native/enter! fresh-allocator)
+
+(let* [; Get baseline (should be 0 or minimal)
+       baseline (cpp/test_counting_alloc.get_counts fresh-allocator)
+       baseline-allocs (:alloc-count baseline)
+       _ (println "Fresh allocator baseline:" baseline-allocs "allocs")
+
+       ; Create one vector
+       _ (conj [] 1 2 3)
+       after-1 (:alloc-count (cpp/test_counting_alloc.get_counts fresh-allocator))
+       _ (println "After first vector:" after-1 "allocs")
+
+       ; Create another vector
+       _ (conj [] 4 5 6)
+       after-2 (:alloc-count (cpp/test_counting_alloc.get_counts fresh-allocator))
+       _ (println "After second vector:" after-2 "allocs")
+
+       ; Create a map
+       _ {:key "value"}
+       after-3 (:alloc-count (cpp/test_counting_alloc.get_counts fresh-allocator))
+       _ (println "After map:" after-3 "allocs")
+
+       ; Verify each operation increased allocations
+       _ (assert (> after-1 baseline-allocs) "First vector should allocate")
+       _ (assert (> after-2 after-1) "Second vector should allocate more")
+       _ (assert (> after-3 after-2) "Map should allocate more")]
+
+  (jank.arena-native/exit!))
+
+(println "\n=== Test 3 PASSED! ===")
+
+; =============================================================================
+; TEST 4: Generic stats interface (direct allocation, no scope)
+; =============================================================================
+(println "\n=== Test 4: Generic stats interface ===")
+
+; Create a fresh allocator for clean stats
+(def stats-allocator (cpp/test_counting_alloc.create_counting_allocator))
+
+(jank.arena-native/alloc! stats-allocator 512)
+(jank.arena-native/alloc! stats-allocator 512)
+
+(let* [stats (jank.arena-native/allocator-stats stats-allocator)]
+  (println "Stats from generic interface:")
+  (println "  Total allocated:" (:total-allocated stats))
+  (println "  Total used:" (:total-used stats))
+  (assert (= 1024 (:total-allocated stats)) "Should report 1024 bytes allocated")
+  (assert (= 1024 (:total-used stats)) "Should report 1024 bytes used"))
+
+(println "\n=== Test 4 PASSED! ===")
+
+(println "\n=== All tests PASSED! ===")
+(println "\nKey achievement: Vectors, maps, and sets now allocate through")
+(println "the custom allocator when one is active!")
+:success

@@ -11,9 +11,9 @@
 #include <gc/gc_allocator.h>
 
 // For WASM, we include immer memory policy components but avoid boost/folly
-#include <immer/heap/gc_heap.hpp>
 #include <immer/heap/heap_policy.hpp>
 #include <immer/memory_policy.hpp>
+#include <jank/runtime/core/jank_heap.hpp>
 
 #ifndef JANK_TARGET_EMSCRIPTEN
   #include <boost/multiprecision/cpp_int.hpp>
@@ -28,8 +28,9 @@ namespace jank
   template <typename T>
   using native_allocator = gc_allocator<T>;
 
-  // Same memory policy for both native and WASM - uses immer's gc_heap
-  using memory_policy = immer::memory_policy<immer::heap_policy<immer::gc_heap>,
+  // Same memory policy for both native and WASM - uses jank_heap which
+  // respects current_allocator when set, falling back to GC otherwise
+  using memory_policy = immer::memory_policy<immer::heap_policy<runtime::jank_heap>,
                                              immer::no_refcount_policy,
                                              immer::default_lock_policy,
                                              immer::gc_transience_policy,
