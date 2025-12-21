@@ -1252,8 +1252,8 @@ namespace jank::read::parse
     object_ref ret{};
 
     /* Specials, such as fn*, let*, try, etc. just get left alone. We can't qualify them more. */
-#ifdef JANK_TARGET_WASM
-    /* In WASM, an_prc doesn't exist, so we skip the is_special check */
+#if defined(JANK_TARGET_WASM) || defined(JANK_TARGET_IOS)
+    /* In WASM/iOS, an_prc doesn't exist, so we skip the is_special check */
     bool const is_special_form = false;
 #else
     bool const is_special_form = __rt_ctx->an_prc.is_special(form);

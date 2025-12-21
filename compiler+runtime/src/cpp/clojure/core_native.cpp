@@ -1,6 +1,6 @@
 #include <clojure/core_native.hpp>
 
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)
   #include <jank/nrepl_server/native_header_completion.hpp>
 #endif
 
@@ -321,7 +321,7 @@ namespace clojure::core_native
     return jank_nil;
   }
 
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)
   // These functions require JIT/nREPL and are not available in WASM builds
 
   object_ref compile(object_ref const path)
@@ -477,7 +477,7 @@ namespace clojure::core_native
                                          object_ref const scope,
                                          object_ref const include_directive)
   {
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)
     // In native jank, just call the regular function
     return register_native_header(current_ns, alias, header, scope, include_directive);
 #else
@@ -496,7 +496,7 @@ namespace clojure::core_native
                                         object_ref const local_sym,
                                         object_ref const member_sym)
   {
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)
     // In native jank, just call the regular function
     return register_native_refer(current_ns, alias, local_sym, member_sym);
 #else
@@ -783,7 +783,7 @@ extern "C" jank_object_ref jank_load_clojure_core_native()
   intern_fn("ns-unmap", &core_native::ns_unmap);
   intern_fn("refer", &core_native::refer);
   intern_fn("load-module", &core_native::load_module);
-#ifndef JANK_TARGET_WASM
+#if !defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)
   intern_fn("compile", &core_native::compile);
   intern_fn("cpp-eval-with-info", &core_native::cpp_eval_with_info);
   intern_fn("register-native-header", &core_native::register_native_header);

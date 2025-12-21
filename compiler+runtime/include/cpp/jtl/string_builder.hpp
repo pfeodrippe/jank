@@ -35,7 +35,7 @@ namespace jtl
     string_builder &operator()(long long d) &;
     string_builder &operator()(unsigned long d) &;
     string_builder &operator()(unsigned long long d) &;
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
     string_builder &operator()(jank::native_big_integer const &d) &;
 #endif
     string_builder &operator()(char d) &;
@@ -73,7 +73,7 @@ namespace jtl
     void push_back(long long d) &;
     void push_back(unsigned long d) &;
     void push_back(unsigned long long d) &;
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
     void push_back(jank::native_big_integer const &d) &;
 #endif
     void push_back(char d) &;

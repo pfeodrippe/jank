@@ -39,7 +39,7 @@ namespace jank::runtime
     return integer_cache::get(i);
   }
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   // Only needed when native_big_integer != i64 (boost::multiprecision)
   [[gnu::flatten, gnu::hot, gnu::visibility("default")]]
   inline auto make_box(native_big_integer const &i)

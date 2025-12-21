@@ -235,7 +235,7 @@ namespace jtl
     return *this;
   }
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   // Only needed when native_big_integer is a boost type with .str() method
   string_builder &string_builder::operator()(jank::native_big_integer const &d) &
   {
@@ -347,7 +347,7 @@ namespace jtl
     (*this)(d);
   }
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   void string_builder::push_back(jank::native_big_integer const &d) &
   {
     (*this)(d);

@@ -200,10 +200,10 @@ namespace jank::error
         return "Internal ahead-of-time compilation failure.";
 
       case kind::system_clang_executable_not_found:
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
         return "Unable to find a suitable Clang " JANK_CLANG_MAJOR_VERSION " binary.";
 #else
-        return "Unable to find a suitable Clang binary (N/A in WASM).";
+        return "Unable to find a suitable Clang binary (N/A in AOT mode).";
 #endif
       case kind::system_failure:
         return "System failure.";

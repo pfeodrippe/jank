@@ -8,7 +8,7 @@
 namespace jank::runtime
 {
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   // These operators are only needed for boost::multiprecision
   // For WASM where native_big_integer = long long, built-in operators work fine
   f64 operator+(native_big_integer const &l, f64 const &r)
@@ -111,13 +111,13 @@ namespace jank::runtime
   {
     return l > r || l == r;
   }
-#endif // JANK_TARGET_EMSCRIPTEN
+#endif // JANK_TARGET_EMSCRIPTEN/IOS
 
 }
 
 namespace jank::runtime::obj
 {
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   // Native build: use boost::multiprecision features
   big_integer::big_integer(native_big_integer const &val)
     : data(val)
@@ -369,7 +369,7 @@ namespace jank::runtime::obj
   {
     return static_cast<f64>(data);
   }
-#endif // JANK_TARGET_EMSCRIPTEN
+#endif // JANK_TARGET_EMSCRIPTEN/IOS
 
   // Common methods for both builds
   object_ref

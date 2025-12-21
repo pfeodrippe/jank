@@ -52,6 +52,7 @@ option(jank_analyze "Enable static analysis" OFF)
 option(jank_test "Enable jank's test suite" OFF)
 option(jank_unity_build "Optimize translation unit compilation for the number of cores" OFF)
 option(jank_target_wasm "Experimental wasm32-unknown-emscripten build" OFF)
+option(jank_target_ios "Experimental iOS AOT build (no JIT)" OFF)
 option(jank_debug_gc "Enable GC debug assertions" OFF)
 set(jank_sanitize "none" CACHE STRING "The type of Clang sanitization to use (or none)")
 set(jank_resource_dir
@@ -91,9 +92,18 @@ execute_process(
 
 set(jank_version "jank-${CMAKE_PROJECT_VERSION}-${jank_git_hash}")
 
+# Combine WASM and iOS as "AOT-only" targets (no JIT)
+set(jank_aot_only OFF)
+if(jank_target_wasm OR jank_target_ios)
+  set(jank_aot_only ON)
+endif()
+
 if(jank_target_wasm)
   # Don't force C++ standard for wasm - let emscripten handle it
   set(jank_cxx_standard "")
+elseif(jank_target_ios)
+  # iOS uses C++20 but via CMake property
+  set(jank_cxx_standard cxx_std_20)
 else()
   set(jank_cxx_standard cxx_std_20)
 endif()
@@ -108,6 +118,10 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
   set(jank_link_whole_start "-Wl,--whole-archive")
   set(jank_link_whole_end "-Wl,--no-whole-archive")
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
+  set(jank_link_whole_start "-Wl,-force_load")
+  set(jank_link_whole_end "")
+elseif(${CMAKE_SYSTEM_NAME} STREQUAL "iOS")
+  # iOS uses similar linking to Darwin
   set(jank_link_whole_start "-Wl,-force_load")
   set(jank_link_whole_end "")
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
@@ -172,6 +186,18 @@ if(jank_target_wasm)
   set(CMAKE_CXX_EXTENSIONS OFF)
   # Tell CMake to use only regular includes, not system includes for third-party libs
   set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
+elseif(jank_target_ios)
+  # iOS AOT build - similar to WASM but with iOS-specific flags
+  set(
+    jank_common_compiler_flags
+    -DIMMER_HAS_LIBGC=1 -DIMMER_TAGGED_NODE=0 -DHAVE_CXX14=1
+    -DFOLLY_HAVE_JEMALLOC=0 -DFOLLY_HAVE_TCMALLOC=0 -DFOLLY_ASSUME_NO_JEMALLOC=1 -DFOLLY_ASSUME_NO_TCMALLOC=1
+    -DJANK_TARGET_IOS
+  )
+  # Set C++20 via CMake property
+  set(CMAKE_CXX_STANDARD 20)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  set(CMAKE_CXX_EXTENSIONS OFF)
 else()
   set(
     jank_common_compiler_flags
@@ -212,7 +238,7 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(jank_enable_phase_2 ON)
 endif()
 
-if(jank_target_wasm)
+if(jank_aot_only)
   set(jank_enable_phase_2 OFF)
 endif()
 
@@ -232,7 +258,7 @@ set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTOR
 
 set(jank_jit_compiler_flags "")
 
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   # ---- Clang/LLVM ----
   include(cmake/llvm.cmake)
 
@@ -425,14 +451,14 @@ set(jank_lib_standalone_deps
   jankzip_lib
   bdwgc::gc
 )
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   list(APPEND jank_lib_standalone_deps Boost::multiprecision folly_lib bdwgc::gctba)
 endif()
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   list(APPEND jank_lib_standalone_deps nanobench_lib clangCppInterOp cpptrace::cpptrace ftxui::screen ftxui::dom)
 endif()
 
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   add_custom_command(
     DEPENDS ${jank_lib_standalone_deps}
     OUTPUT ${CMAKE_BINARY_DIR}/libjank-standalone-phase-1.a
@@ -467,13 +493,13 @@ set(BUILD_SHARED_LIBS OFF)
 
 include(FetchContent)
 include(cmake/dependency/bdwgc.cmake)
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   include(cmake/dependency/ftxui.cmake)
   include(cmake/dependency/cpptrace.cmake)
   include(cmake/dependency/cppinterop.cmake)
   include(cmake/dependency/boost-multiprecision.cmake)
 else()
-  message(STATUS "Skipping ftxui/cpptrace/boost-multiprecision dependencies for wasm build")
+  message(STATUS "Skipping ftxui/cpptrace/boost-multiprecision dependencies for AOT build (WASM/iOS)")
 
   # ---- CppInterOp WASM build ----
   # Use pre-built CppInterOp and LLVM WASM libraries (minimal build)
@@ -504,7 +530,7 @@ else()
   # ---- CppInterOp WASM build ----
 endif()
 
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 
   find_path(
@@ -631,7 +657,7 @@ set(jank_runtime_common_sources
 
 set(jank_lib_sources)
 
-# Add runtime sources for both WASM and native
+# Add runtime sources for WASM, iOS, and native
 if(jank_target_wasm)
   # WASM build: full runtime
   list(APPEND jank_lib_sources ${jank_runtime_common_sources})
@@ -712,6 +738,33 @@ if(jank_target_wasm)
   else()
     message(STATUS "WASM build without CppInterOp - eval not available")
   endif()
+elseif(jank_target_ios)
+  # iOS AOT build: runtime only, no JIT/LLVM dependencies
+  message(STATUS "Building iOS runtime library (AOT only, no JIT)")
+  list(APPEND jank_lib_sources ${jank_runtime_common_sources})
+  list(APPEND jank_lib_sources
+    # iOS uses WASM-style environment (no Clang headers)
+    src/cpp/jank/util/environment_wasm.cpp
+    src/cpp/jank/util/cli.cpp
+    # Core native functions
+    src/cpp/clojure/core_native.cpp
+    # String native functions for clojure.string
+    src/cpp/clojure/string_native.cpp
+    # iOS-specific stubs for JIT-only functionality
+    src/cpp/jank/wasm_native_stubs.cpp
+    # WASM/iOS stubs for missing compiler functions
+    src/cpp/jank/wasm_stub.cpp
+    # GC stub for missing gc_badalc.cc
+    src/cpp/jank/gc_wasm_stub.cpp
+    # iOS uses native perf (not WASM)
+    src/cpp/jank/runtime/perf.cpp
+    # iOS-specific C API (similar to WASM, no LLVM deps)
+    src/cpp/jank/c_api_wasm.cpp
+    # Codegen for WASM-style AOT (no LLVM IR)
+    src/cpp/jank/codegen/wasm_patch_processor.cpp
+    # Error handling for AOT
+    src/cpp/jank/error/aot.cpp
+  )
 else()
   # Native build: full runtime + AOT/codegen/nREPL
   list(APPEND jank_lib_sources ${jank_runtime_common_sources})
@@ -790,8 +843,8 @@ else()
   )
 endif()
 
-if(jank_target_wasm)
-  # WASM always uses the stub JIT processor - no native execution possible
+if(jank_aot_only)
+  # WASM/iOS always use the stub JIT processor - no native execution possible
   # CppInterOp in WASM is used for type resolution and analysis, not JIT
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor_stub_wasm.cpp)
   if(JANK_WASM_HAS_CPPINTEROP)
@@ -818,11 +871,11 @@ target_compile_options(jank_lib PUBLIC ${jank_common_compiler_flags} ${jank_aot_
 
 if(jank_target_wasm)
   # Use wasm-specific implementations without cpptrace
-  target_sources(jank_lib PRIVATE 
+  target_sources(jank_lib PRIVATE
     src/cpp/jtl/panic_wasm.cpp
     src/cpp/jtl/assert_wasm.cpp
   )
-  
+
   # Define JANK_TARGET_WASM for conditional compilation
   target_compile_definitions(jank_lib PUBLIC JANK_TARGET_WASM=1)
 
@@ -830,7 +883,7 @@ if(jank_target_wasm)
   if(JANK_WASM_HAS_CPPINTEROP)
     target_compile_definitions(jank_lib PUBLIC JANK_HAS_CPPINTEROP=1)
   endif()
-  
+
   # For WASM, only our project include is non-system
   target_include_directories(
     jank_lib
@@ -861,13 +914,42 @@ if(jank_target_wasm)
       ${WASM_LLVM_INCLUDE_DIRS}
     )
   endif()
+elseif(jank_target_ios)
+  # iOS: Use wasm-style implementations without cpptrace
+  target_sources(jank_lib PRIVATE
+    src/cpp/jtl/panic_wasm.cpp
+    src/cpp/jtl/assert_wasm.cpp
+  )
+
+  # Define JANK_TARGET_IOS for conditional compilation (already defined in compiler flags)
+
+  # For iOS, include directories similar to WASM but with nanobench
+  target_include_directories(
+    jank_lib
+    PUBLIC
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include/cpp>"
+  )
+  target_include_directories(
+    jank_lib
+    SYSTEM
+    PUBLIC
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/nanobench/include>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/immer>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bdwgc/include>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cli11/include>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/zip/src>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bpptree/include>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-preprocessor/include>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/stduuid/include/>"
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/folly>"
+  )
 else()
   # Use normal implementations with cpptrace for non-wasm
-  target_sources(jank_lib PRIVATE 
+  target_sources(jank_lib PRIVATE
     src/cpp/jtl/panic.cpp
     src/cpp/jtl/assert.cpp
   )
-  
+
   target_include_directories(
     jank_lib
     PUBLIC
@@ -900,11 +982,11 @@ target_link_libraries(
   jank_lib PRIVATE
   bdwgc::gc
 )
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   target_link_libraries(jank_lib PRIVATE Boost::multiprecision bdwgc::gctba)
 endif()
 
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   target_link_libraries(
     jank_lib PRIVATE
     nanobench_lib
@@ -913,7 +995,7 @@ if(NOT jank_target_wasm)
     ftxui::screen ftxui::dom
   )
 else()
-  # WASM builds with CppInterOp support
+  # AOT builds (WASM/iOS) with CppInterOp support
   if(JANK_WASM_HAS_CPPINTEROP)
     target_link_libraries(
       jank_lib PRIVATE
@@ -933,9 +1015,9 @@ jank_hook_llvm(jank_lib)
 get_target_property(jank_lib_includes_prop jank_lib INCLUDE_DIRECTORIES)
 set(jank_lib_includes "")
 
-# For wasm builds, don't embed include paths in JANK_JIT_FLAGS
-# This prevents our -I flags from overriding emscripten's system includes
-if(NOT jank_target_wasm)
+# For AOT builds (WASM/iOS), don't embed include paths in JANK_JIT_FLAGS
+# This prevents our -I flags from overriding system includes
+if(NOT jank_aot_only)
   foreach(dir ${jank_lib_includes_prop})
     # System includes are just the path, but normal includes have this format:
     # $<BUILD_INTERFACE:/home/jeaye/projects/jank/compiler+runtime/include/cpp>
@@ -988,7 +1070,7 @@ set_target_properties(jank_lib PROPERTIES ENABLE_EXPORTS 1)
 
 # ---- libfolly.a ----
 
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   # Folly is well and truly a pain in the ass to build through its
   # own build system. It regularly fails to build for me
   # on all sorts of standard systems (both Linux and macOS) and jank
@@ -1048,7 +1130,7 @@ if(NOT jank_target_wasm)
 endif()
 # ---- libfolly.a ----
 
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   # ---- jank phase 1 executable ----
   add_executable(
   jank_exe_phase_1
@@ -1217,7 +1299,7 @@ endif()
 # can know all of the types and functions within the jank runtime. This PCH is our
 # "incremental" PCH, named that way since it uses Clang's -fincremental-extensions flag.
 
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   # Build a string of all of our AOT compilation flags so we can share them with our incremental PCH.
   set(jank_incremental_pch_flag ${CMAKE_BINARY_DIR}/incremental.pch)
 
@@ -1258,7 +1340,7 @@ endif()
 # With this setup, we'll compile when the flag file doesn't exist (i.e. on
 # first build or after a clean), when any of the jank sources for these libs
 # change, or whenever the jank binary changes.
-if(NOT jank_target_wasm)
+if(NOT jank_aot_only)
   set(jank_core_libraries_flag "${CMAKE_BINARY_DIR}/classes/core-libraries")
   set(jank_core_library_commands "")
   list(LENGTH jank_core_modules jank_core_module_count)

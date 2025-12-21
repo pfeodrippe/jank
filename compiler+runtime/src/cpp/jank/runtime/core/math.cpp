@@ -51,8 +51,8 @@ namespace jank::runtime
     {
       return static_cast<f64>(val);
     }
-#ifdef JANK_TARGET_EMSCRIPTEN
-    // For WASM: native_big_integer = long long, native_big_decimal = double
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
+    // For WASM/iOS: native_big_integer = long long, native_big_decimal = double
     else if constexpr(std::is_same_v<T, native_big_integer>)
     {
       return static_cast<f64>(val);

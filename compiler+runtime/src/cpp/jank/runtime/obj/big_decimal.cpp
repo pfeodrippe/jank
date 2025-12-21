@@ -6,7 +6,7 @@ namespace jank::runtime
 {
 // These operator overloads are only needed when native_big_integer is a class type (boost::multiprecision)
 // For WASM where native_big_integer is 'long long', these would be invalid (no class type parameter)
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   native_big_decimal operator+(native_big_decimal const &l, native_big_integer const &r)
   {
     return l + native_big_decimal(r.str());
@@ -123,7 +123,7 @@ namespace jank::runtime::obj
   }
 
   big_decimal::big_decimal(jtl::immutable_string const &val)
-#ifdef JANK_TARGET_EMSCRIPTEN
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
     : data{ std::stod(val.c_str()) }
 #else
     : data{ val.c_str() }
@@ -132,7 +132,7 @@ namespace jank::runtime::obj
   }
 
   big_decimal::big_decimal(native_big_integer const &val)
-#ifdef JANK_TARGET_EMSCRIPTEN
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
     : data{ static_cast<native_big_decimal>(val) }
 #else
     : data{ val.real() }
@@ -157,7 +157,7 @@ namespace jank::runtime::obj
 
   jtl::immutable_string big_decimal::to_string() const
   {
-#ifdef JANK_TARGET_EMSCRIPTEN
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
     return std::to_string(data);
 #else
     return data.str();
@@ -166,7 +166,7 @@ namespace jank::runtime::obj
 
   void big_decimal::to_string(jtl::string_builder &buff) const
   {
-#ifdef JANK_TARGET_EMSCRIPTEN
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
     buff(std::to_string(data));
 #else
     buff(data.str());
@@ -195,7 +195,7 @@ namespace jank::runtime::obj
 
   i64 big_decimal::to_integer() const
   {
-#ifdef JANK_TARGET_EMSCRIPTEN
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
     return static_cast<i64>(data);
 #else
     return data.convert_to<i64>();
@@ -204,7 +204,7 @@ namespace jank::runtime::obj
 
   f64 big_decimal::to_real() const
   {
-#ifdef JANK_TARGET_EMSCRIPTEN
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
     return static_cast<f64>(data);
 #else
     return data.convert_to<f64>();

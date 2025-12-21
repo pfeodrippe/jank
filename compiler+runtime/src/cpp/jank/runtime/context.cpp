@@ -1,7 +1,7 @@
 #include <exception>
 #include <fstream>
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   #include <Interpreter/Compatibility.h>
   #include <clang/Interpreter/CppInterOp.h>
   #include <llvm/ExecutionEngine/Orc/LLJIT.h>
@@ -22,14 +22,14 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/munge.hpp>
 #include <jank/runtime/core/meta.hpp>
-#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+#if (!defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)) || defined(JANK_HAS_CPPINTEROP)
   #include <jank/analyze/processor.hpp>
   #include <jank/analyze/expr/primitive_literal.hpp>
   #include <jank/analyze/pass/optimize.hpp>
   #include <jank/evaluate.hpp>
   #include <jank/jit/processor.hpp>
 #endif
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   #include <jank/util/clang.hpp>
   #include <jank/util/clang_format.hpp>
   #include <jank/codegen/llvm_processor.hpp>
@@ -54,7 +54,7 @@ namespace jank::runtime
     /* We want to initialize __rt_ctx ASAP so other code can start using it. */
     : binary_version{ (__rt_ctx = this, util::binary_version()) }
     , binary_cache_dir{ util::binary_cache_dir(binary_version) }
-#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+#if (!defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)) || defined(JANK_HAS_CPPINTEROP)
     , jit_prc{ binary_version }
 #endif
   {
@@ -216,8 +216,8 @@ namespace jank::runtime
     native_vector<object_ref> forms{};
     for(auto const &form : p_prc)
     {
-#ifdef JANK_TARGET_WASM
-      /* WASM doesn't support JIT - just return the parsed form */
+#if defined(JANK_TARGET_WASM) || defined(JANK_TARGET_IOS)
+      /* WASM/iOS don't support JIT - just return the parsed form */
       ret = form.expect_ok().unwrap().ptr;
       forms.emplace_back(ret);
 #else
@@ -240,14 +240,14 @@ namespace jank::runtime
 #endif
     }
 
-#ifdef JANK_TARGET_WASM
-    /* WASM doesn't support module compilation */
+#if defined(JANK_TARGET_WASM) || defined(JANK_TARGET_IOS)
+    /* WASM/iOS don't support module compilation */
     (void)forms;
 #elif defined(JANK_TARGET_EMSCRIPTEN)
     if(truthy(compile_files_var->deref()))
     {
       throw error::internal_codegen_failure(
-        "Module compilation is unavailable when targeting emscripten.");
+        "Module compilation is unavailable when targeting emscripten/iOS.");
     }
 #else
     /* When compiling, we analyze twice. This is because eval will modify its expression
@@ -350,6 +350,11 @@ namespace jank::runtime
             if(is_wasm_aot)
             {
               cpp_out << "// WASM AOT generated code - requires jank runtime headers\n";
+              /* iOS Objective-C++ defines 'nil' as a macro - need to handle it */
+              cpp_out << "#ifdef __OBJC__\n";
+              cpp_out << "#pragma push_macro(\"nil\")\n";
+              cpp_out << "#undef nil\n";
+              cpp_out << "#endif\n";
               cpp_out << "#include <jank/runtime/context.hpp>\n";
               cpp_out << "#include <jank/runtime/obj/jit_function.hpp>\n";
               cpp_out << "#include <jank/runtime/core.hpp>\n";
@@ -367,11 +372,18 @@ namespace jank::runtime
               cpp_out << "#include <jank/runtime/obj/symbol.hpp>\n";
               /* Include convert for type conversions (bool, int, etc.) */
               cpp_out << "#include <jank/runtime/convert/builtin.hpp>\n";
+              /* Boost multiprecision only for native builds - iOS/WASM use stubbed types */
+              cpp_out << "#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)\n";
               cpp_out << "#include <boost/multiprecision/cpp_int.hpp>\n";
+              cpp_out << "#endif\n";
               /* Include scope_exit for finally blocks */
               cpp_out << "#include <jank/util/scope_exit.hpp>\n";
               /* Include meta for reset_meta used by cpp/box */
               cpp_out << "#include <jank/runtime/core/meta.hpp>\n";
+              /* Restore 'nil' macro for iOS Objective-C++ */
+              cpp_out << "#ifdef __OBJC__\n";
+              cpp_out << "#pragma pop_macro(\"nil\")\n";
+              cpp_out << "#endif\n";
 
               /* Include native headers from (:require ["header.h" :as alias]) */
               auto const curr_ns{ current_ns() };
@@ -426,7 +438,7 @@ namespace jank::runtime
     return ret;
   }
 
-#ifdef JANK_TARGET_EMSCRIPTEN
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
   jtl::result<void, error_ref> context::eval_cpp_string(jtl::immutable_string_view const &) const
   {
     return error::runtime_invalid_cpp_eval();
@@ -495,7 +507,7 @@ namespace jank::runtime
     return ret;
   }
 
-#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+#if (!defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)) || defined(JANK_HAS_CPPINTEROP)
   native_vector<analyze::expression_ref>
   context::analyze_string(jtl::immutable_string_view const &code, bool const eval)
   {
@@ -581,7 +593,7 @@ namespace jank::runtime
     return load_module(util::format("/{}", module), ori);
   }
 
-#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+#if (!defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)) || defined(JANK_HAS_CPPINTEROP)
   object_ref context::eval(object_ref const o)
   {
     auto const expr(
@@ -591,17 +603,17 @@ namespace jank::runtime
 #else
   object_ref context::eval(object_ref const o)
   {
-    /* WASM doesn't support JIT evaluation - just return the object */
+    /* WASM/iOS don't support JIT evaluation - just return the object */
     return o;
   }
 #endif
 
-#ifdef JANK_TARGET_EMSCRIPTEN
+#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
                                                  jtl::ref<llvm::Module> const &) const
   {
     return err(
-      util::format("Writing modules is unsupported on emscripten (module '{}').", module_name));
+      util::format("Writing modules is unsupported on emscripten/iOS (module '{}').", module_name));
   }
 #else
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,

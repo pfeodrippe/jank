@@ -195,9 +195,9 @@ namespace jank::runtime
     }
   };
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   /* Native big integer - only needed when native_big_integer is a class type (boost::multiprecision)
-   * In WASM, native_big_integer is just long long, so the integer convert above handles it. */
+   * In WASM/iOS, native_big_integer is just long long, so the integer convert above handles it. */
   template <>
   struct convert<native_big_integer>
   {

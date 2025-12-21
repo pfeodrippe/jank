@@ -5,8 +5,8 @@
 namespace jank::runtime
 {
 // These operator overloads are only needed when native_big_integer is a class type (boost::multiprecision)
-// For WASM where native_big_integer = long long, the built-in operators work fine
-#ifndef JANK_TARGET_EMSCRIPTEN
+// For WASM/iOS where native_big_integer = long long, the built-in operators work fine
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   f64 operator+(native_big_integer const &l, f64 const &r);
   f64 operator+(f64 const &l, native_big_integer const &r);
   f64 operator-(native_big_integer const &l, f64 const &r);
@@ -43,7 +43,7 @@ namespace jank::runtime::obj
     big_integer(big_integer &&) noexcept = default;
     big_integer(big_integer const &) = default;
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
     // Only needed when native_big_integer != i64 (boost::multiprecision)
     explicit big_integer(native_big_integer const &);
     explicit big_integer(native_big_integer &&);
@@ -81,7 +81,7 @@ namespace jank::runtime::obj
     native_big_integer data{};
   };
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   /* For some reason, operators defined in jank::runtime namespace cannot be accessed from jank namespace.
    * We therefore added the following as a workaround. The root cause is not clear, likely due to boost cpp_int quirks.*/
   using jank::runtime::operator+;

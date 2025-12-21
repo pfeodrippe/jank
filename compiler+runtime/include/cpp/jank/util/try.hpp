@@ -1,6 +1,6 @@
 #pragma once
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   #include <cpptrace/from_current.hpp>
 #endif
 
@@ -47,14 +47,14 @@ namespace jank::util
  * One implication of this design is that we can provide a single
  * function to handle all expected exception types, with full type
  * info. For example: `JANK_CATCH([&](auto const &e){  })` */
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   #define JANK_TRY CPPTRACE_TRY
 #else
-  // WASM: simple try without cpptrace tracing
+  // WASM/iOS: simple try without cpptrace tracing
   #define JANK_TRY try
 #endif
 
-#ifndef JANK_TARGET_EMSCRIPTEN
+#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
   /* NOLINTNEXTLINE(cppcoreguidelines-macro-usage) */
   #define JANK_CATCH_THEN(fun, then)         \
     CPPTRACE_CATCH(std::exception const &e)  \
