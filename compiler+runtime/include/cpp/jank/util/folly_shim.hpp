@@ -3,7 +3,7 @@
 // WASM-compatible shim for folly::Synchronized
 // WASM is single-threaded, so we don't need actual synchronization
 
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
   #include <folly/Synchronized.h>
 #else
   #include <utility> // for std::move

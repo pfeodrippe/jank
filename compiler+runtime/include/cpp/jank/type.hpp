@@ -15,7 +15,7 @@
 #include <immer/memory_policy.hpp>
 #include <jank/runtime/core/jank_heap.hpp>
 
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
   #include <boost/multiprecision/cpp_int.hpp>
   #include <boost/multiprecision/cpp_dec_float.hpp>
   #include <folly/FBVector.h>
@@ -38,7 +38,7 @@ namespace jank
 
   using native_persistent_string_view = std::string_view;
 
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
   using native_big_integer
     = boost::multiprecision::number<boost::multiprecision::cpp_int_backend<>>;
   using native_big_decimal
@@ -48,7 +48,7 @@ namespace jank
   template <typename T>
   using native_vector = folly::fbvector<T, native_allocator<T>>;
 #else
-  // Minimal stubs for WASM/iOS - boost-multiprecision causes math.h macro conflicts
+  // Minimal stubs for WASM - boost-multiprecision causes math.h macro conflicts
   using native_big_integer = long long; // Stub
   using native_big_decimal = double; // Stub
 

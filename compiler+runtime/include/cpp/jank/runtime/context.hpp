@@ -6,7 +6,7 @@
 #include <jank/util/folly_shim.hpp>
 
 #include <jtl/result.hpp>
-#if (!defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)) || defined(JANK_HAS_CPPINTEROP)
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   #include <jank/analyze/processor.hpp>
   #include <jank/jit/processor.hpp>
   #include <jank/jit/incremental_cache.hpp>
@@ -93,7 +93,7 @@ namespace jank::runtime
     eval_string(jtl::immutable_string_view const &code, usize start_line, usize start_col);
     jtl::result<void, error_ref> eval_cpp_string(jtl::immutable_string_view const &code) const;
     object_ref read_string(jtl::immutable_string_view const &code);
-#if (!defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)) || defined(JANK_HAS_CPPINTEROP)
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     native_vector<analyze::expression_ref>
     analyze_string(jtl::immutable_string_view const &code, bool const eval = true);
 #endif
@@ -200,7 +200,7 @@ namespace jank::runtime
     obj::persistent_hash_map_ref get_thread_bindings() const;
     jtl::option<thread_binding_frame> current_thread_binding_frame();
 
-#if (!defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)) || defined(JANK_HAS_CPPINTEROP)
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     /* The analyze processor is reused across evaluations so we can keep the semantic information
      * of previous code. This is essential for REPL use.
      *
@@ -233,7 +233,7 @@ namespace jank::runtime
     static native_unordered_map<std::thread::id, native_list<thread_binding_frame>>
       thread_binding_frames;
 
-#if (!defined(JANK_TARGET_WASM) && !defined(JANK_TARGET_IOS)) || defined(JANK_HAS_CPPINTEROP)
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     /* Cache for compiled defs to enable incremental JIT. */
     jit::incremental_cache jit_cache;
     /* This must go last, since it'll try to access other bits in the runtime context during

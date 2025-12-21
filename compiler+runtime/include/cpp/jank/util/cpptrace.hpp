@@ -3,7 +3,7 @@
 #include <string>
 #include <cstddef>
 
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#if !defined(JANK_TARGET_EMSCRIPTEN)
   #include <cpptrace/cpptrace.hpp>
   #include <cpptrace/basic.hpp>
   #include <cpptrace/from_current.hpp>

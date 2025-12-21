@@ -7,9 +7,9 @@
 namespace jank::runtime
 {
   /* Thread-local current allocator - definition (declared extern in allocator_fwd.hpp).
-   * visibility("default") is required for Linux emulated TLS - the __emutls_v.* symbol
-   * must be visible for the ORC JIT to resolve it. */
-  [[gnu::visibility("default")]]
+   * visibility("default") + used is required for Linux emulated TLS - the __emutls_v.* symbol
+   * must be visible and not stripped for the ORC JIT to resolve it. */
+  [[gnu::visibility("default"), gnu::used]]
   thread_local allocator *current_allocator{ nullptr };
 
   /* ----- chunk implementation ----- */

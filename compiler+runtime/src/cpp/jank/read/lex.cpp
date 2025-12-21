@@ -882,8 +882,8 @@ namespace jank::read::lex
                                  { denominator.expect_ok().start, denominator.expect_ok().end } });
                 }
                 auto const &denominator_token(denominator.expect_ok());
-#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
-                // For WASM/iOS, native_big_integer is just long long - use strtoll
+#ifdef JANK_TARGET_EMSCRIPTEN
+                // For WASM, native_big_integer is just long long - use strtoll
                 native_big_integer numerator{};
                 if(radix == 8 && *(file.data() + token_start) == '0')
                 {
@@ -917,8 +917,8 @@ namespace jank::read::lex
                 }
                 if(denominator.expect_ok().kind == token_kind::big_integer)
                 {
-#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
-                  // For WASM/iOS, native_big_integer is just long long - parse from string
+#ifdef JANK_TARGET_EMSCRIPTEN
+                  // For WASM, native_big_integer is just long long - parse from string
                   auto const &big_int_data = std::get<lex::big_integer>(denominator_token.data);
                   auto denom_val
                     = std::strtoll(big_int_data.number_literal.data(), nullptr, big_int_data.radix);

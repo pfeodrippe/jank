@@ -8,7 +8,7 @@ namespace jank::runtime::obj
   struct ratio_data
   {
     ratio_data(i64 const, i64 const);
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
     // Only needed when native_big_integer != i64 (boost::multiprecision)
     ratio_data(native_big_integer const &, native_big_integer const &);
 #endif
@@ -37,7 +37,7 @@ namespace jank::runtime::obj
     ratio(ratio_data const &);
 
     static object_ref create(i64 const, i64 const);
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
     // Only needed when native_big_integer != i64 (boost::multiprecision)
     static object_ref create(native_big_integer const &, native_big_integer const &);
 #endif
@@ -148,7 +148,7 @@ namespace jank::runtime::obj
   bool operator>=(f64 l, ratio_data const &r);
   bool operator>=(ratio_data const &l, i64 r);
   bool operator>=(i64 l, ratio_data const &r);
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
   // Only needed when native_big_integer != i64 (boost::multiprecision)
   ratio_ref operator+(native_big_integer const &l, ratio_data const &r);
   ratio_ref operator+(ratio_data const &l, native_big_integer const &r);

@@ -969,7 +969,7 @@ namespace jank::runtime::module
   jtl::result<void, error_ref>
   loader::load_o(jtl::immutable_string const &module, file_entry const &entry) const
   {
-#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
+#ifdef JANK_TARGET_EMSCRIPTEN
     return error::runtime_unable_to_load_module(
       util::format("Loading precompiled object modules is unsupported on emscripten (module '{}').",
                    module));
@@ -1011,7 +1011,7 @@ namespace jank::runtime::module
   jtl::result<void, error_ref>
   loader::load_cpp(jtl::immutable_string const &module, file_entry const &entry) const
   {
-#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
+#ifdef JANK_TARGET_EMSCRIPTEN
     return error::runtime_unable_to_load_module(
       util::format("Loading C++ modules is unsupported on emscripten (module '{}').", module));
 #else
@@ -1065,7 +1065,7 @@ namespace jank::runtime::module
 
   jtl::result<void, error_ref> loader::load_jank(file_entry const &entry) const
   {
-#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
+#ifdef JANK_TARGET_EMSCRIPTEN
     return error::runtime_unable_to_load_module("Loading source modules at runtime is unsupported "
                                                 "on emscripten; precompile modules on the host.");
 #else

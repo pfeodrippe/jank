@@ -11,7 +11,7 @@ namespace jank::runtime::obj
 {
   static constexpr auto epsilon{ std::numeric_limits<f64>::epsilon() };
 
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
   // boost::multiprecision has .str() method but native long long does not
   static native_big_decimal to_native_big_decimal(ratio_data const &r)
   {
@@ -58,7 +58,7 @@ namespace jank::runtime::obj
   }
 
 
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
   // Only needed when native_big_integer != i64 (boost::multiprecision)
   ratio_data::ratio_data(native_big_integer const &numerator, native_big_integer const &denominator)
     : numerator{ numerator }
@@ -85,7 +85,7 @@ namespace jank::runtime::obj
   {
   }
 
-#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
+#ifdef JANK_TARGET_EMSCRIPTEN
   // For WASM: native_big_integer == i64, so only one constructor is needed
   ratio_data::ratio_data(i64 const numerator, i64 const denominator)
     : numerator{ numerator }
@@ -122,7 +122,7 @@ namespace jank::runtime::obj
   {
   }
 
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
   // Only needed when native_big_integer != i64 (boost::multiprecision)
   object_ref
   ratio::create(native_big_integer const &numerator, native_big_integer const &denominator)
@@ -227,7 +227,7 @@ namespace jank::runtime::obj
         using T = std::decay_t<decltype(*typed_o)>;
         if constexpr(std::is_same_v<T, big_decimal>)
         {
-#if defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_TARGET_IOS)
+#ifdef JANK_TARGET_EMSCRIPTEN
           // For WASM: native_big_decimal is double, use standard comparison
           auto const lhs = to_native_big_decimal(*this);
           auto const rhs = typed_o->data;
@@ -678,7 +678,7 @@ namespace jank::runtime::obj
     return l < (r ? 1ll : 0ll);
   }
 
-#if !defined(JANK_TARGET_EMSCRIPTEN) && !defined(JANK_TARGET_IOS)
+#ifndef JANK_TARGET_EMSCRIPTEN
   // Only needed when native_big_integer != i64 (boost::multiprecision)
   ratio_ref operator+(ratio_data const &l, native_big_integer const &r)
   {
@@ -884,5 +884,5 @@ namespace jank::runtime::obj
   {
     return to_native_big_decimal(l) >= r;
   }
-#endif // JANK_TARGET_EMSCRIPTEN/IOS
+#endif // JANK_TARGET_EMSCRIPTEN
 }
