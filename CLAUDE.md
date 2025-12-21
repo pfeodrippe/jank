@@ -21,18 +21,17 @@ Increment the number for the same date, then restart on 001 in the next day!
 
 ## Building
 
-Before building, you MUST set these environment variables:
+**CRITICAL: Use these EXACT commands with hardcoded paths (no command substitution like `$(...)` which can fail):**
 
 ```bash
 cd /Users/pfeodrippe/dev/jank/compiler+runtime
-export SDKROOT=$(xcrun --show-sdk-path)
-export CC=$PWD/build/llvm-install/usr/local/bin/clang
-export CXX=$PWD/build/llvm-install/usr/local/bin/clang++
+SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk CC=/Users/pfeodrippe/dev/jank/compiler+runtime/build/llvm-install/usr/local/bin/clang CXX=/Users/pfeodrippe/dev/jank/compiler+runtime/build/llvm-install/usr/local/bin/clang++ ninja -C build jank jank-test
 ```
 
-Then build with:
+If you need to reconfigure:
 ```bash
-cd build && ninja jank jank-test
+cd /Users/pfeodrippe/dev/jank/compiler+runtime
+SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk CC=/Users/pfeodrippe/dev/jank/compiler+runtime/build/llvm-install/usr/local/bin/clang CXX=/Users/pfeodrippe/dev/jank/compiler+runtime/build/llvm-install/usr/local/bin/clang++ ./bin/configure -GNinja -DCMAKE_BUILD_TYPE=Debug -Djank_test=on -Djank_local_clang=on
 ```
 
 ## Running Tests

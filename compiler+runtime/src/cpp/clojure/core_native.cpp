@@ -5,6 +5,7 @@
 #endif
 
 #include <jank/profile/time.hpp>
+#include <jank/util/cli.hpp>
 #include <jank/runtime/behavior/callable.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/convert/function.hpp>
@@ -317,7 +318,13 @@ namespace clojure::core_native
 
   object_ref load_module(object_ref const path)
   {
-    __rt_ctx->load_module(runtime::to_string(path), module::origin::latest).expect_ok();
+    /* For WASM AOT compilation, force loading from source to recompile
+     * dependencies rather than trying to JIT-load cached object files.
+     * This allows modules to require other jank modules during AOT compilation. */
+    auto const ori = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
+      ? module::origin::source
+      : module::origin::latest;
+    __rt_ctx->load_module(runtime::to_string(path), ori).expect_ok();
     return jank_nil;
   }
 
