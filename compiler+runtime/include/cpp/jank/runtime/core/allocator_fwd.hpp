@@ -50,7 +50,10 @@ namespace jank::runtime
   };
 
   /* Thread-local current allocator (nullptr = use GC).
-   * Declared extern here, defined in arena.cpp to avoid JIT issues with inline thread_local. */
+   * Declared extern here, defined in arena.cpp to avoid JIT issues with inline thread_local.
+   * visibility("default") is required for Linux emulated TLS - the __emutls_v.* symbol
+   * must be visible for the ORC JIT to resolve it. */
+  [[gnu::visibility("default")]]
   extern thread_local allocator *current_allocator;
 
 } // namespace jank::runtime
