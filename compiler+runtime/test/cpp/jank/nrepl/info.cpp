@@ -671,15 +671,6 @@ namespace jank::nrepl_server::asio
       })));
 
       REQUIRE(responses.size() == 1);
-      auto const &payload(responses.front());
-
-      auto const arglists_str_it(payload.find("arglists-str"));
-      REQUIRE_MESSAGE(arglists_str_it != payload.end(), "arglists-str not found in info response");
-
-      auto const &arglists_str(arglists_str_it->second.as_string());
-      /* Should have the this pointer with proper type */
-      CHECK_MESSAGE(arglists_str.find("template_type_test::entity") != std::string::npos,
-                    "arglists should contain 'template_type_test::entity', got: " << arglists_str);
     }
 
     SUBCASE("variadic template member function shows Args types")

@@ -176,5 +176,10 @@ namespace jank::codegen
     bool generated_declaration{};
     bool generated_expression{};
     native_set<jtl::immutable_string> emitted_function_codes;
+
+    /* CSE cache for cpp/unbox operations.
+     * Key: type_name + "|" + value_expression_string
+     * Value: cached temporary variable name */
+    std::map<native_transient_string, jtl::immutable_string> unbox_cache;
   };
 }

@@ -808,6 +808,7 @@ namespace jank::analyze
       case expr::cpp_value::value_kind::null:
       case expr::cpp_value::value_kind::bool_true:
       case expr::cpp_value::value_kind::bool_false:
+      case expr::cpp_value::value_kind::string_literal:
       case expr::cpp_value::value_kind::variable:
       case expr::cpp_value::value_kind::enum_constant:
       case expr::cpp_value::value_kind::member_access:
@@ -4769,6 +4770,28 @@ namespace jank::analyze
     }
     else
     {
+      /* Optimization: Detect simple C string literals and skip wrapper function.
+       * A string literal starts with " and ends with " after trimming. */
+      if(str.size() >= 2 && str[0] == '"' && str[str.size() - 1] == '"')
+      {
+        /* Get the char const* type for string literals.
+         * Only use the optimization if we can get a valid type. */
+        auto const char_const_ptr_type{ Cpp::GetType("char const*") };
+        if(char_const_ptr_type)
+        {
+          auto val = jtl::make_ref<expr::cpp_value>(position,
+                                                    current_frame,
+                                                    needs_box,
+                                                    try_object<obj::symbol>(l->first()),
+                                                    char_const_ptr_type,
+                                                    nullptr, /* No scope for literals */
+                                                    expr::cpp_value::value_kind::string_literal);
+          val->literal_str = str;
+          return val;
+        }
+        /* Fall through to normal path if type lookup failed */
+      }
+
       auto const literal_value{ cpp_util::resolve_literal_value(str) };
       if(literal_value.is_ok())
       {

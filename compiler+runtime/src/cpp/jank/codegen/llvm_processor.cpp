@@ -2545,6 +2545,23 @@ namespace jank::codegen
       }
       return alloc;
     }
+    if(expr->val_kind == expr::cpp_value::value_kind::string_literal)
+    {
+      /* Create a global string constant for the literal */
+      auto const str_const{ ctx->builder->CreateGlobalString(
+        llvm::StringRef(expr->literal_str.data() + 1, expr->literal_str.size() - 2),
+        ".str") };
+      auto const str_ptr{
+        ctx->builder->CreateInBoundsGEP(str_const->getValueType(),
+                                        str_const,
+                                        { ctx->builder->getInt64(0), ctx->builder->getInt64(0) })
+      };
+      if(expr->position == expression_position::tail)
+      {
+        return gen_ret(str_ptr);
+      }
+      return str_ptr;
+    }
 
     auto const callable{ Cpp::IsFunctionPointerType(expr->type)
                            /* We pass the type and the scope in here so that unresolved template

@@ -1364,6 +1364,11 @@ namespace jank::codegen
       body_buffer.push_back(' ');
       body_buffer.push_back('{');
     }
+
+    /* Save cache state before then-branch - variables declared in one branch
+     * are not visible in other branches, so we must not reuse them across branches. */
+    auto const cache_before_branches{ unbox_cache };
+
     auto const &then_tmp(gen(expr->then, fn_arity));
     if(then_tmp.is_some())
     {
@@ -1376,6 +1381,9 @@ namespace jank::codegen
 
     if(expr->else_.is_some())
     {
+      /* Restore cache to state before then-branch for the else-branch */
+      unbox_cache = cache_before_branches;
+
       util::format_to(body_buffer, "else {");
       auto const &else_tmp(gen(expr->else_.unwrap(), fn_arity));
       if(else_tmp.is_some())
@@ -1387,12 +1395,17 @@ namespace jank::codegen
         util::format_to(body_buffer, "}");
       }
     }
+
     /* If we don't have an else, but we're in return position, we need to be sure to return
      * something, so we return nil. */
     else if(expr->position == analyze::expression_position::tail)
     {
       util::format_to(body_buffer, "else { return {}; }", ret_tmp);
     }
+
+    /* After if/else, restore cache to state before branches - variables from
+     * either branch are not visible after the if/else construct. */
+    unbox_cache = cache_before_branches;
 
     return ret_tmp;
   }
@@ -1430,6 +1443,9 @@ namespace jank::codegen
 
     if(has_catch)
     {
+      /* Save cache state - try and catch blocks are separate scopes */
+      auto const cache_before_try{ unbox_cache };
+
       util::format_to(body_buffer, "try {");
       auto const &body_tmp(gen(expr->body, fn_arity));
       if(body_tmp.is_some())
@@ -1450,6 +1466,9 @@ namespace jank::codegen
        * We mitigate this by ensuring during the codegen for throw that we type-erase to
        * an object_ref.
        */
+      /* Restore cache before catch block */
+      unbox_cache = cache_before_try;
+
       util::format_to(body_buffer,
                       "catch(jank::runtime::object_ref const {}) {",
                       runtime::munge(expr->catch_body.unwrap().sym->name));
@@ -1463,6 +1482,9 @@ namespace jank::codegen
         util::format_to(body_buffer, "return {};", ret_tmp);
       }
       util::format_to(body_buffer, "}");
+
+      /* Restore cache after try/catch */
+      unbox_cache = cache_before_try;
     }
     else
     {
@@ -1498,9 +1520,15 @@ namespace jank::codegen
                     expr->shift,
                     expr->mask);
 
+    /* Save cache state before case branches - each case is a separate scope */
+    auto const cache_before_cases{ unbox_cache };
+
     jank_debug_assert(expr->keys.size() == expr->exprs.size());
     for(usize i{}; i < expr->keys.size(); ++i)
     {
+      /* Restore cache for each case branch */
+      unbox_cache = cache_before_cases;
+
       util::format_to(body_buffer, "case {}: {", expr->keys[i]);
 
       auto const &case_tmp{ gen(expr->exprs[i], fn_arity) };
@@ -1511,6 +1539,9 @@ namespace jank::codegen
       util::format_to(body_buffer, "break; }");
     }
 
+    /* Restore cache for default branch */
+    unbox_cache = cache_before_cases;
+
     util::format_to(body_buffer, "default: {");
 
     auto const &default_tmp{ gen(expr->default_expr, fn_arity) };
@@ -1520,6 +1551,9 @@ namespace jank::codegen
     }
 
     util::format_to(body_buffer, "} }");
+
+    /* Restore cache after switch - variables from any case are not visible after */
+    unbox_cache = cache_before_cases;
 
     if(is_tail)
     {
@@ -1570,6 +1604,16 @@ namespace jank::codegen
         return none;
       }
       return util::format("{}", val);
+    }
+    if(expr->val_kind == expr::cpp_value::value_kind::string_literal)
+    {
+      /* Emit the string literal directly without wrapper function */
+      if(expr->position == expression_position::tail)
+      {
+        util::format_to(body_buffer, "return {};", expr->literal_str);
+        return none;
+      }
+      return expr->literal_str;
     }
 
     auto tmp{ Cpp::GetQualifiedCompleteName(expr->scope) };
@@ -2108,9 +2152,29 @@ namespace jank::codegen
   jtl::option<handle> processor::gen(analyze::expr::cpp_unbox_ref const expr,
                                      analyze::expr::function_arity const &arity)
   {
-    auto ret_tmp{ runtime::munge(__rt_ctx->unique_namespaced_string("cpp_unbox")) };
     auto value_tmp{ gen(expr->value_expr, arity) };
     auto const type_name{ cpp_util::get_qualified_type_name(expr->type) };
+    auto const value_str{ value_tmp.unwrap().str(false) };
+
+    /* CSE: Check if we've already unboxed this exact type+value combination */
+    native_transient_string cache_key;
+    cache_key.reserve(type_name.size() + 1 + value_str.size());
+    cache_key.append(type_name.data(), type_name.size());
+    cache_key.push_back('|');
+    cache_key.append(value_str.data(), value_str.size());
+    auto const cached_it{ unbox_cache.find(cache_key) };
+    if(cached_it != unbox_cache.end())
+    {
+      /* Reuse the cached unbox result */
+      if(expr->position == expression_position::tail)
+      {
+        util::format_to(body_buffer, "return {};", cached_it->second);
+        return none;
+      }
+      return cached_it->second;
+    }
+
+    auto ret_tmp{ runtime::munge(__rt_ctx->unique_namespaced_string("cpp_unbox")) };
     auto const meta{ runtime::source_to_meta(expr->source) };
 
     /* Add profiling for cpp/unbox when --profile-interop is enabled */
@@ -2127,7 +2191,7 @@ namespace jank::codegen
                     ret_tmp,
                     type_name,
                     type_name,
-                    value_tmp.unwrap().str(false));
+                    value_str);
     /* Append source string directly to avoid fmt interpreting braces as placeholders */
     body_buffer(source_str);
     body_buffer("\")) };");
@@ -2136,6 +2200,9 @@ namespace jank::codegen
     {
       util::format_to(body_buffer, "jank::profile::exit(\"cpp/unbox<{}>\");", type_name);
     }
+
+    /* Cache this unbox result for potential reuse within the same scope */
+    unbox_cache.emplace(std::move(cache_key), ret_tmp);
 
     if(expr->position == expression_position::tail)
     {
@@ -2478,6 +2545,9 @@ namespace jank::codegen
             {
           )");
       }
+
+      /* Clear CSE cache for each arity - cached variables are scoped to their function */
+      unbox_cache.clear();
 
       for(auto const &form : arity.body->values)
       {
