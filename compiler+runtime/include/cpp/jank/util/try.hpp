@@ -50,7 +50,7 @@ namespace jank::util
 #ifndef JANK_TARGET_EMSCRIPTEN
   #define JANK_TRY CPPTRACE_TRY
 #else
-  // WASM: simple try without cpptrace tracing
+  // WASM/iOS: simple try without cpptrace tracing
   #define JANK_TRY try
 #endif
 

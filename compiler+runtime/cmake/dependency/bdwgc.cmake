@@ -5,8 +5,8 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
 
-  # Add -fPIC for WASM builds to support MAIN_MODULE dynamic linking
-  if(jank_target_wasm)
+  # Add -fPIC for WASM/iOS builds
+  if(jank_target_wasm OR jank_target_ios)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
   endif()
@@ -24,6 +24,9 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   if(jank_target_wasm)
     # Disable threads for WASM - emscripten doesn't support bdwgc's threading model
     set(enable_threads OFF CACHE BOOL "Enable multi-threading support")
+  elseif(jank_target_ios)
+    # iOS supports threads
+    set(enable_threads ON CACHE BOOL "Enable multi-threading support")
   else()
     set(enable_threads ON CACHE BOOL "Enable multi-threading support")
   endif()
@@ -32,8 +35,8 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   set(enable_thread_local_alloc ON CACHE BOOL "Enable thread-local allocation optimization")
   # Enable parallel marking for faster GC
   set(enable_parallel_mark ON CACHE BOOL "Parallelize marking and free list construction")
-  if(jank_target_wasm)
-    # Skip gctba for wasm to avoid C++ header issues with emscripten
+  if(jank_target_wasm OR jank_target_ios)
+    # Skip gctba for wasm/ios to avoid C++ header issues
     set(enable_throw_bad_alloc_library OFF CACHE BOOL "Enable C++ gctba library build")
   else()
     set(enable_throw_bad_alloc_library ON CACHE BOOL "Enable C++ gctba library build")

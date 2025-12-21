@@ -14,7 +14,6 @@ namespace jank::runtime
   /* Forward declaration for allocator interface support.
    * The actual allocator type is defined in core/arena.hpp. */
   struct allocator;
-  [[gnu::visibility("default"), gnu::used]]
   extern thread_local allocator *current_allocator;
 
   /* Try to allocate from the current allocator if one is active.

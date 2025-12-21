@@ -372,6 +372,10 @@ namespace jank::runtime
               cpp_out << "#include <jank/util/scope_exit.hpp>\n";
               /* Include meta for reset_meta used by cpp/box */
               cpp_out << "#include <jank/runtime/core/meta.hpp>\n";
+              /* Include opaque_box for C++ FFI interop boxing */
+              cpp_out << "#include <jank/runtime/obj/opaque_box.hpp>\n";
+              /* Include C API for jank_unbox_lazy_source used by cpp/unbox */
+              cpp_out << "#include <jank/c_api.h>\n";
 
               /* Include native headers from (:require ["header.h" :as alias]) */
               auto const curr_ns{ current_ns() };
