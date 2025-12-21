@@ -5,8 +5,10 @@
 #include <array>
 #include <stdexcept>
 #include <locale>
+#include <limits>
 
 #include <jank/c_api.h>
+#include <jank/hash.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core.hpp>
@@ -572,6 +574,37 @@ extern "C"
     }
 
     return op_box->data;
+  }
+
+  static i64 to_integer_or_hash(object const *o)
+  {
+    if(o->type == object_type::integer)
+    {
+      return expect_object<obj::integer>(o)->data;
+    }
+
+    return to_hash(o);
+  }
+
+  jank_i64
+  jank_shift_mask_case_integer(jank_object_ref const o, jank_i64 const shift, jank_i64 const mask)
+  {
+    auto const o_obj(reinterpret_cast<object *>(o));
+    auto integer{ to_integer_or_hash(o_obj) };
+    if(mask != 0)
+    {
+      if(o_obj->type == object_type::integer)
+      {
+        /* We don't hash the integer if it's within an i32 value.
+         * This is to be consistent with how keys are hashed in jank's case macro. */
+        integer = (integer >= std::numeric_limits<i32>::min()
+                   && integer <= std::numeric_limits<i32>::max())
+          ? integer
+          : hash::integer(integer);
+      }
+      integer = (integer >> shift) & mask;
+    }
+    return integer;
   }
 
   int jank_init(int const argc,
