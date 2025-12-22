@@ -31,20 +31,26 @@ extra_include_paths=()
 native_obj_files=()
 native_lib_dirs=()
 native_libs=()
+# New options for --entry-module workflow
+entry_module=""
+module_path=""
+output_library=""
 
 usage() {
   cat <<'USAGE'
-Usage: ios-bundle [OPTIONS] [jank-source]
+Usage: ios-bundle [OPTIONS] [jank-source | simulator | device]
 
 Builds jank code for iOS using AOT C++ generation and cross-compilation.
 Generates core libraries (clojure.core, etc.) and compiles them for iOS arm64.
 
-If a jank source file is provided, it will be compiled using the native jank compiler
-and cross-compiled for iOS.
+Two workflows are supported:
+
+1. Single file: Provide a .jank source file to compile it and bundle for iOS
+2. Entry module: Use --entry-module to compile an entire app with all dependencies
 
 Options:
   -h, --help              Show this help message
-  --build-dir DIR         CMake build directory for iOS (default: build-ios)
+  --build-dir DIR         CMake build directory for iOS (default: build-ios or build-ios-simulator)
   --native-build-dir DIR  Native build directory with jank compiler (default: build)
   --output-dir DIR        Output directory for generated files (default: build-dir)
   --output-name NAME      Base name for output files (default: jank, or source basename)
@@ -53,13 +59,35 @@ Options:
   -I DIR                  Add include directory for C++ compilation (can be used multiple times)
   --native-obj FILE       Add native object file for JIT during AOT compilation
   --native-lib LIB        Add native dynamic library for JIT during AOT compilation
+  --jit-lib LIB           Alias for --native-lib (for JIT symbol resolution during codegen)
   -L DIR                  Add native library search directory for JIT
   -v, --verbose           Enable verbose output
+  --simulator             Build for iOS Simulator (arm64-apple-ios-simulator)
+  simulator               Same as --simulator (positional argument)
+  device                  Build for iOS Device (default, arm64-apple-ios)
+
+Entry Module Options (for full app compilation):
+  --entry-module MODULE   Entry point module name (e.g., myapp.ios)
+  --module-path DIR       Module search path for jank (e.g., src)
+  --output-library NAME   Output static library name (default: libapp_aot.a)
 
 Examples:
-  ios-bundle                           # Build jank runtime and core libs for iOS
-  ios-bundle --force-regenerate        # Force regeneration of all C++ files
-  ios-bundle myapp.jank                # Compile myapp.jank and bundle for iOS
+  ios-bundle                                    # Build jank runtime and core libs for iOS device
+  ios-bundle simulator                          # Build for iOS Simulator
+  ios-bundle --force-regenerate                 # Force regeneration of all C++ files
+  ios-bundle myapp.jank                         # Compile myapp.jank and bundle for iOS
+
+  # Full app compilation (recommended):
+  ios-bundle \\
+    --entry-module myapp.ios \\
+    --module-path src \\
+    --output-dir build-ios \\
+    --output-library libmyapp_aot.a \\
+    -I vendor/imgui \\
+    -I vendor/flecs/distr \\
+    -L /opt/homebrew/lib \\
+    --jit-lib /opt/homebrew/lib/libSDL3.dylib \\
+    simulator
 USAGE
 }
 
@@ -137,12 +165,36 @@ while [[ $# -gt 0 ]]; do
       native_obj_files+=("$2")
       shift 2
       ;;
-    --native-lib)
+    --native-lib|--jit-lib)
       if [[ $# -lt 2 ]]; then
-        echo "error: --native-lib expects a library name" >&2
+        echo "error: $1 expects a library name" >&2
         exit 1
       fi
       native_libs+=("$2")
+      shift 2
+      ;;
+    --entry-module)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --entry-module expects a module name" >&2
+        exit 1
+      fi
+      entry_module="$2"
+      shift 2
+      ;;
+    --module-path)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --module-path expects a directory path" >&2
+        exit 1
+      fi
+      module_path="$2"
+      shift 2
+      ;;
+    --output-library)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --output-library expects a library name" >&2
+        exit 1
+      fi
+      output_library="$2"
       shift 2
       ;;
     -L)
@@ -161,6 +213,14 @@ while [[ $# -gt 0 ]]; do
       jank_source="$1"
       shift
       ;;
+    simulator)
+      ios_simulator=true
+      shift
+      ;;
+    device)
+      ios_simulator=false
+      shift
+      ;;
     *)
       echo "error: unknown option: $1" >&2
       exit 1
@@ -173,13 +233,37 @@ if [[ -n "${jank_source}" && "${output_name}" == "jank" ]]; then
   output_name="$(basename "${jank_source}" .jank)"
 fi
 
+# Update build_dir based on simulator vs device if using default
+if [[ "${build_dir}" == "${repo_root}/build-ios" ]]; then
+  if [[ "${ios_simulator}" == "true" ]]; then
+    build_dir="${repo_root}/build-ios-simulator"
+  fi
+fi
+
 # Default output_dir to build_dir if not specified
 if [[ -z "${output_dir}" ]]; then
   output_dir="${build_dir}"
 fi
 
+# Default output_library if entry_module is provided
+if [[ -n "${entry_module}" && -z "${output_library}" ]]; then
+  output_library="libapp_aot.a"
+fi
+
 mkdir -p "${build_dir}"
 mkdir -p "${output_dir}"
+
+# Convert relative paths to absolute (before changing to repo_root)
+original_cwd="$(pwd)"
+if [[ -n "${module_path}" && "${module_path:0:1}" != "/" ]]; then
+  module_path="${original_cwd}/${module_path}"
+fi
+if [[ "${output_dir:0:1}" != "/" ]]; then
+  output_dir="${original_cwd}/${output_dir}"
+fi
+if [[ "${build_dir:0:1}" != "/" ]]; then
+  build_dir="${original_cwd}/${build_dir}"
+fi
 
 run() {
   echo "[ios-bundle] $*"
@@ -429,11 +513,199 @@ if [[ -n "${jank_source}" ]]; then
   compiled_objects+=("${cpp_output}")
 fi
 
+# --- Entry module workflow: compile entire app with all dependencies ---
+entry_module_objects=()
+if [[ -n "${entry_module}" ]]; then
+  echo ""
+  echo "[ios-bundle] Entry module workflow: ${entry_module}"
+  echo ""
+
+  if [[ -z "${module_path}" ]]; then
+    error "--module-path is required when using --entry-module"
+    exit 1
+  fi
+
+  # Create directories for generated files
+  generated_dir="${output_dir}/generated"
+  obj_dir="${output_dir}/obj"
+  mkdir -p "${generated_dir}"
+  mkdir -p "${obj_dir}"
+
+  # Build jank flags for module compilation
+  jank_flags=(
+    --module-path "${module_path}"
+    --codegen wasm-aot
+    --save-cpp
+  )
+
+  # Add include paths (use original_cwd for relative paths since we're in repo_root now)
+  for inc_path in "${extra_include_paths[@]}"; do
+    if [[ "${inc_path:0:1}" != "/" ]]; then
+      inc_path="${original_cwd}/${inc_path}"
+    fi
+    jank_flags+=(-I "${inc_path}")
+  done
+
+  # Add library directories (use original_cwd for relative paths)
+  for lib_dir in "${native_lib_dirs[@]}"; do
+    if [[ "${lib_dir:0:1}" != "/" ]]; then
+      lib_dir="${original_cwd}/${lib_dir}"
+    fi
+    jank_flags+=(-L "${lib_dir}")
+  done
+
+  # Add native libraries for JIT symbol resolution
+  for lib in "${native_libs[@]}"; do
+    jank_flags+=(--jit-lib "${lib}")
+  done
+
+  # Discover all modules via --list-modules
+  echo "[ios-bundle] Discovering modules from ${entry_module}..."
+  if [[ "${verbose}" == "true" ]]; then
+    echo "[ios-bundle] Running: ${native_jank} ${jank_flags[@]} compile-module --list-modules ${entry_module}"
+  fi
+  all_modules=$("${native_jank}" "${jank_flags[@]}" compile-module --list-modules "${entry_module}" 2>&1 | grep -v "^\[jank\]" | grep -v "^WARNING:")
+
+  # Filter to only include user modules (exclude clojure.* which are pre-compiled)
+  user_modules=()
+  while IFS= read -r module; do
+    if [[ -n "${module}" && ! "${module}" =~ ^clojure\. ]]; then
+      user_modules+=("${module}")
+    fi
+  done <<< "${all_modules}"
+
+  echo "[ios-bundle] Modules to compile (${#user_modules[@]} total):"
+  for module in "${user_modules[@]}"; do
+    echo "  - ${module}"
+  done
+  echo ""
+
+  # Compile each module to C++
+  echo "[ios-bundle] Generating C++ from modules..."
+  for module in "${user_modules[@]}"; do
+    module_filename=$(echo "${module}" | tr '.' '_')
+    cpp_output="${generated_dir}/${module_filename}_generated.cpp"
+
+    # Convert module name to source path (e.g., vybe.sdf.ios -> src/vybe/sdf/ios.jank)
+    source_path="${module_path}/$(echo "${module}" | tr '.' '/').jank"
+
+    # Check if we need to regenerate
+    need_regenerate=false
+    if [[ "${force_regenerate}" == "true" ]]; then
+      need_regenerate=true
+    elif [[ ! -f "${cpp_output}" ]]; then
+      need_regenerate=true
+    elif [[ -f "${source_path}" && "${source_path}" -nt "${cpp_output}" ]]; then
+      need_regenerate=true
+    elif [[ "${native_jank}" -nt "${cpp_output}" ]]; then
+      need_regenerate=true
+    fi
+
+    if [[ "${need_regenerate}" == "true" ]]; then
+      echo "[ios-bundle] Compiling ${module}..."
+      if "${native_jank}" "${jank_flags[@]}" --save-cpp-path "${cpp_output}" compile-module "${module}" 2>&1 | tail -3; then
+        if [[ -f "${cpp_output}" ]]; then
+          echo "[ios-bundle]   -> $(wc -l < "${cpp_output}") lines"
+        else
+          error "Failed to generate C++ for ${module}"
+          exit 1
+        fi
+      else
+        error "jank compilation failed for ${module}"
+        exit 1
+      fi
+    else
+      echo "[ios-bundle] Using cached: ${module}"
+    fi
+
+    entry_module_objects+=("${cpp_output}")
+  done
+
+  # Add missing includes to generated files (workaround until codegen is fixed)
+  echo ""
+  echo "[ios-bundle] Patching generated files (adding missing includes)..."
+  for cppfile in "${generated_dir}"/*.cpp; do
+    if ! grep -q "opaque_box.hpp" "${cppfile}"; then
+      sed -i '' 's|#include <jank/runtime/core/meta.hpp>|#include <jank/runtime/core/meta.hpp>\
+#include <jank/runtime/obj/opaque_box.hpp>\
+#include <jank/c_api.h>|' "${cppfile}"
+    fi
+  done
+
+  # Generate jank_aot_init.cpp
+  echo ""
+  echo "[ios-bundle] Generating jank_aot_init.cpp..."
+  init_file="${generated_dir}/jank_aot_init.cpp"
+
+  cat > "${init_file}" << 'HEADER'
+// Auto-generated by ios-bundle
+// DO NOT EDIT - This file is regenerated on each build
+
+#include <iostream>
+
+// Core library load functions
+extern "C" void* jank_load_clojure_core_native();
+extern "C" void* jank_load_core();
+extern "C" void* jank_load_string();
+extern "C" void* jank_load_set();
+extern "C" void* jank_load_walk();
+extern "C" void* jank_load_template__();  // double underscore because 'template' is C++ reserved word
+extern "C" void* jank_load_test();
+
+HEADER
+
+  # Add extern declarations for application modules
+  for module in "${user_modules[@]}"; do
+    func_name="jank_load_$(echo "${module}" | tr '.' '_')"
+    echo "extern \"C\" void* ${func_name}();" >> "${init_file}"
+  done
+
+  cat >> "${init_file}" << 'MIDDLE'
+
+// Single entry point - loads all modules in correct order
+extern "C" void jank_aot_init() {
+    std::cout << "[jank] Loading core libraries..." << std::endl;
+
+    // Core libraries (always needed)
+    jank_load_clojure_core_native();
+    jank_load_core();
+    jank_load_string();
+    jank_load_set();
+    jank_load_walk();
+    jank_load_template__();  // double underscore because 'template' is C++ reserved word
+    jank_load_test();
+
+    std::cout << "[jank] Loading application modules..." << std::endl;
+
+MIDDLE
+
+  # Add load calls for application modules
+  for module in "${user_modules[@]}"; do
+    func_name="jank_load_$(echo "${module}" | tr '.' '_')"
+    echo "    std::cout << \"[jank] Loading ${module}...\" << std::endl;" >> "${init_file}"
+    echo "    ${func_name}();" >> "${init_file}"
+  done
+
+  cat >> "${init_file}" << 'FOOTER'
+
+    std::cout << "[jank] All modules loaded successfully!" << std::endl;
+}
+FOOTER
+
+  echo "[ios-bundle] Generated: ${init_file}"
+  entry_module_objects+=("${init_file}")
+fi
+
 # --- Build jank runtime for iOS if needed ---
 if [[ "${skip_build}" != "true" ]]; then
   echo ""
   echo "[ios-bundle] Building jank runtime for iOS..."
-  run "${repo_root}/bin/build-ios" "${build_dir}" Release
+  # Pass the correct target (simulator or device) to build-ios
+  if [[ "${ios_simulator}" == "true" ]]; then
+    run "${repo_root}/bin/build-ios" "${build_dir}" Release simulator
+  else
+    run "${repo_root}/bin/build-ios" "${build_dir}" Release device
+  fi
 fi
 
 # --- Cross-compile generated C++ for iOS ---
@@ -441,7 +713,8 @@ echo ""
 echo "[ios-bundle] Cross-compiling generated C++ for iOS..."
 
 # iOS compiler flags
-IOS_CXXFLAGS="-std=c++20 -O2 -fPIC"
+# Note: -Wno-c++11-narrowing needed because jank codegen produces narrowing in some places
+IOS_CXXFLAGS="-std=c++20 -O2 -fPIC -Wno-c++11-narrowing"
 IOS_CXXFLAGS="$IOS_CXXFLAGS -target $IOS_TRIPLE -isysroot $IOS_SDK"
 
 # jank include paths
@@ -454,11 +727,11 @@ IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/boost-preprocessor/includ
 IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/boost-multiprecision/include"
 IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/bdwgc/include"
 
-# Add extra include paths
+# Add extra include paths (use original_cwd for relative paths since we're in repo_root)
 if [[ ${#extra_include_paths[@]} -gt 0 ]]; then
   for inc_path in "${extra_include_paths[@]}"; do
     if [[ "${inc_path:0:1}" != "/" ]]; then
-      inc_path="$(cd "${inc_path}" 2>/dev/null && pwd || echo "${inc_path}")"
+      inc_path="${original_cwd}/${inc_path}"
     fi
     IOS_CXXFLAGS="$IOS_CXXFLAGS -I${inc_path}"
   done
@@ -471,7 +744,7 @@ IOS_CXXFLAGS="$IOS_CXXFLAGS -DJANK_TARGET_EMSCRIPTEN=1"
 IOS_CXXFLAGS="$IOS_CXXFLAGS -DIMMER_HAS_LIBGC=1"
 IOS_CXXFLAGS="$IOS_CXXFLAGS -DIMMER_TAGGED_NODE=0"
 
-# Compile each C++ file
+# Compile each C++ file (core libraries)
 compiled_object_files=()
 for cpp_file in "${compiled_objects[@]}"; do
   if [[ -f "${cpp_file}" ]]; then
@@ -498,24 +771,103 @@ for cpp_file in "${compiled_objects[@]}"; do
   fi
 done
 
+# Compile entry module C++ files (user modules + jank_aot_init.cpp)
+entry_module_object_files=()
+if [[ ${#entry_module_objects[@]} -gt 0 ]]; then
+  echo ""
+  echo "[ios-bundle] Cross-compiling entry module files..."
+  for cpp_file in "${entry_module_objects[@]}"; do
+    if [[ -f "${cpp_file}" ]]; then
+      # Put .o files in obj_dir for entry module workflow
+      basename_cpp=$(basename "${cpp_file}")
+      obj_file="${obj_dir}/${basename_cpp%.cpp}.o"
+
+      # Check if we need to recompile
+      need_recompile=false
+      if [[ "${force_regenerate}" == "true" ]]; then
+        need_recompile=true
+      elif [[ ! -f "${obj_file}" ]]; then
+        need_recompile=true
+      elif [[ "${cpp_file}" -nt "${obj_file}" ]]; then
+        need_recompile=true
+      fi
+
+      if [[ "${need_recompile}" == "true" ]]; then
+        echo "[ios-bundle] Compiling $(basename "${cpp_file}")..."
+        clang++ $IOS_CXXFLAGS -c "${cpp_file}" -o "${obj_file}"
+        echo "[ios-bundle]   -> $(ls -lh "${obj_file}" | awk '{print $5}')"
+      else
+        echo "[ios-bundle] Using cached: $(basename "${obj_file}")"
+      fi
+
+      entry_module_object_files+=("${obj_file}")
+    fi
+  done
+fi
+
 popd >/dev/null
 
-# --- Summary ---
-echo ""
-echo "[ios-bundle] Build complete!"
-echo ""
-echo "Generated libraries:"
-echo "  - ${build_dir}/libjank.a"
-echo "  - ${build_dir}/libjankzip.a"
-echo "  - ${build_dir}/third-party/bdwgc/libgc.a"
-echo ""
-echo "Generated object files:"
-for obj in "${compiled_object_files[@]}"; do
-  echo "  - ${obj}"
-done
-echo ""
-echo "To use in Xcode:"
-echo "  1. Add the .a libraries to your iOS project"
-echo "  2. Add the .o object files to your link phase"
-echo "  3. Add include paths: ${repo_root}/include/cpp"
-echo "  4. Call jank_init() and jank_load_* functions from your iOS code"
+# --- Copy jank libraries and create static library (for entry-module workflow) ---
+if [[ -n "${entry_module}" ]]; then
+  echo ""
+  echo "[ios-bundle] Copying jank libraries and core module objects..."
+
+  # Copy jank static libraries to output_dir
+  cp "${build_dir}/libjank.a" "${output_dir}/"
+  cp "${build_dir}/libjankzip.a" "${output_dir}/"
+  cp "${build_dir}/third-party/bdwgc/libgc.a" "${output_dir}/"
+
+  # Copy core library object files to obj_dir
+  # These were compiled earlier in the script to output_dir (not build_dir)
+  for core_obj in clojure_core_generated.o clojure_set_generated.o clojure_string_generated.o clojure_walk_generated.o clojure_template_generated.o clojure_test_generated.o; do
+    if [[ -f "${output_dir}/${core_obj}" ]]; then
+      cp "${output_dir}/${core_obj}" "${obj_dir}/"
+    fi
+  done
+
+  # Create a single static library from ALL .o files (core + user modules + init)
+  echo ""
+  echo "[ios-bundle] Creating ${output_library} from all object files..."
+  ar rcs "${output_dir}/${output_library}" "${obj_dir}"/*.o
+  echo "[ios-bundle]   -> $(ls -lh "${output_dir}/${output_library}" | awk '{print $5}')"
+
+  # Summary for entry-module workflow
+  echo ""
+  echo "[ios-bundle] Build complete!"
+  echo ""
+  echo "Output libraries (in ${output_dir}/):"
+  echo "  - libjank.a"
+  echo "  - libjankzip.a"
+  echo "  - libgc.a"
+  echo "  - ${output_library} (all AOT-compiled modules)"
+  echo ""
+  echo "Object files (in ${obj_dir}/):"
+  ls -1 "${obj_dir}"/*.o 2>/dev/null | while read obj; do
+    echo "  - $(basename "${obj}")"
+  done
+  echo ""
+  echo "To use in Xcode:"
+  echo "  1. Add LIBRARY_SEARCH_PATHS: ${output_dir}"
+  echo "  2. Add OTHER_LDFLAGS: -ljank -ljankzip -lgc -l$(basename "${output_library}" .a | sed 's/^lib//')"
+  echo "  3. Call jank_init() then jank_aot_init() from your iOS code"
+else
+  # Summary for single-file or core-libs-only workflow
+  echo ""
+  echo "[ios-bundle] Build complete!"
+  echo ""
+  echo "Generated libraries:"
+  echo "  - ${build_dir}/libjank.a"
+  echo "  - ${build_dir}/libjankzip.a"
+  echo "  - ${build_dir}/third-party/bdwgc/libgc.a"
+  echo ""
+  echo "Generated object files:"
+  for obj in "${compiled_object_files[@]}"; do
+    echo "  - ${obj}"
+  done
+  echo ""
+  echo "To use in Xcode:"
+  echo "  1. Add the .a libraries to your iOS project"
+  echo "  2. Add the .o object files to your link phase"
+  echo "  3. Add include paths: ${repo_root}/include/cpp"
+  echo "  4. Call jank_init() and jank_load_* functions from your iOS code"
+fi
