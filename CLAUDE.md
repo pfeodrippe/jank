@@ -19,6 +19,20 @@ Always added what you learned to new .md files in the compiler+runtime/ai folder
 Put them in the `20251129-001-some-time.md` format.
 Increment the number for the same date, then restart on 001 in the next day!
 
+## Rule 2: Use tee for CLI commands
+
+When running CLI commands (especially build scripts, tests, or any commands with significant output), always use `tee` to save the output to a file so the user can see the full output. This is especially useful for debugging failures.
+
+Example:
+```bash
+make sdf-ios-simulator-run 2>&1 | tee build-output.txt
+```
+
+This way:
+1. The user can review the full output after the conversation
+2. You can refer to the file if something fails
+3. The output is preserved for later analysis
+
 ## Building
 
 **CRITICAL: Use these EXACT commands with hardcoded paths (no command substitution like `$(...)` which can fail):**

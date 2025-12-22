@@ -224,6 +224,21 @@ namespace jank
       __rt_ctx->load_module("/clojure.core", module::origin::latest).expect_ok();
     }
     __rt_ctx->compile_module(opts.target_module).expect_ok();
+
+    /* Print loaded modules in dependency order if requested */
+    if(opts.list_modules)
+    {
+      auto const modules_rlocked{ __rt_ctx->loaded_modules_in_order.rlock() };
+      for(auto const &it : *modules_rlocked)
+      {
+        /* Skip core modules - they're part of libjank */
+        if(module::is_core_module(it))
+        {
+          continue;
+        }
+        util::println("{}", it);
+      }
+    }
   }
 
   static void repl()

@@ -84,6 +84,9 @@ namespace jank::util::cli
     std::string output_object_filename;
     bool output_shared_library{};
 
+    /* Compile-module command. */
+    bool list_modules{}; /* Print loaded modules in dependency order (for AOT build scripts) */
+
     /* REPL command. */
     bool repl_server{};
 
