@@ -643,7 +643,7 @@ namespace jank::runtime
           native_vector<object_ref> vec;
           vec.reserve(size);
 
-          for(auto const s : match_results)
+          for(auto const &s : match_results)
           {
             vec.emplace_back(make_box<obj::persistent_string>(s.str()));
           }

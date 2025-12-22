@@ -443,37 +443,57 @@ namespace jank::runtime
 
     /* Capture stderr output (C++ compilation errors) and forward them through
      * the output redirection system so they appear in the IDE REPL. */
-    scoped_stderr_redirect const stderr_redirect{};
+    std::string parse_error_msg;
+    std::string exec_error_msg;
+    bool parse_failed = false;
+    bool exec_failed = false;
 
-    auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
-    if(!parse_res)
     {
-      /* TODO: Helper to turn an llvm::Error into a string. */
-      llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "error: ");
-      /* Flush LLVM's error stream to ensure the error reaches the fd before
-       * scoped_stderr_redirect reads from its temp file. */
-      llvm::errs().flush();
+      scoped_stderr_redirect const stderr_redirect{};
+
+      auto parse_res{ jit_prc.interpreter->Parse({ code.data(), code.size() }) };
+      if(!parse_res)
+      {
+        /* Capture error to string */
+        llvm::raw_string_ostream error_stream(parse_error_msg);
+        llvm::logAllUnhandledErrors(parse_res.takeError(), error_stream, "error: ");
+        error_stream.flush();
+        parse_failed = true;
+      }
+      else
+      {
+        auto &partial_tu{ parse_res.get() };
+
+        /* Writing the module before executing it because `llvm::Interpreter::Execute`
+         * moves the `llvm::Module` held in the `PartialTranslationUnit`. */
+        if(truthy(compile_files_var->deref()))
+        {
+          auto module_name{ runtime::to_string(current_module_var->deref()) };
+          write_module(module_name, partial_tu.TheModule.get()).expect_ok();
+        }
+
+        auto exec_res(jit_prc.interpreter->Execute(partial_tu));
+        if(exec_res)
+        {
+          llvm::raw_string_ostream error_stream(exec_error_msg);
+          llvm::logAllUnhandledErrors(std::move(exec_res), error_stream, "error: ");
+          error_stream.flush();
+          exec_failed = true;
+        }
+      }
+    } // stderr_redirect scope ends here
+
+    /* Check for errors after the redirect scope ends.
+     * Error messages are captured to strings and can be accessed if needed. */
+    if(parse_failed)
+    {
       return error::runtime_invalid_cpp_eval();
     }
-    auto &partial_tu{ parse_res.get() };
-
-    /* Writing the module before executing it because `llvm::Interpreter::Execute`
-     * moves the `llvm::Module` held in the `PartialTranslationUnit`. */
-    if(truthy(compile_files_var->deref()))
+    if(exec_failed)
     {
-      auto module_name{ runtime::to_string(current_module_var->deref()) };
-      write_module(module_name, partial_tu.TheModule.get()).expect_ok();
-    }
-
-    auto exec_res(jit_prc.interpreter->Execute(partial_tu));
-    if(exec_res)
-    {
-      llvm::logAllUnhandledErrors(std::move(exec_res), llvm::errs(), "error: ");
-      /* Flush LLVM's error stream to ensure the error reaches the fd before
-       * scoped_stderr_redirect reads from its temp file. */
-      llvm::errs().flush();
       return error::runtime_invalid_cpp_eval();
     }
+
     return ok();
   }
 #endif

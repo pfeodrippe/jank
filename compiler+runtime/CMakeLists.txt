@@ -53,6 +53,7 @@ option(jank_test "Enable jank's test suite" OFF)
 option(jank_unity_build "Optimize translation unit compilation for the number of cores" OFF)
 option(jank_target_wasm "Experimental wasm32-unknown-emscripten build" OFF)
 option(jank_target_ios "Build for iOS (arm64-apple-ios)" OFF)
+option(jank_ios_jit "Enable JIT on iOS (requires iOS LLVM build, dev only)" OFF)
 option(jank_debug_gc "Enable GC debug assertions" OFF)
 set(jank_sanitize "none" CACHE STRING "The type of Clang sanitization to use (or none)")
 set(jank_resource_dir
@@ -129,16 +130,31 @@ if(jank_target_ios AND NOT ${CMAKE_SYSTEM_NAME} STREQUAL "iOS")
   message(WARNING "jank_target_ios is ON but this build is not using the iOS toolchain. The configuration may fail.")
 endif()
 
-# iOS and WASM share similar requirements: no JIT, no LLVM
+# Validate jank_ios_jit only makes sense with jank_target_ios
+if(jank_ios_jit AND NOT jank_target_ios)
+  message(FATAL_ERROR "jank_ios_jit requires jank_target_ios to be ON")
+endif()
+
+# Helper variable: whether JIT is disabled for this build
+# WASM never has JIT; iOS has JIT only if jank_ios_jit is ON
+set(jank_no_jit OFF)
+if(jank_target_wasm OR (jank_target_ios AND NOT jank_ios_jit))
+  set(jank_no_jit ON)
+endif()
+
+# iOS and WASM share similar requirements: no JIT, no LLVM (unless jank_ios_jit)
 if(jank_target_wasm OR jank_target_ios)
   # Simpler flags for wasm to avoid conflicts with emscripten's toolchain
   # -fPIC is required for MAIN_MODULE dynamic linking support
+  # RTTI is enabled for all builds - iOS JIT requires it for virtual function dispatch
+  set(jank_rtti_flag -frtti)
   set(
     jank_aot_compiler_flags
     -Wall
     -Wno-deprecated-declarations
+    -Wno-range-loop-construct
     -fno-common
-    -frtti
+    ${jank_rtti_flag}
     -fexceptions
     -fPIC
   )
@@ -183,8 +199,11 @@ if(jank_target_wasm)
   set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
 elseif(jank_target_ios)
   # iOS-specific flags - similar to WASM but for iOS
+  # Note: We explicitly include -std=gnu++20 for JIT compilation (JANK_JIT_FLAGS)
+  # even though CMake sets the standard for AOT compilation.
   set(
     jank_common_compiler_flags
+    -std=gnu++20
     -DIMMER_HAS_LIBGC=1 -DIMMER_TAGGED_NODE=0 -DHAVE_CXX14=1
     -DFOLLY_HAVE_JEMALLOC=0 -DFOLLY_HAVE_TCMALLOC=0 -DFOLLY_ASSUME_NO_JEMALLOC=1 -DFOLLY_ASSUME_NO_TCMALLOC=1
     -DJANK_TARGET_IOS=1
@@ -229,6 +248,13 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
   list(APPEND jank_common_compiler_flags -Og -g -DNDEBUG)
 endif()
 
+# iOS-specific warning suppressions (needed because cpptrace is stubbed and
+# some jank types are non-standard-layout)
+# Note: -Wno-range-loop-construct is added in jank_aot_compiler_flags after -Wall
+if(jank_target_ios)
+  list(APPEND jank_common_compiler_flags -Wno-mismatched-tags -Wno-invalid-offsetof)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(jank_enable_phase_2 ON)
 endif()
@@ -253,91 +279,149 @@ set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTOR
 
 set(jank_jit_compiler_flags "")
 
-if(NOT jank_target_wasm AND NOT jank_target_ios)
+if(NOT jank_no_jit)
   # ---- Clang/LLVM ----
-  include(cmake/llvm.cmake)
+  if(jank_ios_jit)
+    # iOS JIT: Use pre-built iOS LLVM (from bin/build-ios-llvm)
+    # Default location is ~/dev/ios-llvm-build/ (set by build-ios-llvm script)
+    # Determine iOS target type
+    if(CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+      set(IOS_LLVM_DEFAULT_DIR "$ENV{HOME}/dev/ios-llvm-build/ios-llvm-simulator")
+    else()
+      set(IOS_LLVM_DEFAULT_DIR "$ENV{HOME}/dev/ios-llvm-build/ios-llvm-device")
+    endif()
+    set(IOS_LLVM_DIR "${IOS_LLVM_DEFAULT_DIR}" CACHE PATH "Path to iOS LLVM installation")
 
-if(
-  NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
-  OR
-  NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL CLANG_PACKAGE_VERSION
-)
-  message(
-    FATAL_ERROR
-    "Found Clang ${CLANG_PACKAGE_VERSION} to embed in jank, "
-    "but trying to use ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} to compile it. "
-    "Please ensure you're using the same Clang to compile jank as you are embedding in jank. "
-    "Follow the build.md documentation."
+    if(NOT EXISTS "${IOS_LLVM_DIR}/lib/cmake/llvm")
+      message(FATAL_ERROR
+        "iOS LLVM not found at ${IOS_LLVM_DIR}\n"
+        "Run ./bin/build-ios-llvm to build LLVM for iOS first.")
+    endif()
+
+    # Find LLVM/Clang for iOS
+    # NO_CMAKE_FIND_ROOT_PATH is needed because cross-compilation prepends sysroot to paths
+    find_package(LLVM REQUIRED CONFIG PATHS "${IOS_LLVM_DIR}/lib/cmake/llvm" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    find_package(Clang REQUIRED CONFIG PATHS "${IOS_LLVM_DIR}/lib/cmake/clang" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+
+    message(STATUS "Using iOS LLVM: ${IOS_LLVM_DIR}")
+    message(STATUS "LLVM version: ${LLVM_VERSION}")
+
+    set(llvm_dir "${IOS_LLVM_DIR}")
+    set(LLVM_INCLUDE_DIRS "${IOS_LLVM_DIR}/include")
+
+    # Set CLANG_VERSION_MAJOR for compatibility
+    string(REGEX MATCH "^[0-9]+" CLANG_VERSION_MAJOR "${LLVM_VERSION}")
+    set(CLANG_PACKAGE_VERSION "${LLVM_VERSION}")
+  else()
+    # Desktop: Use system LLVM
+    include(cmake/llvm.cmake)
+  endif()
+
+  # Skip compiler version check for iOS JIT (using cross-compiled LLVM)
+  if(NOT jank_ios_jit)
+    if(
+      NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+      OR
+      NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL CLANG_PACKAGE_VERSION
+    )
+      message(
+        FATAL_ERROR
+        "Found Clang ${CLANG_PACKAGE_VERSION} to embed in jank, "
+        "but trying to use ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} to compile it. "
+        "Please ensure you're using the same Clang to compile jank as you are embedding in jank. "
+        "Follow the build.md documentation."
+      )
+    endif()
+  endif()
+
+  function(jank_hook_llvm target)
+    set(tgt "${target}")
+    target_include_directories("${tgt}" SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+    target_compile_definitions("${tgt}" PRIVATE ${LLVM_DEFINITIONS})
+    target_link_directories("${tgt}" PRIVATE ${llvm_dir}/lib)
+  endfunction()
+  # ---- Clang/LLVM ----
+
+  # ---- Clang JIT environment ----
+  # We need to know some info about Clang, at runtime, which the JIT itself
+  # has a hard time finding. Since we're expecting jank to go hand in hand with
+  # the Clang which was used to build it, we bake this info into jank.
+  #
+  # This should greatly simplify distribution, since package maintainers
+  # can configure jank correctly during the build phase and then it'll just
+  # continue to work with that setup once it's installed.
+
+  if(jank_ios_jit)
+    # iOS JIT: Use iOS LLVM paths and iOS SDK includes
+    set(clang_resource_dir "${IOS_LLVM_DIR}/lib/clang/${CLANG_VERSION_MAJOR}")
+
+    # Get iOS SDK include paths
+    set(clang_system_include_flags
+      "-isysroot" "${CMAKE_OSX_SYSROOT}"
+      "-I${IOS_LLVM_DIR}/include/c++/v1"
+    )
+
+    list(APPEND jank_common_compiler_flags
+      -DJANK_RESOURCE_DIR="${jank_resource_dir}"
+      -DJANK_CLANG_PATH="${IOS_LLVM_DIR}/bin/clang++"
+      -DJANK_CLANG_MAJOR_VERSION="${CLANG_VERSION_MAJOR}"
+      -DJANK_CLANG_RESOURCE_DIR="${clang_resource_dir}"
+      -DJANK_IOS_SDK="${CMAKE_OSX_SYSROOT}"
+    )
+  else()
+    # Desktop: Extract includes from the compiler
+    execute_process(
+      COMMAND bash -c "${CMAKE_CXX_COMPILER} -xc++ -E -v /dev/null 2>&1 | sed -n -e '/^.include/,\${' -e '/^ \\/.*/p' -e '}' | sed 's/^[[:space:]]\\{1,\\}/-I/' | sed 's/ (framework directory)//'"
+      RESULT_VARIABLE clang_system_includes_result
+      OUTPUT_VARIABLE clang_system_includes_unescaped
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT clang_system_includes_result EQUAL 0)
+      message(FATAL_ERROR
+        "Failed to extract include paths from ${CMAKE_CXX_COMPILER}:\n"
+        "  exit code: ${clang_system_includes_result}"
+      )
+    endif()
+    string(REPLACE "\n" " " clang_system_include_dirs "${clang_system_includes_unescaped}")
+    separate_arguments(clang_system_include_dirs)
+
+    set(clang_system_include_flags "")
+    foreach(dir ${clang_system_include_dirs})
+      list(APPEND clang_system_include_flags ${dir})
+    endforeach()
+
+    execute_process(
+      COMMAND ${CMAKE_CXX_COMPILER} -print-resource-dir
+      RESULT_VARIABLE clang_resource_dir_result
+      OUTPUT_VARIABLE clang_resource_dir
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT clang_resource_dir_result EQUAL 0)
+      message(FATAL_ERROR
+        "Failed to extract resource dir ${CMAKE_CXX_COMPILER}:\n"
+        "  exit code: ${clang_resource_dir_result}"
+      )
+    endif()
+    list(APPEND jank_common_compiler_flags
+      -DJANK_RESOURCE_DIR="${jank_resource_dir}"
+      -DJANK_CLANG_PATH="${CMAKE_CXX_COMPILER}"
+      -DJANK_CLANG_MAJOR_VERSION="${CLANG_VERSION_MAJOR}"
+      -DJANK_CLANG_RESOURCE_DIR="${clang_resource_dir}"
+    )
+  endif()
+
+  set(
+    jank_jit_compiler_flags
+    # We don't actually want to see any warnings for JIT compiled code.
+    -w
+    -fwrapv
+    -fno-stack-protector
+    -fPIC
+    -Xclang -fno-validate-pch
+    -Xclang -fno-pch-timestamp
+    ${LLVM_DEFINITIONS_LIST}
+    ${clang_system_include_flags}
   )
-endif()
-
-function(jank_hook_llvm target)
-  set(tgt "${target}")
-  target_include_directories("${tgt}" SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_compile_definitions("${tgt}" PRIVATE ${LLVM_DEFINITIONS})
-  target_link_directories("${tgt}" PRIVATE ${llvm_dir}/lib)
-endfunction()
-# ---- Clang/LLVM ----
-
-# ---- Clang JIT environment ----
-# We need to know some info about Clang, at runtime, which the JIT itself
-# has a hard time finding. Since we're expecting jank to go hand in hand with
-# the Clang which was used to build it, we bake this info into jank.
-#
-# This should greatly simplify distribution, since package maintainers
-# can configure jank correctly during the build phase and then it'll just
-# continue to work with that setup once it's installed.
-execute_process(
-  COMMAND bash -c "${CMAKE_CXX_COMPILER} -xc++ -E -v /dev/null 2>&1 | sed -n -e '/^.include/,\${' -e '/^ \\/.*/p' -e '}' | sed 's/^[[:space:]]\\{1,\\}/-I/' | sed 's/ (framework directory)//'"
-  RESULT_VARIABLE clang_system_includes_result
-  OUTPUT_VARIABLE clang_system_includes_unescaped
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-if(NOT clang_system_includes_result EQUAL 0)
-  message(FATAL_ERROR
-    "Failed to extract include paths from ${CMAKE_CXX_COMPILER}:\n"
-    "  exit code: ${clang_system_includes_result}"
-  )
-endif()
-string(REPLACE "\n" " " clang_system_include_dirs "${clang_system_includes_unescaped}")
-separate_arguments(clang_system_include_dirs)
-
-set(clang_system_include_flags "")
-foreach(dir ${clang_system_include_dirs})
-  list(APPEND clang_system_include_flags ${dir})
-endforeach()
-
-execute_process(
-  COMMAND ${CMAKE_CXX_COMPILER} -print-resource-dir
-  RESULT_VARIABLE clang_resource_dir_result
-  OUTPUT_VARIABLE clang_resource_dir
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-if(NOT clang_resource_dir_result EQUAL 0)
-  message(FATAL_ERROR
-    "Failed to extract resource dir ${CMAKE_CXX_COMPILER}:\n"
-    "  exit code: ${clang_resource_dir_result}"
-  )
-endif()
-list(APPEND jank_common_compiler_flags
-  -DJANK_RESOURCE_DIR="${jank_resource_dir}"
-  -DJANK_CLANG_PATH="${CMAKE_CXX_COMPILER}"
-  -DJANK_CLANG_MAJOR_VERSION="${CLANG_VERSION_MAJOR}"
-  -DJANK_CLANG_RESOURCE_DIR="${clang_resource_dir}"
-)
-
-set(
-  jank_jit_compiler_flags
-  # We don't actually want to see any warnings for JIT compiled code.
-  -w
-  -fwrapv
-  -fno-stack-protector
-  -fPIC
-  -Xclang -fno-validate-pch
-  -Xclang -fno-pch-timestamp
-  ${LLVM_DEFINITIONS_LIST}
-  ${clang_system_include_flags}
-)
   # ---- Clang JIT environment ----
 else()
   function(jank_hook_llvm target)
@@ -449,8 +533,14 @@ set(jank_lib_standalone_deps
 if(NOT jank_target_wasm AND NOT jank_target_ios)
   list(APPEND jank_lib_standalone_deps Boost::multiprecision folly_lib bdwgc::gctba)
 endif()
-if(NOT jank_target_wasm AND NOT jank_target_ios)
-  list(APPEND jank_lib_standalone_deps nanobench_lib clangCppInterOp cpptrace::cpptrace ftxui::screen ftxui::dom)
+if(NOT jank_no_jit)
+  if(jank_ios_jit)
+    # iOS JIT: Only CppInterOp
+    list(APPEND jank_lib_standalone_deps clangCppInterOp)
+  else()
+    # Desktop: Full dependencies
+    list(APPEND jank_lib_standalone_deps nanobench_lib clangCppInterOp cpptrace::cpptrace ftxui::screen ftxui::dom)
+  endif()
 endif()
 
 if(NOT jank_target_wasm AND NOT jank_target_ios)
@@ -488,12 +578,25 @@ set(BUILD_SHARED_LIBS OFF)
 
 include(FetchContent)
 include(cmake/dependency/bdwgc.cmake)
-if(NOT jank_target_wasm AND NOT jank_target_ios)
-  include(cmake/dependency/ftxui.cmake)
-  include(cmake/dependency/cpptrace.cmake)
-  include(cmake/dependency/cppinterop.cmake)
-  include(cmake/dependency/boost-multiprecision.cmake)
-else()
+if(NOT jank_no_jit)
+  # Desktop or iOS JIT: Include CppInterOp
+  if(jank_ios_jit)
+    # iOS JIT: Use pre-built iOS CppInterOp
+    message(STATUS "Using iOS CppInterOp from ${IOS_LLVM_DIR}")
+
+    # Import CppInterOp as a static library from iOS LLVM build
+    add_library(clangCppInterOp STATIC IMPORTED)
+    set_target_properties(clangCppInterOp PROPERTIES
+      IMPORTED_LOCATION "${IOS_LLVM_DIR}/lib/libclangCppInterOp.a"
+    )
+  else()
+    # Desktop: Use standard CppInterOp build
+    include(cmake/dependency/ftxui.cmake)
+    include(cmake/dependency/cpptrace.cmake)
+    include(cmake/dependency/cppinterop.cmake)
+    include(cmake/dependency/boost-multiprecision.cmake)
+  endif()
+elseif(jank_target_wasm)
   message(STATUS "Skipping ftxui/cpptrace/boost-multiprecision dependencies for wasm build")
 
   # ---- CppInterOp WASM build ----
@@ -523,6 +626,9 @@ else()
     set(JANK_WASM_HAS_CPPINTEROP FALSE)
   endif()
   # ---- CppInterOp WASM build ----
+else()
+  # iOS without JIT: no CppInterOp
+  message(STATUS "iOS build without JIT - no CppInterOp")
 endif()
 
 if(NOT jank_target_wasm AND NOT jank_target_ios)
@@ -671,8 +777,9 @@ if(jank_target_wasm)
     # Stubs for native-only functionality
     src/cpp/jank/wasm_native_stubs.cpp
   )
-elseif(jank_target_ios)
-  # iOS build: runtime without JIT/LLVM (similar to WASM)
+elseif(jank_target_ios AND NOT jank_ios_jit)
+  # iOS build WITHOUT JIT: runtime without JIT/LLVM (similar to WASM)
+  # For iOS with JIT, we fall through to the native build below
   list(APPEND jank_lib_sources ${jank_runtime_common_sources})
   list(APPEND jank_lib_sources
     # Reuse WASM environment (minimal deps)
@@ -691,9 +798,9 @@ elseif(jank_target_ios)
     src/cpp/jank/gc_wasm_stub.cpp
   )
 
-  # If CppInterOp WASM build is available, enable analyzer, codegen, and eval
-  if(JANK_WASM_HAS_CPPINTEROP)
-    message(STATUS "Enabling analyzer and eval for WASM build (CppInterOp available)")
+  # iOS AOT can optionally have CppInterOp for analysis
+  if(JANK_IOS_HAS_CPPINTEROP)
+    message(STATUS "Enabling analyzer and eval for iOS AOT build (CppInterOp available)")
     list(APPEND jank_lib_sources
       # Analyze files
       src/cpp/jank/analyze/processor.cpp
@@ -753,29 +860,69 @@ elseif(jank_target_ios)
     message(STATUS "WASM build without CppInterOp - eval not available")
   endif()
 else()
-  # Native build: full runtime + AOT/codegen/nREPL
+  # Native build (desktop or iOS JIT): full runtime + AOT/codegen
   list(APPEND jank_lib_sources ${jank_runtime_common_sources})
   list(APPEND jank_lib_sources
-    src/cpp/jank/util/environment.cpp
     src/cpp/jank/util/sha256.cpp
     src/cpp/jank/util/cli.cpp
     src/cpp/jank/util/clang_format.cpp
-    src/cpp/jank/util/clang.cpp
     src/cpp/jank/error/aot.cpp
     src/cpp/jank/error/codegen.cpp
     src/cpp/jank/codegen/processor.cpp
     src/cpp/jank/codegen/wasm_patch_processor.cpp
     src/cpp/jank/codegen/llvm_processor.cpp
-    src/cpp/jank/nrepl_server/asio.cpp
-    src/cpp/jank/nrepl_server/native_header_completion.cpp
-    src/cpp/jank/nrepl_server/native_header_index.cpp
     src/cpp/jank/aot/processor.cpp
     src/cpp/jank/aot/resource.cpp
-    src/cpp/jank/compiler_native.cpp
-    src/cpp/jank/perf_native.cpp
-    src/cpp/jank/ui/highlight.cpp
-    src/cpp/jank/error/report.cpp
-    src/cpp/jank/runtime/perf.cpp
+  )
+
+  # Desktop-only: FTXUI-based UI (not available on iOS)
+  if(NOT jank_ios_jit)
+    list(APPEND jank_lib_sources
+      src/cpp/jank/ui/highlight.cpp
+      src/cpp/jank/error/report.cpp
+      src/cpp/jank/util/clang.cpp
+    )
+  else()
+    # iOS JIT: Use iOS-specific clang stubs (no external clang executable)
+    list(APPEND jank_lib_sources
+      src/cpp/jank/util/clang_ios.cpp
+    )
+  endif()
+
+  # iOS JIT uses iOS-specific environment (returns app bundle paths)
+  if(jank_ios_jit)
+    list(APPEND jank_lib_sources
+      src/cpp/jank/util/environment_ios.cpp
+      src/cpp/jank/runtime/perf_wasm.cpp
+      # Stubs for native header completion (no Boost Asio on iOS)
+      src/cpp/jank/nrepl_server/native_header_stubs_ios.cpp
+      # iOS error reporting (simple stderr, no FTXUI)
+      src/cpp/jank/error/report_ios.cpp
+      # GC stub for GC_throw_bad_alloc
+      src/cpp/jank/gc_wasm_stub.cpp
+      # LLVM RTTI stub (LLVM is built without RTTI, jank needs RTTI)
+      src/cpp/jank/llvm_rtti_stub.cpp
+    )
+    # environment_ios.cpp uses Objective-C APIs
+    set_source_files_properties(
+      src/cpp/jank/util/environment_ios.cpp
+      PROPERTIES COMPILE_FLAGS "-x objective-c++"
+    )
+  else()
+    # Desktop: full native environment and nREPL with Boost Asio
+    list(APPEND jank_lib_sources
+      src/cpp/jank/util/environment.cpp
+      src/cpp/jank/nrepl_server/asio.cpp
+      src/cpp/jank/nrepl_server/native_header_completion.cpp
+      src/cpp/jank/nrepl_server/native_header_index.cpp
+      src/cpp/jank/compiler_native.cpp
+      src/cpp/jank/perf_native.cpp
+      src/cpp/jank/runtime/perf.cpp
+    )
+  endif()
+
+  # Analyze and common files for all native builds (desktop and iOS JIT)
+  list(APPEND jank_lib_sources
     # Analyze files (require LLVM, not available in WASM)
     src/cpp/jank/analyze/processor.cpp
     src/cpp/jank/analyze/expression.cpp
@@ -830,8 +977,8 @@ else()
   )
 endif()
 
-if(jank_target_wasm OR jank_target_ios)
-  # WASM/iOS always uses the stub JIT processor - no native execution possible
+if(jank_no_jit)
+  # WASM/iOS (without JIT) uses the stub JIT processor - no native execution possible
   # CppInterOp in WASM is used for type resolution and analysis, not JIT
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor_stub_wasm.cpp)
   if(JANK_WASM_HAS_CPPINTEROP)
@@ -839,6 +986,7 @@ if(jank_target_wasm OR jank_target_ios)
     list(APPEND jank_lib_sources src/cpp/jank/jit/interpreter.cpp)
   endif()
 else()
+  # Desktop or iOS with JIT: use real JIT processor
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor.cpp)
   list(APPEND jank_lib_sources src/cpp/jank/jit/interpreter.cpp)
 endif()
@@ -902,36 +1050,72 @@ if(jank_target_wasm)
     )
   endif()
 elseif(jank_target_ios)
-  # Use wasm-like implementations without cpptrace for iOS
-  target_sources(jank_lib PRIVATE
-    src/cpp/jtl/panic_wasm.cpp
-    src/cpp/jtl/assert_wasm.cpp
-  )
+  if(jank_ios_jit)
+    # iOS with JIT: Use normal implementations (like desktop)
+    # cpptrace may not work on iOS, so use wasm-like panic/assert
+    target_sources(jank_lib PRIVATE
+      src/cpp/jtl/panic_wasm.cpp
+      src/cpp/jtl/assert_wasm.cpp
+    )
 
-  # Define JANK_TARGET_IOS, JANK_TARGET_WASM, and JANK_TARGET_EMSCRIPTEN for conditional compilation
-  # iOS reuses the WASM code paths since both lack JIT/LLVM
-  target_compile_definitions(jank_lib PUBLIC JANK_TARGET_IOS=1 JANK_TARGET_WASM=1 JANK_TARGET_EMSCRIPTEN=1)
+    # Define JANK_TARGET_IOS only - JIT is enabled like desktop
+    target_compile_definitions(jank_lib PUBLIC JANK_TARGET_IOS=1 JANK_IOS_JIT=1)
 
-  # iOS includes
-  target_include_directories(
-    jank_lib
-    PUBLIC
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include/cpp>"
-  )
-  target_include_directories(
-    jank_lib
-    SYSTEM
-    PUBLIC
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/immer>"
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bdwgc/include>"
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cli11/include>"
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/zip/src>"
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bpptree/include>"
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-preprocessor/include>"
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-multiprecision/include>"
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/stduuid/include/>"
-    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/folly>"
-  )
+    # iOS includes including LLVM/CppInterOp
+    target_include_directories(
+      jank_lib
+      PUBLIC
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include/cpp>"
+    )
+    target_include_directories(
+      jank_lib
+      SYSTEM
+      PUBLIC
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/immer>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bdwgc/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cli11/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/zip/src>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bpptree/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-preprocessor/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-multiprecision/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/stduuid/include/>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/folly>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cppinterop/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cppinterop/lib>"
+      "${IOS_LLVM_DIR}/include"
+    )
+  else()
+    # iOS without JIT: Use wasm-like implementations
+    target_sources(jank_lib PRIVATE
+      src/cpp/jtl/panic_wasm.cpp
+      src/cpp/jtl/assert_wasm.cpp
+    )
+
+    # Define JANK_TARGET_IOS, JANK_TARGET_WASM, and JANK_TARGET_EMSCRIPTEN for conditional compilation
+    # iOS reuses the WASM code paths since both lack JIT/LLVM
+    target_compile_definitions(jank_lib PUBLIC JANK_TARGET_IOS=1 JANK_TARGET_WASM=1 JANK_TARGET_EMSCRIPTEN=1)
+
+    # iOS includes (no LLVM)
+    target_include_directories(
+      jank_lib
+      PUBLIC
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include/cpp>"
+    )
+    target_include_directories(
+      jank_lib
+      SYSTEM
+      PUBLIC
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/immer>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bdwgc/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cli11/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/zip/src>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/bpptree/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-preprocessor/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/boost-multiprecision/include>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/stduuid/include/>"
+      "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/folly>"
+    )
+  endif()
 else()
   # Use normal implementations with cpptrace for non-wasm
   target_sources(jank_lib PRIVATE 
@@ -974,15 +1158,29 @@ target_link_libraries(
 if(NOT jank_target_wasm AND NOT jank_target_ios)
   target_link_libraries(jank_lib PRIVATE Boost::multiprecision bdwgc::gctba)
 endif()
+if(jank_ios_jit)
+  # iOS JIT needs folly for SharedMutex and other primitives
+  target_link_libraries(jank_lib PRIVATE folly_lib)
+endif()
 
-if(NOT jank_target_wasm AND NOT jank_target_ios)
-  target_link_libraries(
-    jank_lib PRIVATE
-    nanobench_lib
-    clangCppInterOp
-    cpptrace::cpptrace
-    ftxui::screen ftxui::dom
-  )
+if(NOT jank_no_jit)
+  # Desktop or iOS with JIT: link CppInterOp
+  if(jank_ios_jit)
+    # iOS JIT: Link against iOS-built CppInterOp
+    target_link_libraries(
+      jank_lib PRIVATE
+      clangCppInterOp
+    )
+  else()
+    # Desktop: Full dependencies including nanobench, cpptrace, ftxui
+    target_link_libraries(
+      jank_lib PRIVATE
+      nanobench_lib
+      clangCppInterOp
+      cpptrace::cpptrace
+      ftxui::screen ftxui::dom
+    )
+  endif()
 else()
   # WASM builds with CppInterOp support
   if(JANK_WASM_HAS_CPPINTEROP)
@@ -1004,9 +1202,9 @@ jank_hook_llvm(jank_lib)
 get_target_property(jank_lib_includes_prop jank_lib INCLUDE_DIRECTORIES)
 set(jank_lib_includes "")
 
-# For wasm builds, don't embed include paths in JANK_JIT_FLAGS
+# For wasm/iOS-without-JIT builds, don't embed include paths in JANK_JIT_FLAGS
 # This prevents our -I flags from overriding emscripten's system includes
-if(NOT jank_target_wasm AND NOT jank_target_ios)
+if(NOT jank_no_jit)
   foreach(dir ${jank_lib_includes_prop})
     # System includes are just the path, but normal includes have this format:
     # $<BUILD_INTERFACE:/home/jeaye/projects/jank/compiler+runtime/include/cpp>
@@ -1059,7 +1257,8 @@ set_target_properties(jank_lib PROPERTIES ENABLE_EXPORTS 1)
 
 # ---- libfolly.a ----
 
-if(NOT jank_target_wasm AND NOT jank_target_ios)
+# Build folly for desktop and iOS JIT (but not WASM or iOS AOT)
+if(NOT jank_target_wasm AND (NOT jank_target_ios OR jank_ios_jit))
   # Folly is well and truly a pain in the ass to build through its
   # own build system. It regularly fails to build for me
   # on all sorts of standard systems (both Linux and macOS) and jank

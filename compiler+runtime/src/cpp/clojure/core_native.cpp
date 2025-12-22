@@ -381,10 +381,12 @@ namespace clojure::core_native
     if(added)
     {
       auto const include_code{ util::format("#include {}\n", include_arg) };
+      std::cerr << "[jank-jit] Attempting to compile: " << include_code << std::flush;
       auto const res{ __rt_ctx->eval_cpp_string(include_code) };
       if(res.is_err())
       {
         auto const alias_sym(try_object<obj::symbol>(alias));
+        std::cerr << "[jank-jit] Compilation FAILED for: " << include_code << std::flush;
         throw std::runtime_error{ util::format(
           "Failed to JIT compile native header require.\n"
           "  Namespace: {}\n"
@@ -398,6 +400,7 @@ namespace clojure::core_native
           runtime::to_string(header),
           include_arg) };
       }
+      std::cerr << "[jank-jit] Compilation SUCCEEDED for: " << include_code << std::flush;
     }
     return jank_nil;
   }

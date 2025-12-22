@@ -15,7 +15,7 @@
 #include <llvm/ExecutionEngine/JITEventListener.h>
 #include <llvm/IRReader/IRReader.h>
 
-#include <cpptrace/gdb_jit.hpp>
+#include <jank/util/cpptrace.hpp>
 
 #include <jank/jit/processor.hpp>
 #include <jank/util/make_array.hpp>
@@ -169,6 +169,8 @@ namespace jank::jit
     args.emplace_back(strdup(util::format("{}/lib", jank_resource_dir).c_str()));
 
     /* We need to include our special runtime PCH. */
+#if !defined(JANK_TARGET_IOS)
+    /* On desktop, build PCH on demand if not found. */
     auto pch_path{ util::find_pch(binary_version) };
     if(pch_path.is_none())
     {
@@ -182,6 +184,18 @@ namespace jank::jit
     auto const &pch_path_str{ pch_path.unwrap() };
     args.emplace_back("-include-pch");
     args.emplace_back(strdup(pch_path_str.c_str()));
+#else
+    /* On iOS, PCH is optional - if it exists (pre-bundled), use it.
+     * Otherwise we'll parse the prelude header after interpreter creation. */
+    auto pch_path{ util::find_pch(binary_version) };
+    bool const has_pch{ pch_path.is_some() };
+    if(has_pch)
+    {
+      auto const &pch_path_str{ pch_path.unwrap() };
+      args.emplace_back("-include-pch");
+      args.emplace_back(strdup(pch_path_str.c_str()));
+    }
+#endif
 
     args.emplace_back("-w");
     args.emplace_back("-Wno-c++11-narrowing");
@@ -210,6 +224,21 @@ namespace jank::jit
     interpreter.reset(static_cast<Cpp::Interpreter *>(
       Cpp::CreateInterpreter(args, {}, vfs, static_cast<int>(llvm::CodeModel::Large))));
 
+#if defined(JANK_TARGET_IOS)
+    /* On iOS without PCH, we need to explicitly include the prelude header
+     * so that jank types are available for the analyzer. This is slower than
+     * using a pre-compiled header, but ensures types are properly registered. */
+    if(!has_pch)
+    {
+      profile::timer const pch_timer{ "jit prelude parse" };
+      auto result = interpreter->process("#include <jank/prelude.hpp>");
+      if(result != Cpp::Interpreter::kSuccess)
+      {
+        throw std::runtime_error("Failed to parse jank prelude header");
+      }
+    }
+#endif
+
     /* Install our custom fatal error handler so we can recover from LLVM crashes in the REPL.
      * The handler checks if a recovery point has been registered (via set_jit_recovery_point)
      * and longjmps to it instead of calling exit(). */
@@ -224,7 +253,10 @@ namespace jank::jit
      * Clang 19, at least. This workaround was suggested by and borrowed from Julia devs.
      *
      * https://github.com/mortenpi/julia/blob/1edc6f1b7752ed67059020ba7ce174dffa225954/src/jitlayers.cpp#L2330
+     *
+     * Perf profiling is not available on iOS.
      */
+#if !defined(JANK_TARGET_IOS)
     if(util::cli::opts.perf_profiling_enabled)
     {
       auto const ee{ interpreter->getExecutionEngine() };
@@ -251,6 +283,7 @@ namespace jank::jit
                                                                    true,
                                                                    true));
     }
+#endif
 
     auto const &load_result{ load_dynamic_libs(util::cli::opts.libs) };
     if(load_result.is_err())
