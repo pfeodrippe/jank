@@ -26,6 +26,32 @@
 #include <jank/util/try.hpp>
 #include <jank/util/fmt/print.hpp>
 
+/* For iOS JIT, native modules are statically linked but need to be
+ * explicitly referenced to prevent dead code elimination. */
+#ifdef JANK_IOS_JIT
+extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
+extern "C" jank_object_ref jank_load_clojure_core_native();
+extern "C" jank_object_ref jank_load_jank_arena_native();
+extern "C" jank_object_ref jank_load_jank_debug_allocator_native();
+
+/* Force linker to include native modules. This function MUST be called
+ * at init time to ensure the linker includes these symbols from the static library. */
+__attribute__((visibility("default")))
+extern "C" void jank_ios_register_native_modules()
+{
+  /* These calls load the native modules and register their namespaces/functions.
+   * After loading, we must call jank_module_set_loaded to mark them as available
+   * so the module loader knows they exist without looking for files. */
+  jank_load_clojure_core_native();
+  jank_load_jank_arena_native();
+  jank_load_jank_debug_allocator_native();
+  jank_load_jank_nrepl_server_asio();
+  /* Note: NO leading slash - context::load_module strips it before calling loader::load,
+   * so is_loaded() checks for "jank.nrepl-server.asio" without the slash. */
+  jank_module_set_loaded("jank.nrepl-server.asio");
+}
+#endif
+
 using namespace jank;
 using namespace jank::runtime;
 
@@ -1319,6 +1345,16 @@ extern "C"
       {
         runtime::__rt_ctx = new(GC) runtime::context{};
       }
+
+#ifdef JANK_IOS_JIT
+      /* Load native modules for iOS JIT. This must be called after context creation
+       * so the modules can register their namespaces and functions.
+       * This also forces the linker to include the native module object files. */
+      if(init_default_ctx)
+      {
+        jank_ios_register_native_modules();
+      }
+#endif
 
       return fn(argc, argv);
     }

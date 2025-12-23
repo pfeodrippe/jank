@@ -15,6 +15,10 @@
 #include <llvm/ExecutionEngine/JITEventListener.h>
 #include <llvm/IRReader/IRReader.h>
 
+#ifdef JANK_IOS_JIT
+  #include <dlfcn.h>
+#endif
+
 #include <jank/util/cpptrace.hpp>
 
 #include <jank/jit/processor.hpp>
@@ -478,6 +482,16 @@ namespace jank::jit
     {
       return symbol.get().toPtr<void *>();
     }
+
+#ifdef JANK_IOS_JIT
+    /* For iOS JIT, statically linked native modules (like nrepl-server.asio)
+     * won't be in the JIT symbol table. Fall back to dlsym to search the
+     * main executable and all loaded libraries. */
+    if(void *sym = dlsym(RTLD_DEFAULT, name.c_str()))
+    {
+      return sym;
+    }
+#endif
 
     return err(util::format("Failed to find symbol: '{}'", name));
   }

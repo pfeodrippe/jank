@@ -631,18 +631,36 @@ else()
   message(STATUS "iOS build without JIT - no CppInterOp")
 endif()
 
-if(NOT jank_target_wasm AND NOT jank_target_ios)
-  find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+# Desktop and iOS JIT need Boost for asio.cpp
+if(NOT jank_target_wasm AND (NOT jank_target_ios OR jank_ios_jit))
+  if(NOT jank_target_ios)
+    # OpenSSL is only needed for desktop builds
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+  else()
+    set(OPENSSL_INCLUDE_DIR "")
+  endif()
 
-  find_path(
-    jank_boost_include_dir
-    NAMES boost/asio.hpp
-    HINTS ENV BOOST_ROOT
-    PATH_SUFFIXES include
-    PATHS /opt/homebrew/include /usr/local/include /usr/include
-  )
-  if(NOT jank_boost_include_dir)
-    message(FATAL_ERROR "Unable to find boost/asio.hpp. Install Boost headers or set BOOST_ROOT.")
+  if(jank_ios_jit)
+    # iOS JIT: use macOS Homebrew Boost directly (it's header-only)
+    # CMake find_path is constrained to iOS sysroot so we set it explicitly
+    if(EXISTS "/opt/homebrew/include/boost/asio.hpp")
+      set(jank_boost_include_dir "/opt/homebrew/include")
+    elseif(EXISTS "/usr/local/include/boost/asio.hpp")
+      set(jank_boost_include_dir "/usr/local/include")
+    else()
+      message(FATAL_ERROR "Unable to find boost/asio.hpp for iOS JIT. Install Boost: brew install boost")
+    endif()
+  else()
+    find_path(
+      jank_boost_include_dir
+      NAMES boost/asio.hpp
+      HINTS ENV BOOST_ROOT
+      PATH_SUFFIXES include
+      PATHS /opt/homebrew/include /usr/local/include /usr/include
+    )
+    if(NOT jank_boost_include_dir)
+      message(FATAL_ERROR "Unable to find boost/asio.hpp. Install Boost headers or set BOOST_ROOT.")
+    endif()
   endif()
 else()
   set(OPENSSL_INCLUDE_DIR "")
@@ -894,8 +912,10 @@ else()
     list(APPEND jank_lib_sources
       src/cpp/jank/util/environment_ios.cpp
       src/cpp/jank/runtime/perf_wasm.cpp
-      # Stubs for native header completion (no Boost Asio on iOS)
-      src/cpp/jank/nrepl_server/native_header_stubs_ios.cpp
+      # nREPL server with Boost Asio (bundled in iOS app)
+      src/cpp/jank/nrepl_server/asio.cpp
+      src/cpp/jank/nrepl_server/native_header_completion.cpp
+      src/cpp/jank/nrepl_server/native_header_index.cpp
       # iOS error reporting (simple stderr, no FTXUI)
       src/cpp/jank/error/report_ios.cpp
       # GC stub for GC_throw_bad_alloc
@@ -1083,6 +1103,7 @@ elseif(jank_target_ios)
       "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cppinterop/include>"
       "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/third-party/cppinterop/lib>"
       "${IOS_LLVM_DIR}/include"
+      ${jank_boost_include_dir}
     )
   else()
     # iOS without JIT: Use wasm-like implementations
