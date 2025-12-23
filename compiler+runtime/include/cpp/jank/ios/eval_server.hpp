@@ -56,6 +56,7 @@ extern "C" int GC_unregister_my_thread(void);
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core/to_string.hpp>
 #include <jank/error.hpp>
+#include <jank/read/source.hpp>
 
 namespace jank::ios
 {
@@ -492,8 +493,9 @@ namespace jank::ios
         // Normal evaluation path
         try
         {
-          // TODO: Switch namespace if specified
-          // For now, eval in current namespace
+          // Note: Namespace switching is handled on the macOS side (ios_remote_eval.hpp)
+          // by prepending (in-ns ...) to the code before sending to iOS.
+          // This keeps the iOS eval server simple.
 
           auto obj = runtime::__rt_ctx->eval_string(code);
           auto code_str = runtime::to_code_string(obj);
@@ -502,12 +504,74 @@ namespace jank::ios
           result = R"({"op":"result","id":)" + std::to_string(id) + R"(,"value":")"
             + json::escape(value_str) + R"("})";
         }
+        catch(runtime::object_ref const &e)
+        {
+          // Clojure (throw ...) throws runtime objects
+          auto msg = runtime::to_code_string(e);
+          result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
+            + json::escape(std::string(msg.data(), msg.size())) + R"(","type":"runtime"})";
+        }
         catch(jtl::ref<error::base> const &e)
         {
-          std::string error_msg = e->message;
+          // Build comprehensive error message
+          std::string error_msg;
+
+          // Add error kind
+          error_msg += error::kind_str(e->kind);
+
+          // Add main message if present
+          if(!e->message.empty())
+          {
+            error_msg += ": ";
+            error_msg += std::string(e->message.data(), e->message.size());
+          }
+
+          // Add source location if available
+          if(e->source.file != read::no_source_path)
+          {
+            error_msg += " at ";
+            error_msg += std::string(e->source.file.data(), e->source.file.size());
+            error_msg += ":" + std::to_string(e->source.start.line);
+            error_msg += ":" + std::to_string(e->source.start.col);
+          }
+
+          // Add notes
+          for(auto const &note : e->notes)
+          {
+            error_msg += "\n  ";
+            error_msg += std::string(note.message.data(), note.message.size());
+          }
+
+          // Add cause
           if(e->cause)
           {
-            error_msg += "\nCaused by: " + e->cause->message;
+            error_msg += "\nCaused by: ";
+            error_msg += std::string(e->cause->message.data(), e->cause->message.size());
+          }
+
+          result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
+            + json::escape(error_msg) + R"(","type":"compile"})";
+        }
+        catch(error::base const &e)
+        {
+          // Error by value
+          std::string error_msg = error::kind_str(e.kind);
+          if(!e.message.empty())
+          {
+            error_msg += ": ";
+            error_msg += std::string(e.message.data(), e.message.size());
+          }
+          result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
+            + json::escape(error_msg) + R"(","type":"compile"})";
+        }
+        catch(error::base *e)
+        {
+          // Error as pointer
+          std::string error_msg = e ? error::kind_str(e->kind) : "null error";
+          if(e && !e->message.empty())
+          {
+            error_msg += ": ";
+            error_msg += std::string(e->message.data(), e->message.size());
           }
           result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
             + json::escape(error_msg) + R"(","type":"compile"})";
@@ -516,6 +580,16 @@ namespace jank::ios
         {
           result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
             + json::escape(e.what()) + R"(","type":"runtime"})";
+        }
+        catch(char const *e)
+        {
+          result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
+            + json::escape(e ? e : "null") + R"(","type":"runtime"})";
+        }
+        catch(std::string const &e)
+        {
+          result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
+            + json::escape(e) + R"(","type":"runtime"})";
         }
         catch(...)
         {

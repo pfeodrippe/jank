@@ -1,25 +1,41 @@
-;;; ios-eval.el --- Simple iOS eval integration for jank -*- lexical-binding: t -*-
+;;; ios-eval.el --- iOS eval integration for jank with CIDER support -*- lexical-binding: t -*-
 
 ;; Author: jank iOS integration
-;; Version: 0.1
-;; Keywords: jank, clojure, ios, repl
+;; Version: 0.2
+;; Keywords: jank, clojure, ios, repl, cider
+;; Package-Requires: ((emacs "25.1") (cider "1.0"))
 
 ;;; Commentary:
 
-;; This provides simple REPL-like interaction with jank running on iOS.
-;; It follows the ClojureScript model: all IDE features (completion, lookup)
-;; stay on macOS, only eval is forwarded to iOS.
+;; This provides REPL interaction with jank running on iOS.
+;; It follows the ClojureScript/Piggieback model: all IDE features
+;; (completion, lookup) stay on macOS, only eval is forwarded to iOS.
 ;;
-;; Usage:
-;;   1. Start jank on iOS device (with eval server on port 5558)
-;;   2. M-x ios-eval-connect RET <ios-device-ip> RET
-;;   3. Use C-c C-i to eval sexp at point
-;;   4. Use C-c C-r to eval region
-;;   5. Use C-c C-b to eval buffer
+;; Two modes of operation:
+;;
+;; 1. CIDER Integration (recommended):
+;;    - Connect CIDER to jank nREPL on macOS (port 5557)
+;;    - M-x ios-eval-cider-connect to redirect eval to iOS
+;;    - All CIDER eval commands (C-c C-e, C-c C-c, etc.) go to iOS
+;;    - Completion, docs, etc. still work via macOS nREPL
+;;    - M-x ios-eval-cider-disconnect to stop forwarding
+;;
+;; 2. Standalone mode (direct connection):
+;;    - M-x ios-eval-connect RET <host> RET <port> RET
+;;    - Use C-c C-i / C-c C-d / C-c C-r for iOS eval
+;;    - Separate from CIDER
+;;
+;; Setup:
+;;   1. Start iproxy: iproxy 5559 5558
+;;   2. Start jank nREPL: ./build/jank nrepl-server --port 5557
+;;   3. Connect CIDER: M-x cider-connect RET localhost RET 5557
+;;   4. Connect iOS: M-x ios-eval-cider-connect RET localhost RET 5559
 
 ;;; Code:
 
 (require 'json)
+(require 'cider nil t)  ;; Optional CIDER dependency
+(require 'nrepl-client nil t)
 
 (defgroup ios-eval nil
   "iOS eval integration for jank."
@@ -215,6 +231,98 @@
 \\{ios-eval-mode-map}"
   :lighter " iOS"
   :keymap ios-eval-mode-map)
+
+;;; ============================================================
+;;; CIDER Integration
+;;; ============================================================
+
+(defvar ios-eval-cider--connected nil
+  "Whether iOS eval is connected via CIDER.")
+
+(defvar ios-eval-cider--host nil
+  "iOS host connected via CIDER.")
+
+(defvar ios-eval-cider--port nil
+  "iOS port connected via CIDER.")
+
+(defun ios-eval-cider--nrepl-send-op (op params callback)
+  "Send nREPL OP with PARAMS, call CALLBACK with response."
+  (if (and (fboundp 'cider-current-repl)
+           (cider-current-repl))
+      (let ((connection (cider-current-repl)))
+        (nrepl-send-request
+         (append (list "op" op) params)
+         callback
+         connection))
+    (error "No active CIDER connection. Use M-x cider-connect first")))
+
+;;;###autoload
+(defun ios-eval-cider-connect (host port)
+  "Connect CIDER's eval to iOS device at HOST:PORT.
+This sends the ios-connect op to the jank nREPL server,
+which will then forward all eval requests to iOS."
+  (interactive
+   (list (read-string "iOS host: " (or ios-eval-cider--host "localhost"))
+         (read-number "iOS port: " (or ios-eval-cider--port 5559))))
+  (ios-eval-cider--nrepl-send-op
+   "ios-connect"
+   (list "host" host "port" port)
+   (lambda (response)
+     (let ((status (nrepl-dict-get response "status"))
+           (err (nrepl-dict-get response "err")))
+       (if (member "error" status)
+           (message "[ios-eval] Failed to connect: %s" err)
+         (setq ios-eval-cider--connected t)
+         (setq ios-eval-cider--host host)
+         (setq ios-eval-cider--port port)
+         (message "[ios-eval] Connected to iOS at %s:%d - CIDER eval now goes to iPad!"
+                  host port))))))
+
+;;;###autoload
+(defun ios-eval-cider-disconnect ()
+  "Disconnect CIDER's eval from iOS device.
+Eval will return to normal macOS nREPL."
+  (interactive)
+  (ios-eval-cider--nrepl-send-op
+   "ios-disconnect"
+   nil
+   (lambda (response)
+     (setq ios-eval-cider--connected nil)
+     (message "[ios-eval] Disconnected from iOS - CIDER eval back to macOS"))))
+
+;;;###autoload
+(defun ios-eval-cider-status ()
+  "Check iOS connection status."
+  (interactive)
+  (ios-eval-cider--nrepl-send-op
+   "ios-status"
+   nil
+   (lambda (response)
+     (let ((connected (nrepl-dict-get response "ios-connected"))
+           (host (nrepl-dict-get response "ios-host"))
+           (port (nrepl-dict-get response "ios-port")))
+       (if (string= connected "true")
+           (message "[ios-eval] Connected to iOS at %s:%s" host port)
+         (message "[ios-eval] Not connected to iOS"))))))
+
+;;;###autoload
+(defun ios-eval-cider-toggle ()
+  "Toggle iOS eval connection."
+  (interactive)
+  (if ios-eval-cider--connected
+      (ios-eval-cider-disconnect)
+    (call-interactively #'ios-eval-cider-connect)))
+
+;; Add indicator to mode-line when iOS is connected
+(defun ios-eval-cider--mode-line ()
+  "Return mode-line indicator for iOS connection."
+  (if ios-eval-cider--connected
+      (propertize " [iOS]" 'face '(:foreground "orange" :weight bold))
+    ""))
+
+;; Add to global mode-line
+(unless (member '(:eval (ios-eval-cider--mode-line)) global-mode-string)
+  (push '(:eval (ios-eval-cider--mode-line)) global-mode-string))
 
 (provide 'ios-eval)
 ;;; ios-eval.el ends here

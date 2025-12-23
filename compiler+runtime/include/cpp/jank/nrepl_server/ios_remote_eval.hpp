@@ -97,7 +97,19 @@ namespace jank::nrepl_server::asio
       return { false, "Not connected to iOS device" };
     }
 
-    auto result = remote_target->client->eval(code, ns);
+    // Prepend namespace switch if needed (Piggieback-style)
+    // This keeps the iOS eval server simple - it just evals what it receives
+    std::string full_code;
+    if(!ns.empty() && ns != "user")
+    {
+      full_code = "(in-ns '" + ns + ") " + code;
+    }
+    else
+    {
+      full_code = code;
+    }
+
+    auto result = remote_target->client->eval(full_code, ns);
 
     if(result.success)
     {
@@ -111,7 +123,17 @@ namespace jank::nrepl_server::asio
         remote_target->connected = false;
         std::cerr << "[nrepl] Lost connection to iOS device." << std::endl;
       }
-      return { false, result.error };
+      // Include error type in message for better debugging
+      std::string error_msg = result.error;
+      if(error_msg.empty())
+      {
+        error_msg = "Unknown error";
+      }
+      if(!result.error_type.empty())
+      {
+        error_msg = "[" + result.error_type + "] " + error_msg;
+      }
+      return { false, error_msg };
     }
   }
 

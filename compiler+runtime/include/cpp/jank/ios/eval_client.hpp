@@ -15,6 +15,7 @@
 #ifndef __EMSCRIPTEN__
 
 #include <boost/asio.hpp>
+#include <sys/socket.h>
 
 namespace jank::ios
 {
@@ -46,9 +47,18 @@ namespace jank::ios
         host_ = host;
         port_ = port;
 
-        // Read welcome message
+        // Read welcome message fully
         boost::asio::streambuf buf;
         boost::asio::read_until(*socket_, buf, '\n');
+
+        // Consume the welcome message from buffer
+        std::string welcome;
+        std::istream is(&buf);
+        std::getline(is, welcome);
+        std::cout << "[ios-client] Connected, welcome: " << welcome << std::endl;
+
+        // Small delay to ensure connection is stable
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         connected_ = true;
         return true;
@@ -107,45 +117,42 @@ namespace jank::ios
         std::string request = R"({"op":"eval","id":)" + std::to_string(++request_id_)
           + R"(,"code":")" + escape_json(code) + R"(","ns":")" + escape_json(ns) + "\"}\n";
 
+        std::cout << "[ios-client] Sending eval request id=" << request_id_ << std::endl;
+
+        // Set socket timeout
+        struct timeval tv;
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        setsockopt(socket_->native_handle(), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
         // Send request
         boost::asio::write(*socket_, boost::asio::buffer(request));
 
-        // Read response with timeout
+        // Read response (blocking with timeout set above)
         boost::asio::streambuf buf;
         boost::system::error_code ec;
+        (void)boost::asio::read_until(*socket_, buf, '\n', ec);
 
-        // Set up deadline timer
-        socket_->non_blocking(true);
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-
-        std::string response;
-        while(std::chrono::steady_clock::now() < deadline)
+        if(ec)
         {
-          size_t available = socket_->available(ec);
-          if(ec)
+          std::cerr << "[ios-client] Read error: " << ec.message() << std::endl;
+          if(ec == boost::asio::error::operation_aborted || ec == boost::asio::error::timed_out)
           {
-            break;
+            return { false, "", "Timeout waiting for response", "timeout" };
           }
-
-          if(available > 0)
-          {
-            auto n = boost::asio::read_until(*socket_, buf, '\n', ec);
-            if(!ec && n > 0)
-            {
-              std::istream is(&buf);
-              std::getline(is, response);
-              break;
-            }
-          }
-
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          connected_ = false;
+          return { false, "", "Read error: " + ec.message(), "connection" };
         }
 
-        socket_->non_blocking(false);
+        std::string response;
+        std::istream is(&buf);
+        std::getline(is, response);
+
+        std::cout << "[ios-client] Got response: " << response.substr(0, 100) << (response.size() > 100 ? "..." : "") << std::endl;
 
         if(response.empty())
         {
-          return { false, "", "Timeout waiting for response", "timeout" };
+          return { false, "", "Empty response from iOS", "connection" };
         }
 
         // Parse response
