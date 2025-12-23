@@ -671,6 +671,20 @@ namespace jank::nrepl_server::asio
       {
         return handle_test_var_query(msg);
       }
+#ifndef __EMSCRIPTEN__
+      if(op == "ios-connect")
+      {
+        return handle_ios_connect(msg);
+      }
+      if(op == "ios-disconnect")
+      {
+        return handle_ios_disconnect(msg);
+      }
+      if(op == "ios-status")
+      {
+        return handle_ios_status(msg);
+      }
+#endif
 
       return handle_unsupported(msg, "unknown-op");
     }
@@ -761,6 +775,14 @@ namespace jank::nrepl_server::asio
     std::vector<bencode::value::dict> handle_test(message const &msg);
 
     std::vector<bencode::value::dict> handle_test_var_query(message const &msg);
+
+#ifndef __EMSCRIPTEN__
+    std::vector<bencode::value::dict> handle_ios_connect(message const &msg);
+
+    std::vector<bencode::value::dict> handle_ios_disconnect(message const &msg);
+
+    std::vector<bencode::value::dict> handle_ios_status(message const &msg);
+#endif
 
     std::vector<bencode::value::dict>
     handle_unsupported(message const &msg, std::string_view reason)
@@ -3226,6 +3248,11 @@ namespace jank::nrepl_server::asio
   };
 }
 
+#ifndef __EMSCRIPTEN__
+// iOS remote eval utility functions (must be before eval.hpp)
+#include <jank/nrepl_server/ios_remote_eval.hpp>
+#endif
+
 #include <jank/nrepl_server/ops/clone.hpp>
 #include <jank/nrepl_server/ops/describe.hpp>
 #include <jank/nrepl_server/ops/ls_sessions.hpp>
@@ -3248,3 +3275,6 @@ namespace jank::nrepl_server::asio
 #include <jank/nrepl_server/ops/wasm_compile_patch.hpp>
 #include <jank/nrepl_server/ops/test.hpp>
 #include <jank/nrepl_server/ops/test_var_query.hpp>
+#ifndef __EMSCRIPTEN__
+#include <jank/nrepl_server/ops/ios_eval.hpp>
+#endif

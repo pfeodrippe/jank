@@ -92,6 +92,40 @@ namespace jank::nrepl_server::asio
       return handle_unsupported(msg, "missing-code");
     }
 
+#ifndef __EMSCRIPTEN__
+    // Check if we should forward eval to a remote iOS device (Piggieback-style)
+    if(is_remote_eval_active())
+    {
+      auto const ns(msg.get("ns", "user"));
+      auto [success, result] = eval_on_ios(code, ns);
+
+      bencode::value::dict response;
+      if(!msg.id().empty())
+      {
+        response.emplace("id", msg.id());
+      }
+      if(!msg.session().empty())
+      {
+        response.emplace("session", msg.session());
+      }
+
+      if(success)
+      {
+        response.emplace("value", result);
+        // Update ns if it changed
+        response.emplace("ns", ns);
+        response.emplace("status", bencode::list_of_strings({ "done" }));
+      }
+      else
+      {
+        response.emplace("status", bencode::list_of_strings({ "eval-error", "done" }));
+        response.emplace("err", result);
+      }
+
+      return { std::move(response) };
+    }
+#endif
+
     auto &session(ensure_session(msg.session()));
 
     /* If an explicit ns is provided in the message, use it for evaluation.

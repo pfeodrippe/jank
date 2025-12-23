@@ -564,7 +564,7 @@ if [[ -n "${entry_module}" ]]; then
   if [[ "${verbose}" == "true" ]]; then
     echo "[ios-bundle] Running: ${native_jank} ${jank_flags[@]} compile-module --list-modules ${entry_module}"
   fi
-  all_modules=$("${native_jank}" "${jank_flags[@]}" compile-module --list-modules "${entry_module}" 2>&1 | grep -v "^\[jank\]" | grep -v "^WARNING:")
+  all_modules=$("${native_jank}" "${jank_flags[@]}" compile-module --list-modules "${entry_module}" 2>&1 | grep -v "^\[jank" | grep -v "^WARNING:")
 
   # Filter to only include user modules (exclude clojure.* which are pre-compiled)
   user_modules=()

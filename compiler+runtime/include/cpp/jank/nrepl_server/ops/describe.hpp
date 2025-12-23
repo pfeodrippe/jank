@@ -37,6 +37,14 @@ namespace jank::nrepl_server::asio
                 bencode::make_doc_value("Return details about the last evaluation error"));
     ops.emplace("analyze-last-stacktrace",
                 bencode::make_doc_value("Return stacktrace analysis for the last error"));
+#ifndef __EMSCRIPTEN__
+    ops.emplace("ios-connect",
+                bencode::make_doc_value("Connect to iOS eval server for remote eval"));
+    ops.emplace("ios-disconnect",
+                bencode::make_doc_value("Disconnect from iOS eval server"));
+    ops.emplace("ios-status",
+                bencode::make_doc_value("Get iOS eval server connection status"));
+#endif
     payload.emplace("ops", bencode::value{ std::move(ops) });
 
     payload.emplace("status", bencode::list_of_strings({ "done" }));
