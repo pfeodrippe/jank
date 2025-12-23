@@ -6,6 +6,7 @@
 
 #if defined(__OBJC__) || defined(JANK_TARGET_IOS)
 #import <Foundation/Foundation.h>
+#import <TargetConditionals.h>
 #endif
 
 namespace jank::util
@@ -149,7 +150,11 @@ namespace jank::util
 
     // Add iOS-specific flags for JIT compilation
     args.emplace_back("-target");
+#if TARGET_OS_SIMULATOR
     args.emplace_back("arm64-apple-ios17.0-simulator");
+#else
+    args.emplace_back("arm64-apple-ios17.0");
+#endif
 
     // For iOS JIT, we need bundled headers since the app can't access the macOS filesystem.
     // Headers should be bundled at:
@@ -168,7 +173,20 @@ namespace jank::util
     args.emplace_back("-isystem");
     args.emplace_back(libc_include_path.c_str());
 
-    // C system headers (stddef.h, string.h, etc.)
+    // Clang builtin headers (stddef.h, stdarg.h, etc.)
+    // These MUST come before SDK sys_include headers because they define
+    // size_t, ptrdiff_t via __SIZE_TYPE__, __PTRDIFF_TYPE__ compiler builtins.
+    // When libc++ does #include_next <stddef.h>, it should find clang's first.
+    static std::string clang_include_path;
+    if(clang_include_path.empty())
+    {
+      clang_include_path = std::string(resource_dir().c_str()) + "/clang/include";
+    }
+    std::cerr << "[ios-jit] clang builtin include: " << clang_include_path << std::endl;
+    args.emplace_back("-isystem");
+    args.emplace_back(clang_include_path.c_str());
+
+    // C system headers (from iOS SDK usr/include)
     static std::string sys_include_path;
     if(sys_include_path.empty())
     {

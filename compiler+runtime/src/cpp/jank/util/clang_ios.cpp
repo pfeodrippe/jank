@@ -7,6 +7,8 @@
 #include <jank/util/environment.hpp>
 #include <jank/error/system.hpp>
 
+#import <TargetConditionals.h>
+
 namespace jank::util
 {
   jtl::option<jtl::immutable_string> find_clang()
@@ -69,7 +71,10 @@ namespace jank::util
 
   jtl::immutable_string default_target_triple()
   {
-    // iOS simulator arm64 target
+#if TARGET_OS_SIMULATOR
     return "arm64-apple-ios17.0-simulator";
+#else
+    return "arm64-apple-ios17.0";
+#endif
   }
 }
