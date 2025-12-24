@@ -597,3 +597,78 @@ jank_object_ref jank_load_jank_nrepl_server_asio()
   jank::nrepl_server::asio::__ns loader;
   return loader.call().erase();
 }
+
+/* Start the nREPL server on the given port and bind address.
+ * Returns a server handle that can be used to stop the server,
+ * or nullptr if the server failed to start.
+ * This is a C API wrapper for iOS to start the full nREPL server. */
+extern "C" __attribute__((used, visibility("default")))
+jank_object_ref jank_nrepl_start_server(int port, char const *bind_address)
+{
+  using namespace jank;
+  using namespace jank::runtime;
+
+  try
+  {
+    // NOTE: In hybrid mode, jank_aot_init() has already loaded clojure.core
+    // via AOT compilation. We just need to set up the user namespace.
+    // Set up user namespace (clojure.core should already be loaded)
+    dynamic_call(__rt_ctx->in_ns_var->deref(), make_box<obj::symbol>("user"));
+    auto refer_var = __rt_ctx->intern_var("clojure.core", "refer");
+    if(refer_var.is_ok())
+    {
+      dynamic_call(refer_var.expect_ok(), make_box<obj::symbol>("clojure.core"));
+    }
+
+    std::cout << "[nrepl] Creating server on port " << port << "..." << std::endl;
+
+    auto const port_obj = make_box(static_cast<int64_t>(port));
+    auto const bind_obj = make_box<obj::persistent_string>(bind_address ? bind_address : "0.0.0.0");
+
+    auto result = jank::nrepl_server::asio::start_server(port_obj, bind_obj);
+
+    if(result == jank_nil)
+    {
+      std::cerr << "[nrepl] start_server returned nil" << std::endl;
+      return nullptr;
+    }
+
+    std::cout << "[nrepl] Server started successfully!" << std::endl;
+    return result.erase();
+  }
+  catch(jtl::ref<error::base> const &e)
+  {
+    std::cerr << "[nrepl] Error starting server: " << e->message << std::endl;
+    if(e->cause)
+    {
+      std::cerr << "[nrepl]   caused by: " << e->cause->message << std::endl;
+    }
+    return nullptr;
+  }
+  catch(object_ref const &e)
+  {
+    std::cerr << "[nrepl] Jank exception: " << to_code_string(e) << std::endl;
+    return nullptr;
+  }
+  catch(std::exception const &e)
+  {
+    std::cerr << "[nrepl] Exception: " << e.what() << std::endl;
+    return nullptr;
+  }
+  catch(...)
+  {
+    std::cerr << "[nrepl] Unknown exception starting server" << std::endl;
+    return nullptr;
+  }
+}
+
+/* Stop the nREPL server given the server handle from jank_nrepl_start_server. */
+extern "C" __attribute__((used, visibility("default")))
+void jank_nrepl_stop_server(jank_object_ref server_handle)
+{
+  if(server_handle)
+  {
+    jank::nrepl_server::asio::stop_server(
+      jank::runtime::object_ref{ static_cast<jank::runtime::object *>(server_handle) });
+  }
+}

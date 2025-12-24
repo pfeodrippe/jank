@@ -98,10 +98,35 @@ namespace jank::nrepl_server::asio
   inline void bootstrap_runtime_once()
   {
     static bool const bootstrapped = [] {
-      __rt_ctx->load_module("/clojure.core", module::origin::latest).expect_ok();
-      dynamic_call(__rt_ctx->in_ns_var->deref(), make_box<obj::symbol>("user"));
-      dynamic_call(__rt_ctx->intern_var("clojure.core", "refer").expect_ok(),
-                   make_box<obj::symbol>("clojure.core"));
+      /* Only load clojure.core if not already loaded (e.g., via AOT compilation on iOS).
+       * In hybrid mode, clojure.core is loaded via jank_aot_init() before the nREPL server
+       * starts, so we should skip the load_module call to avoid conflicts. */
+      if(!__rt_ctx->module_loader.is_loaded("clojure.core"))
+      {
+        __rt_ctx->load_module("/clojure.core", module::origin::latest).expect_ok();
+      }
+
+      /* Set up user namespace with clojure.core refer.
+       * In hybrid AOT mode, this might fail if the runtime state is already configured
+       * differently, so we wrap in try/catch and continue gracefully. */
+      try
+      {
+        dynamic_call(__rt_ctx->in_ns_var->deref(), make_box<obj::symbol>("user"));
+        dynamic_call(__rt_ctx->intern_var("clojure.core", "refer").expect_ok(),
+                     make_box<obj::symbol>("clojure.core"));
+      }
+      catch(jtl::immutable_string const &e)
+      {
+        std::cerr << "[nrepl] Warning during bootstrap: " << e << std::endl;
+      }
+      catch(std::exception const &e)
+      {
+        std::cerr << "[nrepl] Warning during bootstrap (std): " << e.what() << std::endl;
+      }
+      catch(...)
+      {
+        std::cerr << "[nrepl] Warning during bootstrap: unknown error (continuing)" << std::endl;
+      }
       return true;
     }();
     (void)bootstrapped;
