@@ -583,7 +583,8 @@ if [[ -n "${entry_module}" ]]; then
   # Compile each module to C++
   echo "[ios-bundle] Generating C++ from modules..."
   for module in "${user_modules[@]}"; do
-    module_filename=$(echo "${module}" | tr '.' '_')
+    # Replace both . and - with underscores for valid filenames that match function names
+    module_filename=$(echo "${module}" | tr '.-' '__')
     cpp_output="${generated_dir}/${module_filename}_generated.cpp"
 
     # Convert module name to source path (e.g., vybe.sdf.ios -> src/vybe/sdf/ios.jank)
@@ -656,11 +657,16 @@ HEADER
 
   # Add extern declarations for application modules
   for module in "${user_modules[@]}"; do
-    func_name="jank_load_$(echo "${module}" | tr '.' '_')"
+    # Replace both . and - with underscores for valid C++ identifiers
+    func_name="jank_load_$(echo "${module}" | tr '.-' '__')"
     echo "extern \"C\" void* ${func_name}();" >> "${init_file}"
   done
 
   cat >> "${init_file}" << 'MIDDLE'
+
+// nREPL native module loader (needed for JIT mode)
+extern "C" void* jank_load_jank_nrepl_server_asio();
+extern "C" void jank_module_set_loaded(const char* module);
 
 // Single entry point - loads all modules in correct order
 extern "C" void jank_aot_init() {
@@ -675,18 +681,35 @@ extern "C" void jank_aot_init() {
     jank_load_template__();  // double underscore because 'template' is C++ reserved word
     jank_load_test();
 
+    // Load nREPL native module AFTER core libs but BEFORE user modules
+    // This is required because jank.nrepl-server.server depends on it
+    // Always load it (not guarded by JANK_IOS_JIT) since it's linked into the binary
+    std::cout << "[jank] Loading nREPL native module..." << std::endl;
+    jank_load_jank_nrepl_server_asio();
+    jank_module_set_loaded("jank.nrepl-server.asio");
+
     std::cout << "[jank] Loading application modules..." << std::endl;
 
 MIDDLE
 
   # Add load calls for application modules
   for module in "${user_modules[@]}"; do
-    func_name="jank_load_$(echo "${module}" | tr '.' '_')"
+    # Replace both . and - with underscores for valid C++ identifiers
+    func_name="jank_load_$(echo "${module}" | tr '.-' '__')"
     echo "    std::cout << \"[jank] Loading ${module}...\" << std::endl;" >> "${init_file}"
     echo "    ${func_name}();" >> "${init_file}"
+    echo "    jank_module_set_loaded(\"${module}\");" >> "${init_file}"
   done
 
   cat >> "${init_file}" << 'FOOTER'
+
+    // Also mark core modules as loaded
+    jank_module_set_loaded("clojure.core");
+    jank_module_set_loaded("clojure.string");
+    jank_module_set_loaded("clojure.set");
+    jank_module_set_loaded("clojure.walk");
+    jank_module_set_loaded("clojure.template");
+    jank_module_set_loaded("clojure.test");
 
     std::cout << "[jank] All modules loaded successfully!" << std::endl;
 }

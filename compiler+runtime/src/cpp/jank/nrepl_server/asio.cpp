@@ -261,6 +261,10 @@ namespace jank::nrepl_server::asio
        * causes conflicts with the automatic wrapper and can crash during shutdown. */
       auto thread_func = [](void *arg) -> void * {
         auto *self = static_cast<server *>(arg);
+        /* Set up thread bindings for dynamic vars like *ns*.
+         * This is required because eval operations may call (in-ns ...) which
+         * needs *ns* to be thread-bound. */
+        jank::runtime::context::binding_scope bindings;
         self->io_context_.run();
         return nullptr;
       };

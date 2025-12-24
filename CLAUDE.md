@@ -19,7 +19,23 @@ Always added what you learned to new .md files in the compiler+runtime/ai folder
 Put them in the `20251129-001-some-time.md` format.
 Increment the number for the same date, then restart on 001 in the next day!
 
-## Rule 2: Use tee for CLI commands
+## Rule 2: NEVER do manual operations - always update scripts!
+
+When you need to copy files, run build steps, or do any repeatable operation:
+- **NEVER** copy files manually (e.g., `cp libjank.a somewhere/`)
+- **NEVER** run one-off commands that should be part of a build process
+- **ALWAYS** update the Makefile or build script to handle the operation automatically
+- If a script/Makefile is missing a step, ADD IT to the script
+
+This ensures:
+1. The operation is reproducible
+2. Other developers don't have to figure out manual steps
+3. CI/CD will work correctly
+4. The user won't have to remember manual steps
+
+Example: If you need to copy libjank.a to a directory for Xcode, add a Makefile target instead of running `cp` directly.
+
+## Rule 3: Use tee for CLI commands
 
 When running CLI commands (especially build scripts, tests, or any commands with significant output), always use `tee` to save the output to a file so the user can see the full output. This is especially useful for debugging failures.
 
