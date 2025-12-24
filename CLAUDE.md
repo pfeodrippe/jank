@@ -1,5 +1,8 @@
 # Claude Code Notes for jank
 
+## CRITICAL 0: iOS apps run forever - don't wait for them!
+When running iOS simulator builds (e.g., `make ios-jit-sim-run`), NEVER block waiting for the task to complete. iOS apps run continuously until killed. Instead, run the build in background and immediately check for nREPL connectivity or check the output periodically.
+
 ## CRITICAL 1: Do NOT Delete llvm-install
 
 ## CRITICAL 2: Always run the tests before changes (./bin/test), put result into a .tests.txt file so you can refer later when you do the changes to make sure you haven't broke any new test!
