@@ -664,8 +664,11 @@ HEADER
 
   cat >> "${init_file}" << 'MIDDLE'
 
-// nREPL native module loader (needed for JIT mode)
+// nREPL native module loader (only for JIT mode)
+#if defined(JANK_IOS_JIT)
 extern "C" void* jank_load_jank_nrepl_server_asio();
+#endif
+
 extern "C" void jank_module_set_loaded(const char* module);
 
 // Single entry point - loads all modules in correct order
@@ -681,12 +684,13 @@ extern "C" void jank_aot_init() {
     jank_load_template__();  // double underscore because 'template' is C++ reserved word
     jank_load_test();
 
+#if defined(JANK_IOS_JIT)
     // Load nREPL native module AFTER core libs but BEFORE user modules
     // This is required because jank.nrepl-server.server depends on it
-    // Always load it (not guarded by JANK_IOS_JIT) since it's linked into the binary
     std::cout << "[jank] Loading nREPL native module..." << std::endl;
     jank_load_jank_nrepl_server_asio();
     jank_module_set_loaded("jank.nrepl-server.asio");
+#endif
 
     std::cout << "[jank] Loading application modules..." << std::endl;
 
