@@ -564,7 +564,16 @@ if [[ -n "${entry_module}" ]]; then
   if [[ "${verbose}" == "true" ]]; then
     echo "[ios-bundle] Running: ${native_jank} ${jank_flags[@]} compile-module --list-modules ${entry_module}"
   fi
-  all_modules=$("${native_jank}" "${jank_flags[@]}" compile-module --list-modules "${entry_module}" 2>&1 | grep -v "^\[jank" | grep -v "^WARNING:")
+
+  # Capture output and exit code separately so errors aren't swallowed by grep
+  module_output=""
+  if ! module_output=$("${native_jank}" "${jank_flags[@]}" compile-module --list-modules "${entry_module}" 2>&1); then
+    echo "[ios-bundle] ERROR: Module discovery failed!"
+    echo "[ios-bundle] Output:"
+    echo "${module_output}"
+    exit 1
+  fi
+  all_modules=$(echo "${module_output}" | grep -v "^\[jank" | grep -v "^WARNING:")
 
   # Filter to only include user modules (exclude clojure.* which are pre-compiled)
   user_modules=()
