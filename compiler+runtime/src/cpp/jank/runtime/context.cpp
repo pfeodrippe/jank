@@ -255,8 +255,10 @@ namespace jank::runtime
      * we just don't bother.
      *
      * Furthermore, module compilation may be different from JIT compilation, since it's
-     * targeted at AOT and doesn't have access to what's loaded in the JIT runtime. */
-    if(truthy(compile_files_var->deref()))
+     * targeted at AOT and doesn't have access to what's loaded in the JIT runtime.
+     *
+     * Skip codegen entirely when --list-modules is used - we only need to discover dependencies. */
+    if(truthy(compile_files_var->deref()) && !util::cli::opts.list_modules)
     {
       auto const &module(runtime::to_string(current_module_var->deref()));
       auto const name{ module::module_to_load_function(module) };

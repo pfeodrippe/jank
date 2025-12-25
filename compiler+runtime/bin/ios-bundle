@@ -561,16 +561,12 @@ if [[ -n "${entry_module}" ]]; then
 
   # Discover all modules via --list-modules
   echo "[ios-bundle] Discovering modules from ${entry_module}..."
-  if [[ "${verbose}" == "true" ]]; then
-    echo "[ios-bundle] Running: ${native_jank} ${jank_flags[@]} compile-module --list-modules ${entry_module}"
-  fi
+  echo "[ios-bundle] Running: ${native_jank} ${jank_flags[@]} compile-module --list-modules ${entry_module}"
 
   # Capture output and exit code separately so errors aren't swallowed by grep
   module_output=""
-  if ! module_output=$("${native_jank}" "${jank_flags[@]}" compile-module --list-modules "${entry_module}" 2>&1); then
+  if ! module_output=$("${native_jank}" "${jank_flags[@]}" compile-module --list-modules "${entry_module}"); then
     echo "[ios-bundle] ERROR: Module discovery failed!"
-    echo "[ios-bundle] Output:"
-    echo "${module_output}"
     exit 1
   fi
   all_modules=$(echo "${module_output}" | grep -v "^\[jank" | grep -v "^WARNING:")
