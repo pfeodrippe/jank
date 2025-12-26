@@ -1944,7 +1944,17 @@ namespace jank::codegen
       }
       else
       {
-        auto const needs_static_cast{ expr->type != arg_type && expr->arg_exprs.size() == 1 };
+        /* Always use static_cast for primitive type constructors with a single argument.
+         * This is needed because:
+         * 1. Brace initialization (uint32_t x{ value }) doesn't allow narrowing
+         * 2. C++ arithmetic promotion rules may produce a different type than what
+         *    the AST tracks (e.g., int + long long -> long long)
+         * 3. Using auto&& for intermediate results means C++ deduces the actual type
+         *
+         * By always using static_cast for primitives, we make the conversion explicit
+         * and avoid narrowing errors from brace initialization. */
+        auto const needs_static_cast{ cpp_util::is_primitive(expr->type)
+                                      && expr->arg_exprs.size() == 1 };
         if(needs_static_cast)
         {
           util::format_to(body_buffer,

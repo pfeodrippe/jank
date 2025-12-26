@@ -92,6 +92,7 @@ namespace jank::util::cli
 
     /* iOS compile server (for run-main command). */
     uint16_t ios_compile_server_port{}; /* 0 = disabled, otherwise port number */
+    std::string ios_resource_dir{};     /* Path to iOS resources (PCH, headers) */
 
     /* Extras.
      * TODO: Use a native_persistent_vector instead.

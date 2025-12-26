@@ -207,8 +207,10 @@ namespace jank
       std::cout << "[ios-compile-server] Starting on port " << opts.ios_compile_server_port
                 << "..." << std::endl;
 
-      auto const jank_resource_dir = util::resource_dir();
-      auto config = compile_server::make_ios_simulator_config(jank_resource_dir);
+      auto const ios_res_dir = opts.ios_resource_dir.empty()
+                               ? util::resource_dir()
+                               : jtl::immutable_string{ opts.ios_resource_dir };
+      auto config = compile_server::make_ios_simulator_config(ios_res_dir);
 
       ios_server = std::make_unique<compile_server::server>(opts.ios_compile_server_port,
                                                             std::move(config));

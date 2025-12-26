@@ -97,8 +97,9 @@ namespace jank::compile_server
         return false;
       }
 
-      // Set longer timeout for compilation
-      timeout.tv_sec = 60;  // 60 second compilation timeout
+      // Set longer timeout for compilation - needs to be long enough for compiling
+      // many transitive dependencies (15+ modules can take several minutes)
+      timeout.tv_sec = 300;  // 5 minute compilation timeout
       setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
       std::cout << "[compile-client] Connected to " << host_ << ":" << port_ << std::endl;

@@ -393,7 +393,7 @@ namespace jank::compile_server
       }
     }
 
-    // Require (load) a namespace - compile full namespace source
+    // Require (load) a namespace - compile full namespace source AND transitive dependencies
     std::string require_ns(int64_t id, std::string const &ns_name, std::string const &source)
     {
       try
@@ -423,6 +423,7 @@ namespace jank::compile_server
         }
 
         // Step 2: Evaluate the ns form (first form) to register native aliases
+        // This will JIT-load all transitive dependencies on macOS
         auto const ns_form = all_forms.front();
         std::cerr << "[compile-server] Evaluating ns form: " << runtime::to_string(ns_form) << std::endl;
 
@@ -469,13 +470,97 @@ namespace jank::compile_server
           return error_response(id, "ns eval failed: unknown error", "compile");
         }
 
-        // Step 3: Create a NEW analyzer after ns evaluation
-        // This ensures the analyzer has access to all symbols registered by the ns form
+        // Step 3: Get ALL modules that need to be compiled for iOS
+        // We check ALL loaded modules (not just newly loaded) because dependencies
+        // may already be loaded on macOS from the desktop app initialization.
+        // We compile any module that hasn't been sent to iOS yet.
+        native_vector<jtl::immutable_string> modules_to_compile;
+        {
+          auto locked = runtime::__rt_ctx->loaded_modules_in_order.rlock();
+          for(auto const &mod : *locked)
+          {
+            // Skip if already sent to iOS
+            std::string mod_str(mod.data(), mod.size());
+            if(loaded_namespaces_.find(mod_str) != loaded_namespaces_.end())
+            {
+              continue;
+            }
+            modules_to_compile.push_back(mod);
+          }
+        }
+        std::cout << "[compile-server] Modules to compile for iOS: " << modules_to_compile.size() << std::endl;
+
+        // Step 4: Collect all modules to compile
+        // Start with transitive dependencies (in load order), then add the main module last
+        native_vector<compiled_module_info> compiled_modules;
+        native_vector<std::string> compilation_errors;
+
+        for(auto const &dep_module : modules_to_compile)
+        {
+          // Skip core modules (clojure.core, clojure.string, etc.)
+          if(runtime::module::is_core_module(dep_module))
+          {
+            std::cout << "[compile-server] Skipping core module: " << dep_module << std::endl;
+            continue;
+          }
+
+          std::string dep_module_str(dep_module.data(), dep_module.size());
+
+          // Find and read the module source
+          std::cout << "[compile-server] Compiling transitive dependency: " << dep_module << std::endl;
+
+          auto const find_result = runtime::__rt_ctx->module_loader.find(dep_module, runtime::module::origin::latest);
+          if(find_result.is_err())
+          {
+            std::cerr << "[compile-server] Warning: Could not find source for: " << dep_module << std::endl;
+            continue;
+          }
+
+          auto const &entry = find_result.expect_ok();
+          jtl::option<runtime::module::file_entry> source_entry;
+
+          // Prefer .jank source, fall back to .cljc
+          if(entry.sources.jank.is_some())
+          {
+            source_entry = entry.sources.jank;
+          }
+          else if(entry.sources.cljc.is_some())
+          {
+            source_entry = entry.sources.cljc;
+          }
+
+          if(source_entry.is_none())
+          {
+            std::cerr << "[compile-server] Warning: No jank/cljc source for: " << dep_module << std::endl;
+            continue;
+          }
+
+          // Read the source file
+          auto const file_view_result = runtime::module::loader::read_file(source_entry.unwrap().path);
+          if(file_view_result.is_err())
+          {
+            std::cerr << "[compile-server] Warning: Could not read source for: " << dep_module << std::endl;
+            continue;
+          }
+
+          auto const &file_view = file_view_result.expect_ok();
+          std::string dep_source(file_view.data(), file_view.size());
+
+          // Compile the dependency
+          auto compiled = compile_namespace_source(id, dep_module_str, dep_source, compilation_errors);
+          if(compiled.is_some())
+          {
+            loaded_namespaces_.insert(dep_module_str);
+            compiled_modules.push_back(compiled.unwrap());
+          }
+        }
+
+        // Step 5: Now compile the main module (same as before)
+        // Create a NEW analyzer after ns evaluation
         analyze::processor an_prc;
         native_vector<analyze::expression_ref> exprs;
 
         // Extract target namespace name from ns form and look it up
-        // The ns form is (ns namespace-name ...), so second element is the name
         auto const ns_list = runtime::try_object<runtime::obj::persistent_list>(ns_form);
         if(runtime::sequence_length(ns_list) < 2)
         {
@@ -490,7 +575,6 @@ namespace jank::compile_server
         }
 
         // Analyze ALL forms with *ns* bound to the target namespace
-        // This is critical for native alias resolution (e.g., sdfx/init)
         {
           runtime::context::binding_scope const analysis_scope{
             runtime::obj::persistent_hash_map::create_unique(
@@ -505,14 +589,14 @@ namespace jank::compile_server
           }
         }
 
-        // Step 4: Generate module name
+        // Generate module name
         auto const module_name = jtl::immutable_string(ns_name) + "$loading__";
 
-        // Step 5: Wrap expressions in a function for codegen
+        // Wrap expressions in a function for codegen
         auto const fn_expr = evaluate::wrap_expressions(exprs, an_prc,
                                                         runtime::__rt_ctx->unique_munged_string("ns_load"));
 
-        // Step 6: Generate C++ code
+        // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
         auto const cpp_code_body = cg_prc.declaration_str();
         auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name.name).data());
@@ -526,7 +610,6 @@ namespace jank::compile_server
         cpp_code += "#include <jank/prelude.hpp>\n";
 
         // Add native header includes from namespace
-        // This ensures native aliases like sdfx:: resolve to actual C++ namespaces
         auto const native_aliases = target_ns->native_aliases_snapshot();
         for(auto const &alias : native_aliases)
         {
@@ -541,7 +624,7 @@ namespace jank::compile_server
         cpp_code += "  return ::jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
         cpp_code += "}\n";
 
-        // Step 7: Cross-compile to ARM64 object file
+        // Cross-compile to ARM64 object file
         auto const object_result = cross_compile(id, cpp_code);
 
         if(!object_result.success)
@@ -551,15 +634,31 @@ namespace jank::compile_server
 
         loaded_namespaces_.insert(ns_name);
 
-        auto const encoded = base64_encode(object_result.object_data);
+        // Add main module to compiled list
+        compiled_modules.push_back(compiled_module_info{
+          std::string(module_name.data(), module_name.size()),
+          entry_symbol,
+          base64_encode(object_result.object_data)
+        });
 
         std::cout << "[compile-server] Namespace " << ns_name << " compiled successfully, object size: "
                   << object_result.object_data.size() << " bytes" << std::endl;
+        std::cout << "[compile-server] Total modules compiled: " << compiled_modules.size() << std::endl;
 
-        return R"({"op":"required","id":)" + std::to_string(id)
-          + R"(,"modules":[{"name":")" + escape_json(module_name)
-          + R"(","symbol":")" + escape_json(entry_symbol)
-          + R"(","object":")" + encoded + R"("}]})";
+        // Step 7: Build response with all compiled modules
+        std::string response = R"({"op":"required","id":)" + std::to_string(id) + R"(,"modules":[)";
+        bool first = true;
+        for(auto const &mod : compiled_modules)
+        {
+          if(!first) response += ",";
+          first = false;
+          response += R"({"name":")" + escape_json(mod.name);
+          response += R"(","symbol":")" + escape_json(mod.symbol);
+          response += R"(","object":")" + mod.encoded_object + R"("})";
+        }
+        response += "]}";
+
+        return response;
       }
       catch(jtl::ref<error::base> const &e)
       {
@@ -818,6 +917,140 @@ namespace jank::compile_server
     std::atomic<bool> running_;
     pthread_t server_thread_;
     std::unordered_set<std::string> loaded_namespaces_;  // Track loaded namespaces
+
+    // Helper struct for compiled module info
+    struct compiled_module_info
+    {
+      std::string name;
+      std::string symbol;
+      std::string encoded_object;
+    };
+
+    // Compile a single namespace from source (helper for require_ns)
+    // Returns empty option on failure (error already logged)
+    jtl::option<compiled_module_info> compile_namespace_source(
+      int64_t id,
+      std::string const &ns_name,
+      std::string const &source,
+      native_vector<std::string> &errors)
+    {
+      try
+      {
+        // Parse ALL forms first
+        read::lex::processor l_prc{ source };
+        read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
+
+        native_vector<runtime::object_ref> all_forms;
+        for(auto const &form : p_prc)
+        {
+          all_forms.push_back(form.expect_ok().unwrap().ptr);
+        }
+
+        if(all_forms.empty())
+        {
+          errors.push_back("No expressions in namespace source for: " + ns_name);
+          return jtl::none;
+        }
+
+        // Get the ns form
+        auto const ns_form = all_forms.front();
+
+        // Extract target namespace name from ns form and look it up
+        auto const ns_list = runtime::try_object<runtime::obj::persistent_list>(ns_form);
+        if(runtime::sequence_length(ns_list) < 2)
+        {
+          errors.push_back("Invalid ns form for: " + ns_name);
+          return jtl::none;
+        }
+        auto const ns_name_sym = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
+        auto const target_ns = runtime::__rt_ctx->find_ns(ns_name_sym);
+        if(target_ns.is_nil())
+        {
+          errors.push_back("Namespace not found after ns form evaluation: " + ns_name);
+          return jtl::none;
+        }
+
+        // Analyze ALL forms with *ns* bound to the target namespace
+        analyze::processor an_prc;
+        native_vector<analyze::expression_ref> exprs;
+
+        {
+          runtime::context::binding_scope const analysis_scope{
+            runtime::obj::persistent_hash_map::create_unique(
+              std::make_pair(runtime::__rt_ctx->current_ns_var, target_ns))
+          };
+
+          for(auto const &parsed_form : all_forms)
+          {
+            auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+            expr = analyze::pass::optimize(expr);
+            exprs.push_back(expr);
+          }
+        }
+
+        // Generate module name
+        auto const module_name = jtl::immutable_string(ns_name) + "$loading__";
+
+        // Wrap expressions in a function for codegen
+        auto const fn_expr = evaluate::wrap_expressions(exprs, an_prc,
+                                                        runtime::__rt_ctx->unique_munged_string("ns_load"));
+
+        // Generate C++ code
+        codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
+        auto const cpp_code_body = cg_prc.declaration_str();
+        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name.name).data());
+        auto const entry_symbol = "_" + munged_struct_name + "_0";
+
+        auto const module_ns = runtime::module::module_to_native_ns(module_name);
+        auto const qualified_struct = std::string(module_ns.data(), module_ns.size()) +
+                                      "::" + munged_struct_name;
+
+        std::string cpp_code;
+        cpp_code += "#include <jank/prelude.hpp>\n";
+
+        // Add native header includes from namespace
+        auto const native_aliases = target_ns->native_aliases_snapshot();
+        for(auto const &alias : native_aliases)
+        {
+          cpp_code += "#include <" + std::string(alias.header.data(), alias.header.size()) + ">\n";
+        }
+        cpp_code += "\n";
+
+        cpp_code += std::string(cpp_code_body);
+        cpp_code += "\n\n";
+        cpp_code += "extern \"C\" ::jank::runtime::object_ref " + entry_symbol + "() {\n";
+        cpp_code += "  return ::jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
+        cpp_code += "}\n";
+
+        // Cross-compile to ARM64 object file
+        auto const object_result = cross_compile(id, cpp_code);
+
+        if(!object_result.success)
+        {
+          errors.push_back("Cross-compile failed for " + ns_name + ": " + object_result.error);
+          return jtl::none;
+        }
+
+        std::cout << "[compile-server] Compiled dependency: " << ns_name
+                  << " (" << object_result.object_data.size() << " bytes)" << std::endl;
+
+        return compiled_module_info{
+          std::string(module_name.data(), module_name.size()),
+          entry_symbol,
+          base64_encode(object_result.object_data)
+        };
+      }
+      catch(std::exception const &e)
+      {
+        errors.push_back("Exception compiling " + ns_name + ": " + e.what());
+        return jtl::none;
+      }
+      catch(...)
+      {
+        errors.push_back("Unknown exception compiling " + ns_name);
+        return jtl::none;
+      }
+    }
   };
 
   // Helper to create default config for iOS Simulator
@@ -854,7 +1087,7 @@ namespace jank::compile_server
     config.target_triple = "arm64-apple-ios17.0-simulator";
 
     // PCH for iOS (if it exists)
-    config.pch_path = jank_resource_dir + "/ios_incremental.pch";
+    config.pch_path = jank_resource_dir + "/incremental.pch";
 
     // Include paths - handle dev builds where jank_resource_dir/include doesn't exist
     auto const configured_include = jank_resource_dir + "/include";
