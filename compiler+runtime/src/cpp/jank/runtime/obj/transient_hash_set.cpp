@@ -4,6 +4,8 @@
 #include <jank/runtime/obj/nil.hpp>
 #include <jank/util/fmt.hpp>
 
+#include <iostream>
+
 namespace jank::runtime::obj
 {
   transient_hash_set::transient_hash_set(runtime::detail::native_persistent_hash_set &&d)
@@ -64,6 +66,11 @@ namespace jank::runtime::obj
   transient_hash_set_ref transient_hash_set::conj_in_place(object_ref const elem)
   {
     assert_active();
+    if(!elem.data)
+    {
+      std::cerr << "[SET DEBUG] conj_in_place received null element!\n";
+      std::cerr << "[SET DEBUG] set size before insert: " << data.size() << "\n";
+    }
     data.insert(elem);
     return this;
   }

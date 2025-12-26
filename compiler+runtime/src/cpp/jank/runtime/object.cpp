@@ -3,6 +3,8 @@
 #include <jank/runtime/visit.hpp>
 #include <jank/hash.hpp>
 
+#include <iostream>
+
 namespace jank::runtime
 {
   bool very_equal_to::operator()(object_ref const lhs, object_ref const rhs) const noexcept
@@ -32,6 +34,17 @@ namespace std
 
   size_t hash<object_ref>::operator()(object_ref const o) const noexcept
   {
+    if(!o.data)
+    {
+      std::cerr << "[HASH DEBUG] null object!\n";
+      std::abort();
+    }
+    auto type_val = static_cast<int>(o->type);
+    if(type_val < 0 || type_val > 100)
+    {
+      std::cerr << "[HASH DEBUG] suspicious type=" << type_val
+                << " ptr=" << static_cast<void const *>(o.data) << "\n";
+    }
     return jank::hash::visit(o.data);
   }
 

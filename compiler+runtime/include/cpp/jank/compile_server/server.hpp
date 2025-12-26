@@ -341,11 +341,14 @@ namespace jank::compile_server
 
         // Build complete C++ code with:
         // 1. Prelude include
-        // 2. Native header includes (for aliases like sdfx::)
-        // 3. Struct declaration (from codegen)
-        // 4. Extern "C" factory function that creates and calls the struct
+        // 2. Standard library headers that user code may need (not in prelude)
+        // 3. Native header includes (for aliases like sdfx::)
+        // 4. Struct declaration (from codegen)
+        // 5. Extern "C" factory function that creates and calls the struct
         std::string cpp_code;
         cpp_code += "#include <jank/prelude.hpp>\n";
+        // Add commonly needed standard headers not in prelude
+        cpp_code += "#include <fstream>\n";
 
         // Add native header includes from current namespace
         auto const current_ns = runtime::__rt_ctx->current_ns();
@@ -608,6 +611,8 @@ namespace jank::compile_server
 
         std::string cpp_code;
         cpp_code += "#include <jank/prelude.hpp>\n";
+        // Add commonly needed standard headers not in prelude
+        cpp_code += "#include <fstream>\n";
 
         // Add native header includes from namespace
         auto const native_aliases = target_ns->native_aliases_snapshot();
@@ -708,8 +713,15 @@ namespace jank::compile_server
       args.push_back(config_.ios_sdk_path);
       args.push_back("-std=gnu++20");
       args.push_back("-fPIC");
-      args.push_back("-O2");
       args.push_back("-w");  // Suppress warnings
+      // Must match PCH flags
+      args.push_back("-Xclang");
+      args.push_back("-fincremental-extensions");
+
+      // Define JANK_IOS_JIT to signal we're cross-compiling for iOS
+      // This prevents header-only libraries like tinygltf from defining their
+      // implementation in each module (which would cause duplicate symbol errors)
+      args.push_back("-DJANK_IOS_JIT=1");
 
       // Add PCH if available
       if(!config_.pch_path.empty() && std::filesystem::exists(config_.pch_path))
@@ -1007,6 +1019,8 @@ namespace jank::compile_server
 
         std::string cpp_code;
         cpp_code += "#include <jank/prelude.hpp>\n";
+        // Add commonly needed standard headers not in prelude
+        cpp_code += "#include <fstream>\n";
 
         // Add native header includes from namespace
         auto const native_aliases = target_ns->native_aliases_snapshot();
@@ -1063,11 +1077,17 @@ namespace jank::compile_server
     // Find clang
     if(clang_path.empty())
     {
-      // Try jank's bundled clang first
-      auto bundled = jank_resource_dir + "/bin/clang++";
-      if(std::filesystem::exists(bundled))
+      // Try jank's bundled clang first - check multiple locations
+      auto bundled_in_resource = jank_resource_dir + "/bin/clang++";
+      std::string bundled_in_jank = std::string(util::process_dir().c_str()) + "/llvm-install/usr/local/bin/clang++";
+
+      if(std::filesystem::exists(bundled_in_resource))
       {
-        config.clang_path = bundled;
+        config.clang_path = bundled_in_resource;
+      }
+      else if(std::filesystem::exists(bundled_in_jank))
+      {
+        config.clang_path = std::filesystem::canonical(bundled_in_jank).string();
       }
       else
       {

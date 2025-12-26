@@ -832,7 +832,7 @@ namespace jank::runtime::module
     return ret;
   }
 
-  void loader::set_is_loaded(jtl::immutable_string const &module)
+  void loader::set_is_loaded(jtl::immutable_string const &module) const
   {
     auto const loaded_libs_atom{ runtime::try_object<runtime::obj::atom>(
       __rt_ctx->loaded_libs_var->deref()) };
@@ -1135,6 +1135,24 @@ namespace jank::runtime::module
           continue;  /* Skip empty modules (already loaded) */
         }
 
+        /* Extract clean module name (strip $loading__ suffix) */
+        std::string clean_name = mod.name;
+        auto const suffix_pos = clean_name.find("$loading__");
+        if(suffix_pos != std::string::npos)
+        {
+          clean_name = clean_name.substr(0, suffix_pos);
+        }
+
+        /* Mark module as loaded BEFORE executing it.
+         * This ensures that if the module's code has require calls for other
+         * modules we're about to load, they won't try to load again. */
+        jtl::immutable_string const clean_module_name{ clean_name };
+        set_is_loaded(clean_module_name);
+        {
+          auto const locked_ordered_modules{ __rt_ctx->loaded_modules_in_order.wlock() };
+          locked_ordered_modules->push_back(clean_module_name);
+        }
+
         /* Load object file into JIT */
         bool load_success = __rt_ctx->jit_prc.load_object(
           reinterpret_cast<char const *>(mod.object_data.data()),
@@ -1156,6 +1174,8 @@ namespace jank::runtime::module
 
         auto fn_ptr = reinterpret_cast<object_ref(*)()>(sym_result.expect_ok());
         fn_ptr();
+
+        std::cout << "[loader] Loaded remote module: " << clean_name << std::endl;
       }
 
       return ok();
