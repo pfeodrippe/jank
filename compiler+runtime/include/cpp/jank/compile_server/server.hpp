@@ -14,7 +14,6 @@
 
 #include <string>
 #include <functional>
-#include <thread>
 #include <atomic>
 #include <memory>
 #include <iostream>
@@ -24,13 +23,29 @@
 #include <unordered_set>
 #include <cxxabi.h>
 #include <cstdlib>
+#include <pthread.h>
+
+#include <gc/gc.h>
+// Forward declarations for GC thread registration (may not be exposed in all gc.h versions)
+extern "C" {
+GC_API void GC_CALL GC_allow_register_threads(void);
+GC_API int GC_CALL GC_pthread_create(pthread_t *, const pthread_attr_t *,
+                                      void *(*)(void *), void *);
+}
 
 #include <boost/asio.hpp>
 
 #include <jank/compile_server/protocol.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/util/environment.hpp>
+#include <jank/util/cli.hpp>
 #include <jank/runtime/core/munge.hpp>
+#include <jank/runtime/core/to_string.hpp>
+#include <jank/runtime/core/seq.hpp>
+#include <jank/runtime/rtti.hpp>
+#include <jank/runtime/obj/persistent_hash_map.hpp>
+#include <jank/runtime/obj/persistent_list.hpp>
+#include <jank/runtime/obj/symbol.hpp>
 #include <jank/runtime/module/loader.hpp>
 #include <jank/read/lex.hpp>
 #include <jank/read/parse.hpp>
@@ -65,6 +80,7 @@ namespace jank::compile_server
       , config_(std::move(config))
       , acceptor_(io_context_)
       , running_(false)
+      , server_thread_()
     {
       // Ensure temp directory exists
       std::filesystem::create_directories(config_.temp_dir);
@@ -94,8 +110,30 @@ namespace jank::compile_server
         std::cout << "[compile-server] Target: " << config_.target_triple << std::endl;
         std::cout << "[compile-server] SDK: " << config_.ios_sdk_path << std::endl;
 
-        // Start server thread
-        server_thread_ = std::thread([this]() { run(); });
+        // Start server thread with GC registration
+        // Must register with Boehm GC since this thread will allocate GC memory during eval
+        GC_allow_register_threads();
+
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        // Set stack size to 16MB (needed for complex C++ headers)
+        constexpr size_t LARGE_STACK_SIZE = static_cast<size_t>(16) * 1024 * 1024;
+        pthread_attr_setstacksize(&attr, LARGE_STACK_SIZE);
+
+        /* Note: We explicitly call GC_pthread_create (not pthread_create) to ensure
+         * the thread is properly registered with Boehm GC for garbage collection. */
+        auto thread_func = [](void *arg) -> void * {
+          auto *self = static_cast<server *>(arg);
+          /* Set up thread bindings for dynamic vars like *ns*.
+           * This is required because eval operations may call (in-ns ...) which
+           * needs *ns* to be thread-bound. */
+          jank::runtime::context::binding_scope bindings;
+          self->run();
+          return nullptr;
+        };
+
+        GC_pthread_create(&server_thread_, &attr, thread_func, this);
+        pthread_attr_destroy(&attr);
       }
       catch(std::exception const &e)
       {
@@ -115,10 +153,7 @@ namespace jank::compile_server
       acceptor_.close(ec);
       io_context_.stop();
 
-      if(server_thread_.joinable())
-      {
-        server_thread_.join();
-      }
+      pthread_join(server_thread_, nullptr);
 
       std::cout << "[compile-server] Stopped." << std::endl;
     }
@@ -306,14 +341,25 @@ namespace jank::compile_server
 
         // Build complete C++ code with:
         // 1. Prelude include
-        // 2. Struct declaration (from codegen)
-        // 3. Extern "C" factory function that creates and calls the struct
+        // 2. Native header includes (for aliases like sdfx::)
+        // 3. Struct declaration (from codegen)
+        // 4. Extern "C" factory function that creates and calls the struct
         std::string cpp_code;
-        cpp_code += "#include <jank/prelude.hpp>\n\n";
+        cpp_code += "#include <jank/prelude.hpp>\n";
+
+        // Add native header includes from current namespace
+        auto const current_ns = runtime::__rt_ctx->current_ns();
+        auto const native_aliases = current_ns->native_aliases_snapshot();
+        for(auto const &alias : native_aliases)
+        {
+          cpp_code += "#include <" + std::string(alias.header.data(), alias.header.size()) + ">\n";
+        }
+        cpp_code += "\n";
+
         cpp_code += std::string(cpp_code_body);
         cpp_code += "\n\n";
-        cpp_code += "extern \"C\" jank::runtime::object_ref " + entry_symbol + "() {\n";
-        cpp_code += "  return jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
+        cpp_code += "extern \"C\" ::jank::runtime::object_ref " + entry_symbol + "() {\n";
+        cpp_code += "  return ::jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
         cpp_code += "}\n";
 
         // Step 4: Cross-compile to ARM64 object file
@@ -428,12 +474,35 @@ namespace jank::compile_server
         analyze::processor an_prc;
         native_vector<analyze::expression_ref> exprs;
 
-        // Analyze ALL forms (including ns form again)
-        for(auto const &parsed_form : all_forms)
+        // Extract target namespace name from ns form and look it up
+        // The ns form is (ns namespace-name ...), so second element is the name
+        auto const ns_list = runtime::try_object<runtime::obj::persistent_list>(ns_form);
+        if(runtime::sequence_length(ns_list) < 2)
         {
-          auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
-          expr = analyze::pass::optimize(expr);
-          exprs.push_back(expr);
+          return error_response(id, "Invalid ns form: expected (ns name ...)", "compile");
+        }
+        auto const ns_name_sym = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
+        auto const target_ns = runtime::__rt_ctx->find_ns(ns_name_sym);
+        if(target_ns.is_nil())
+        {
+          return error_response(id, util::format("Namespace {} not found after ns form evaluation",
+                                                  ns_name_sym->to_string()), "compile");
+        }
+
+        // Analyze ALL forms with *ns* bound to the target namespace
+        // This is critical for native alias resolution (e.g., sdfx/init)
+        {
+          runtime::context::binding_scope const analysis_scope{
+            runtime::obj::persistent_hash_map::create_unique(
+              std::make_pair(runtime::__rt_ctx->current_ns_var, target_ns))
+          };
+
+          for(auto const &parsed_form : all_forms)
+          {
+            auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+            expr = analyze::pass::optimize(expr);
+            exprs.push_back(expr);
+          }
         }
 
         // Step 4: Generate module name
@@ -454,11 +523,22 @@ namespace jank::compile_server
                                       "::" + munged_struct_name;
 
         std::string cpp_code;
-        cpp_code += "#include <jank/prelude.hpp>\n\n";
+        cpp_code += "#include <jank/prelude.hpp>\n";
+
+        // Add native header includes from namespace
+        // This ensures native aliases like sdfx:: resolve to actual C++ namespaces
+        auto const native_aliases = target_ns->native_aliases_snapshot();
+        for(auto const &alias : native_aliases)
+        {
+          cpp_code += "#include <" + std::string(alias.header.data(), alias.header.size()) + ">\n";
+          std::cout << "[compile-server] Adding native header: " << alias.header << std::endl;
+        }
+        cpp_code += "\n";
+
         cpp_code += std::string(cpp_code_body);
         cpp_code += "\n\n";
-        cpp_code += "extern \"C\" jank::runtime::object_ref " + entry_symbol + "() {\n";
-        cpp_code += "  return jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
+        cpp_code += "extern \"C\" ::jank::runtime::object_ref " + entry_symbol + "() {\n";
+        cpp_code += "  return ::jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
         cpp_code += "}\n";
 
         // Step 7: Cross-compile to ARM64 object file
@@ -736,7 +816,7 @@ namespace jank::compile_server
     boost::asio::io_context io_context_;
     tcp::acceptor acceptor_;
     std::atomic<bool> running_;
-    std::thread server_thread_;
+    pthread_t server_thread_;
     std::unordered_set<std::string> loaded_namespaces_;  // Track loaded namespaces
   };
 
@@ -813,6 +893,14 @@ namespace jank::compile_server
         config.include_paths.push_back(configured_include);
         std::cerr << "[compile-server] Warning: Include path does not exist: " << configured_include << std::endl;
       }
+    }
+
+    // Add user-specified include paths from CLI (e.g., -I/path/to/project)
+    // These are needed to find native headers like vulkan/sdf_engine.hpp
+    for(auto const &inc : util::cli::opts.include_dirs)
+    {
+      config.include_paths.push_back(inc);
+      std::cout << "[compile-server] Added user include path: " << inc << std::endl;
     }
 
     // Temp directory
