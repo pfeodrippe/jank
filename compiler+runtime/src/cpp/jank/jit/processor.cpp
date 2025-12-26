@@ -428,6 +428,39 @@ namespace jank::jit
     register_jit_stack_frames();
   }
 
+  bool processor::load_object(char const *data, size_t size, std::string const &name) const
+  {
+    /* Skip if already loaded - uses the name as key for idempotency. */
+    if(loaded_objects_.contains(name))
+    {
+      return true;
+    }
+
+    auto const ee{ interpreter->getExecutionEngine() };
+    auto buffer{ llvm::MemoryBuffer::getMemBuffer(
+      llvm::StringRef{ data, size },
+      name,
+      /* RequiresNullTerminator */ false) };
+
+    if(!buffer)
+    {
+      util::println(stderr, "[jit] Failed to create memory buffer for object: {}", name);
+      return false;
+    }
+
+    auto err = ee->addObjectFile(std::move(buffer));
+    if(err)
+    {
+      llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");
+      llvm::errs().flush();
+      return false;
+    }
+
+    loaded_objects_.insert(name);
+    register_jit_stack_frames();
+    return true;
+  }
+
   void processor::load_ir_module(llvm::orc::ThreadSafeModule &&m) const
   {
     auto const &module_name{ m.getModuleUnlocked()->getName() };

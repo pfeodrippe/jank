@@ -164,6 +164,12 @@ namespace jank::util::cli
                   opts.target_module,
                   "The entrypoint module (must be on the module path.")
       ->required();
+    cli_run_main.add_option("--ios-compile-server",
+                            opts.ios_compile_server_port,
+                            "Start iOS compile server on specified port (for remote JIT).");
+    cli_run_main.add_option("--ios-resource-dir",
+                            opts.ios_resource_dir,
+                            "Path to iOS resources (PCH, headers) for compile server.");
 
     /* Compile subcommand. */
     auto &cli_compile(*cli.add_subcommand(

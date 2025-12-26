@@ -1,6 +1,7 @@
 #pragma once
 
 #include <jank/runtime/object.hpp>
+#include <iostream>
 
 namespace jank::runtime
 {
@@ -53,7 +54,20 @@ namespace jank::runtime
   {
     if constexpr(T::obj_type != object_type::nil)
     {
+      if(!o.is_some())
+      {
+        std::cerr << "[EXPECT_OBJECT] null ref for type "
+                  << object_type_str(T::obj_type) << "\n";
+      }
       jank_debug_assert(o.is_some());
+    }
+    if(o->type != T::obj_type)
+    {
+      std::cerr << "[EXPECT_OBJECT] type mismatch: got "
+                << static_cast<int>(o->type) << " (" << object_type_str(o->type) << ")"
+                << " expected " << static_cast<int>(T::obj_type)
+                << " (" << object_type_str(T::obj_type) << ")"
+                << " ptr=" << static_cast<void const *>(o.data) << "\n";
     }
     jank_debug_assert(o->type == T::obj_type);
     return reinterpret_cast<T *>(reinterpret_cast<char *>(o.data) - offsetof(T, base));

@@ -380,6 +380,14 @@ namespace clojure::core_native
       ns_obj->add_native_alias(try_object<obj::symbol>(alias), std::move(alias_data)).expect_ok());
     if(added)
     {
+#if defined(JANK_TARGET_IOS)
+      /* On iOS, native headers are already compiled into the cross-compiled code
+       * sent from the compile server. We just need to register the alias without
+       * attempting local JIT compilation (which would fail since headers aren't
+       * available on iOS and the iOS JIT can't compile arbitrary headers). */
+      std::cerr << "[jank-ios] Registered native alias (header pre-compiled by server): "
+                << include_arg << std::flush;
+#else
       auto const include_code{ util::format("#include {}\n", include_arg) };
       std::cerr << "[jank-jit] Attempting to compile: " << include_code << std::flush;
       auto const res{ __rt_ctx->eval_cpp_string(include_code) };
@@ -401,6 +409,7 @@ namespace clojure::core_native
           include_arg) };
       }
       std::cerr << "[jank-jit] Compilation SUCCEEDED for: " << include_code << std::flush;
+#endif
     }
     return jank_nil;
   }

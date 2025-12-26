@@ -313,7 +313,7 @@ namespace jank::analyze::cpp_util
   {
     if(type == untyped_object_ptr_type())
     {
-      return "jank::runtime::object_ref";
+      return "::jank::runtime::object_ref";
     }
     /* TODO: Handle typed object refs, too. */
 

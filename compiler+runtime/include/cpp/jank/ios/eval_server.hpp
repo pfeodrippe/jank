@@ -58,6 +58,9 @@ extern "C" int GC_unregister_my_thread(void);
 #include <jank/error.hpp>
 #include <jank/read/source.hpp>
 
+// Remote compilation support
+#include <jank/compile_server/remote_eval.hpp>
+
 namespace jank::ios
 {
   // Simple JSON helpers (avoid heavy dependencies)
@@ -195,7 +198,27 @@ namespace jank::ios
       : port_(port)
       , running_(false)
       , server_fd_(-1)
+      , use_remote_compile_(false)
     {
+    }
+
+    // Enable remote compilation to macOS
+    void enable_remote_compile(std::string const &compile_host, uint16_t compile_port = compile_server::default_compile_port)
+    {
+      compile_server::init_remote_eval(compile_host, compile_port);
+      use_remote_compile_ = true;
+      std::cout << "[ios-eval] Remote compilation enabled: " << compile_host << ":" << compile_port << std::endl;
+    }
+
+    void disable_remote_compile()
+    {
+      use_remote_compile_ = false;
+      std::cout << "[ios-eval] Remote compilation disabled" << std::endl;
+    }
+
+    bool is_remote_compile_enabled() const
+    {
+      return use_remote_compile_;
     }
 
     ~eval_server()
@@ -493,11 +516,44 @@ namespace jank::ios
         // Normal evaluation path
         try
         {
-          // Note: Namespace switching is handled on the macOS side (ios_remote_eval.hpp)
-          // by prepending (in-ns ...) to the code before sending to iOS.
-          // This keeps the iOS eval server simple.
+          runtime::object_ref obj;
 
-          auto obj = runtime::__rt_ctx->eval_string(code);
+          if(use_remote_compile_)
+          {
+            // Remote compilation: send code to macOS, load resulting object file
+            auto *remote = compile_server::get_remote_eval();
+            if(!remote)
+            {
+              throw std::runtime_error("Remote compilation enabled but not initialized");
+            }
+
+            auto eval_result = remote->eval(code, ns.empty() ? "user" : ns);
+            if(!eval_result.success)
+            {
+              // Format error as a jank error response
+              std::string error_msg = eval_result.error;
+              std::string error_type = eval_result.error_type;
+
+              result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
+                + json::escape(error_msg) + R"(","type":")" + error_type + R"("})";
+
+              // Restore signal handlers and return early
+              sigaction(SIGSEGV, &sa_old_segv, nullptr);
+              sigaction(SIGBUS, &sa_old_bus, nullptr);
+              sigaction(SIGABRT, &sa_old_abrt, nullptr);
+              return result;
+            }
+
+            obj = eval_result.value;
+          }
+          else
+          {
+            // Local compilation (original path)
+            // Note: Namespace switching is handled on the macOS side (ios_remote_eval.hpp)
+            // by prepending (in-ns ...) to the code before sending to iOS.
+            // This keeps the iOS eval server simple.
+            obj = runtime::__rt_ctx->eval_string(code);
+          }
           auto code_str = runtime::to_code_string(obj);
           std::string value_str(code_str.data(), code_str.size());
 
@@ -631,6 +687,7 @@ namespace jank::ios
     std::atomic<bool> running_;
     int server_fd_;
     pthread_t server_thread_;
+    bool use_remote_compile_;
   };
 
   // Global server instance for easy access
@@ -659,12 +716,43 @@ namespace jank::ios
     }
   }
 
+  // Start eval server with remote compilation enabled
+  inline void start_eval_server_with_remote_compile(
+    uint16_t eval_port,
+    std::string const &compile_host,
+    uint16_t compile_port = compile_server::default_compile_port)
+  {
+    auto &server_ptr = get_eval_server_ptr();
+    if(!server_ptr || !server_ptr->is_running())
+    {
+      // Recreate with new settings
+      if(server_ptr)
+      {
+        server_ptr->stop();
+      }
+      server_ptr = std::make_unique<eval_server>(eval_port);
+      server_ptr->enable_remote_compile(compile_host, compile_port);
+      server_ptr->start();
+    }
+  }
+
   inline void stop_eval_server()
   {
     auto &server_ptr = get_eval_server_ptr();
     if(server_ptr)
     {
       server_ptr->stop();
+    }
+  }
+
+  // Enable remote compilation on running server
+  inline void enable_remote_compile(std::string const &compile_host,
+                                    uint16_t compile_port = compile_server::default_compile_port)
+  {
+    auto &server_ptr = get_eval_server_ptr();
+    if(server_ptr)
+    {
+      server_ptr->enable_remote_compile(compile_host, compile_port);
     }
   }
 

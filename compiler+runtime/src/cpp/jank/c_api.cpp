@@ -29,6 +29,9 @@
 /* For iOS JIT, native modules are statically linked but need to be
  * explicitly referenced to prevent dead code elimination. */
 #ifdef JANK_IOS_JIT
+#include <jank/ios/eval_server.hpp>
+#include <jank/compile_server/remote_compile.hpp>
+
 extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
 extern "C" jank_object_ref jank_load_clojure_core_native();
 extern "C" jank_object_ref jank_load_jank_arena_native();
@@ -1375,4 +1378,88 @@ extern "C"
 
     return trans.to_persistent().erase();
   }
+
+  /* iOS Eval Server C API implementation */
+#ifdef JANK_IOS_JIT
+  void jank_ios_start_eval_server(jank_u16 const port)
+  {
+    jank::ios::start_eval_server(port);
+  }
+
+  void jank_ios_start_eval_server_remote(jank_u16 const eval_port,
+                                         char const *compile_host,
+                                         jank_u16 const compile_port)
+  {
+    jank::ios::start_eval_server_with_remote_compile(eval_port, compile_host, compile_port);
+  }
+
+  void jank_ios_stop_eval_server(void)
+  {
+    jank::ios::stop_eval_server();
+  }
+
+  void jank_ios_enable_remote_compile(char const *compile_host, jank_u16 const compile_port)
+  {
+    jank::ios::enable_remote_compile(compile_host, compile_port);
+  }
+#else
+  /* Stub implementations for non-iOS platforms */
+  void jank_ios_start_eval_server(jank_u16 const)
+  {
+  }
+
+  void jank_ios_start_eval_server_remote(jank_u16 const, char const *, jank_u16 const)
+  {
+  }
+
+  void jank_ios_stop_eval_server(void)
+  {
+  }
+
+  void jank_ios_enable_remote_compile(char const *, jank_u16 const)
+  {
+  }
+#endif
+
+  /* ---- Remote Compilation C API implementation ---- */
+#ifdef JANK_IOS_JIT
+  void jank_remote_compile_configure(char const *host, jank_u16 const port)
+  {
+    jank::compile_server::configure_remote_compile(host, port);
+  }
+
+  jank_bool jank_remote_compile_connect(void)
+  {
+    return jank::compile_server::connect_remote_compile() ? 1 : 0;
+  }
+
+  void jank_remote_compile_disconnect(void)
+  {
+    jank::compile_server::disconnect_remote_compile();
+  }
+
+  jank_bool jank_remote_compile_is_enabled(void)
+  {
+    return jank::compile_server::is_remote_compile_enabled() ? 1 : 0;
+  }
+#else
+  /* Stub implementations for non-iOS platforms */
+  void jank_remote_compile_configure(char const *, jank_u16 const)
+  {
+  }
+
+  jank_bool jank_remote_compile_connect(void)
+  {
+    return 0;
+  }
+
+  void jank_remote_compile_disconnect(void)
+  {
+  }
+
+  jank_bool jank_remote_compile_is_enabled(void)
+  {
+    return 0;
+  }
+#endif
 }
