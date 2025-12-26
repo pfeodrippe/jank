@@ -709,6 +709,18 @@ namespace jank::nrepl_server::asio
       {
         return handle_ios_status(msg);
       }
+      if(op == "remote-compile-connect")
+      {
+        return handle_remote_compile_connect(msg);
+      }
+      if(op == "remote-compile-disconnect")
+      {
+        return handle_remote_compile_disconnect(msg);
+      }
+      if(op == "remote-compile-status")
+      {
+        return handle_remote_compile_status(msg);
+      }
 #endif
 
       return handle_unsupported(msg, "unknown-op");
@@ -807,6 +819,12 @@ namespace jank::nrepl_server::asio
     std::vector<bencode::value::dict> handle_ios_disconnect(message const &msg);
 
     std::vector<bencode::value::dict> handle_ios_status(message const &msg);
+
+    std::vector<bencode::value::dict> handle_remote_compile_connect(message const &msg);
+
+    std::vector<bencode::value::dict> handle_remote_compile_disconnect(message const &msg);
+
+    std::vector<bencode::value::dict> handle_remote_compile_status(message const &msg);
 #endif
 
     std::vector<bencode::value::dict>
@@ -3302,4 +3320,5 @@ namespace jank::nrepl_server::asio
 #include <jank/nrepl_server/ops/test_var_query.hpp>
 #ifndef __EMSCRIPTEN__
 #include <jank/nrepl_server/ops/ios_eval.hpp>
+#include <jank/nrepl_server/ops/remote_compile.hpp>
 #endif

@@ -41,6 +41,9 @@
 #include <jank/error/codegen.hpp>
 #include <jank/error/runtime.hpp>
 #include <jank/profile/time.hpp>
+#ifdef JANK_IOS_JIT
+  #include <jank/compile_server/remote_compile.hpp>
+#endif
 
 namespace jank::runtime
 {
@@ -209,6 +212,67 @@ namespace jank::runtime
                                   usize const start_col)
   {
     profile::timer const timer{ "rt eval_string" };
+
+#ifdef JANK_IOS_JIT
+    /* Check if remote compilation is enabled. If so, send the code to the
+     * macOS compile-server for cross-compilation instead of compiling locally.
+     * This allows full JIT on iOS without requiring CppInterOp on the device. */
+    if(compile_server::is_remote_compile_enabled())
+    {
+      profile::timer const remote_timer{ "rt eval_string:remote" };
+
+      /* Get the current namespace name for the compilation context */
+      auto const current_ns = expect_object<ns>(current_ns_var->deref());
+      std::string const ns_name{ current_ns->to_string().data(), current_ns->to_string().size() };
+      std::string const code_str{ code.data(), code.size() };
+
+      /* Send code to compile-server and receive object file */
+      auto const response = compile_server::remote_compile(code_str, ns_name);
+
+      if(!response.success)
+      {
+        throw error::internal_codegen_failure(
+          jtl::immutable_string{ "Remote compilation failed: " + response.error });
+      }
+
+      if(response.object_data.empty())
+      {
+        /* No object generated - might be a no-op form */
+        return jank_nil;
+      }
+
+      /* Load the object file into the JIT */
+      {
+        profile::timer const load_timer{ "rt eval_string:remote:load" };
+        auto load_result = jit_prc.load_object(
+          reinterpret_cast<char const *>(response.object_data.data()),
+          response.object_data.size(),
+          response.entry_symbol);
+
+        if(!load_result)
+        {
+          throw error::internal_codegen_failure(
+            jtl::immutable_string{ "Failed to load remote-compiled object file" });
+        }
+      }
+
+      /* Find and call the entry symbol */
+      {
+        profile::timer const call_timer{ "rt eval_string:remote:call" };
+        jtl::immutable_string const entry_sym{ response.entry_symbol };
+        auto const fn_result = jit_prc.find_symbol(entry_sym);
+        if(fn_result.is_err())
+        {
+          throw error::internal_codegen_failure(jtl::immutable_string{
+            "Failed to find entry symbol in remote-compiled object: " + response.entry_symbol });
+        }
+
+        auto const fn_ptr = reinterpret_cast<object *(*)()>(fn_result.expect_ok());
+        return fn_ptr();
+      }
+    }
+#endif /* JANK_IOS_JIT */
+
     read::lex::processor l_prc{ code, start_line, start_col };
     read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
 

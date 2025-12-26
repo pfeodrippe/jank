@@ -37,6 +37,10 @@
 #include <clojure/core_native.hpp>
 #include <clojure/string_native.hpp>
 
+#ifndef JANK_TARGET_IOS
+#include <jank/compile_server/server.hpp>
+#endif
+
 #ifdef JANK_PHASE_2
 extern "C" jank_object_ref jank_load_clojure_core();
 #endif
@@ -192,6 +196,35 @@ namespace jank
       __rt_ctx->load_module("/" + opts.target_module, module::origin::latest).expect_ok();
     }
 
+#ifndef JANK_TARGET_IOS
+    /* Start iOS compile server if requested.
+     * This runs in a separate thread so the main game loop can continue.
+     * The compile server uses the already-initialized runtime context with
+     * all native headers parsed, so iOS apps can remotely compile code. */
+    std::unique_ptr<compile_server::server> ios_server;
+    if(opts.ios_compile_server_port != 0)
+    {
+      std::cout << "[ios-compile-server] Starting on port " << opts.ios_compile_server_port
+                << "..." << std::endl;
+
+      auto const jank_resource_dir = util::resource_dir();
+      auto config = compile_server::make_ios_simulator_config(jank_resource_dir);
+
+      ios_server = std::make_unique<compile_server::server>(opts.ios_compile_server_port,
+                                                            std::move(config));
+      ios_server->start();
+
+      if(ios_server->is_running())
+      {
+        std::cout << "[ios-compile-server] Ready for iOS connections." << std::endl;
+      }
+      else
+      {
+        std::cerr << "[ios-compile-server] Failed to start!" << std::endl;
+      }
+    }
+#endif
+
     {
       profile::timer const timer{ "run -main" };
       auto const main_var(__rt_ctx->find_var(opts.target_module, "-main"));
@@ -212,6 +245,15 @@ namespace jank
                                                opts.target_module) };
       }
     }
+
+#ifndef JANK_TARGET_IOS
+    /* Stop iOS compile server when main exits. */
+    if(ios_server && ios_server->is_running())
+    {
+      std::cout << "[ios-compile-server] Stopping..." << std::endl;
+      ios_server->stop();
+    }
+#endif
   }
 
   static void compile_module()

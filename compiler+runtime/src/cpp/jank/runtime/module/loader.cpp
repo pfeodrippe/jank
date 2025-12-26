@@ -26,6 +26,11 @@
 #include <jank/util/environment.hpp>
 #include <jank/profile/time.hpp>
 #include <jank/error/runtime.hpp>
+#ifdef JANK_IOS_JIT
+  #include <fstream>
+  #include <sstream>
+  #include <jank/compile_server/remote_compile.hpp>
+#endif
 
 namespace jank::runtime::module
 {
@@ -1069,6 +1074,95 @@ namespace jank::runtime::module
     return error::runtime_unable_to_load_module("Loading source modules at runtime is unsupported "
                                                 "on emscripten; precompile modules on the host.");
 #else
+
+#ifdef JANK_IOS_JIT
+    /* On iOS with JIT, delegate namespace loading to the compile server.
+     * This allows the compile server to build up its namespace context
+     * so that subsequent eval operations can resolve symbols correctly. */
+    if(compile_server::is_remote_compile_enabled())
+    {
+      std::string source;
+
+      if(entry.archive_path.is_some())
+      {
+        auto const res{ visit_jar_entry(
+          entry,
+          [&](zip_t * const zip) -> jtl::result<void, error_ref> {
+            auto const read_result{ read_zip_entry(zip) };
+            if(read_result.is_err())
+            {
+              return read_result.expect_err();
+            }
+            source = std::string(read_result.expect_ok());
+            return ok();
+          }) };
+        if(res.is_err())
+        {
+          return res;
+        }
+      }
+      else
+      {
+        /* Read source from file */
+        std::ifstream file(entry.path.c_str());
+        if(!file)
+        {
+          return error::runtime_unable_to_load_module(
+            util::format("Failed to open file: {}", entry.path));
+        }
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        source = buffer.str();
+      }
+
+      /* Convert path to namespace name */
+      auto const ns_name = path_to_module(std::filesystem::path(std::string(entry.path)));
+
+      /* Send to compile server */
+      auto const response = compile_server::remote_require(std::string(ns_name), source);
+
+      if(!response.success)
+      {
+        return error::runtime_unable_to_load_module(
+          util::format("Remote require failed for {}: {}", ns_name, response.error));
+      }
+
+      /* Load each compiled module */
+      for(auto const &mod : response.modules)
+      {
+        if(mod.object_data.empty())
+        {
+          continue;  /* Skip empty modules (already loaded) */
+        }
+
+        /* Load object file into JIT */
+        bool load_success = __rt_ctx->jit_prc.load_object(
+          reinterpret_cast<char const *>(mod.object_data.data()),
+          mod.object_data.size(),
+          mod.entry_symbol);
+        if(!load_success)
+        {
+          return error::runtime_unable_to_load_module(
+            util::format("Failed to load object for {}", mod.name));
+        }
+
+        /* Call the entry function to execute the module */
+        auto sym_result = __rt_ctx->jit_prc.find_symbol(mod.entry_symbol);
+        if(sym_result.is_err())
+        {
+          return error::runtime_unable_to_load_module(
+            util::format("Failed to find symbol {} for {}", mod.entry_symbol, mod.name));
+        }
+
+        auto fn_ptr = reinterpret_cast<object_ref(*)()>(sym_result.expect_ok());
+        fn_ptr();
+      }
+
+      return ok();
+    }
+#endif
+
+    /* Standard loading path (non-iOS or remote compile not enabled) */
     if(entry.archive_path.is_some())
     {
       auto const res{ visit_jar_entry(

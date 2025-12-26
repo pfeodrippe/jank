@@ -922,6 +922,8 @@ else()
       src/cpp/jank/gc_wasm_stub.cpp
       # LLVM RTTI stub (LLVM is built without RTTI, jank needs RTTI)
       src/cpp/jank/llvm_rtti_stub.cpp
+      # Remote compilation client for iOS -> macOS JIT
+      src/cpp/jank/compile_server/remote_compile.cpp
     )
     # environment_ios.cpp uses Objective-C APIs
     set_source_files_properties(
@@ -1499,6 +1501,40 @@ if(jank_test)
   add_test(NAME "Test" COMMAND jank_test_exe)
 endif()
 # ---- Tests ----
+
+# ---- Compile Server (for iOS remote JIT) ----
+# Build compile-server when tests are enabled (it uses phase 1 libs like tests do)
+if(jank_test)
+  add_executable(
+    jank_compile_server
+    src/cpp/compile_server_main.cpp
+  )
+
+  set_property(TARGET jank_compile_server PROPERTY OUTPUT_NAME compile-server)
+
+  target_compile_features(jank_compile_server PRIVATE ${jank_cxx_standard})
+  target_compile_options(jank_compile_server PUBLIC ${jank_common_compiler_flags} ${jank_aot_compiler_flags})
+  target_include_directories(jank_compile_server SYSTEM PRIVATE "$<TARGET_PROPERTY:jank_lib,INCLUDE_DIRECTORIES>")
+  target_link_directories(jank_compile_server PRIVATE "$<TARGET_PROPERTY:jank_lib,LINK_DIRECTORIES>")
+  target_link_options(jank_compile_server PRIVATE ${jank_linker_flags} -L ${CMAKE_BINARY_DIR})
+
+  target_link_libraries(
+    jank_compile_server PUBLIC
+    ${jank_link_whole_start} ${CMAKE_BINARY_DIR}/libjank-standalone-phase-1.a ${jank_link_whole_end}
+    z
+    LLVM clang-cpp
+    OpenSSL::Crypto
+  )
+
+  jank_hook_llvm(jank_compile_server)
+
+  # Symbol exporting for JIT.
+  set_target_properties(jank_compile_server PROPERTIES ENABLE_EXPORTS 1)
+
+  add_dependencies(jank_compile_server jank_exe_phase_1 jank_core_libraries)
+endif()
+# ---- End Compile Server ----
+
 else()
   message(STATUS "Skipping native executables/tests for wasm build")
 endif()

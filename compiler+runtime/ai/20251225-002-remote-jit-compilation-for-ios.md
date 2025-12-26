@@ -74,55 +74,65 @@ This is where the problem occurs - when `cg_prc.declaration_str()` contains code
 
 ---
 
-## Proposed Solution: Cross-Compile on macOS, Load Object on iOS
+## Proposed Solution: iOS nREPL Delegates Compilation to macOS
 
 ### High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        macOS                                 │
+│                        iOS Device                            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  Editor → nREPL → jank nREPL Server                        │
-│                         │                                   │
-│                         ↓                                   │
-│              ┌─────────────────────────┐                   │
-│              │    jank Compiler        │                   │
-│              │    ─────────────────    │                   │
-│              │    lex → parse →        │                   │
-│              │    analyze → optimize   │                   │
-│              │           │             │                   │
-│              │           ↓             │                   │
-│              │    codegen → C++        │                   │
-│              │           │             │                   │
-│              │           ↓             │                   │
-│              │    Cross-compile to     │                   │
-│              │    ARM64 object file    │                   │
-│              │    (with shared PCH)    │                   │
-│              └─────────────────────────┘                   │
-│                         │                                   │
-│                         │ TCP (send .o binary)              │
-└─────────────────────────│───────────────────────────────────┘
-                          │
-┌─────────────────────────│───────────────────────────────────┐
-│                     iOS │                                    │
-├─────────────────────────│───────────────────────────────────┤
-│                         ↓                                    │
-│              ┌─────────────────────────┐                    │
-│              │  ORC JIT Object Loader  │                    │
-│              │  ─────────────────────  │                    │
-│              │  • load_object(.o data) │                    │
-│              │  • Resolve symbols via  │                    │
-│              │    registered AOT syms  │                    │
-│              │  • Execute native code! │                    │
-│              └─────────────────────────┘                    │
-│                         │                                    │
-│                         ↓                                    │
-│              Direct ARM64 execution                         │
-│              (NO interpretation, NO iOS JIT)                │
+│  Editor (CIDER/Calva) ──nREPL──► iOS nREPL Server          │
+│                                        │                    │
+│                                        │ eval op received   │
+│                                        ↓                    │
+│                         ┌──────────────────────────┐        │
+│                         │  "I need this compiled"  │        │
+│                         │  Send code to macOS ─────┼───┐    │
+│                         └──────────────────────────┘   │    │
+│                                                        │    │
+│                                        ┌───────────────┘    │
+│                                        │ receive .o         │
+│                                        ↓                    │
+│                         ┌──────────────────────────┐        │
+│                         │  ORC JIT Object Loader   │        │
+│                         │  • load_object(.o)       │        │
+│                         │  • Resolve symbols       │        │
+│                         │  • Execute native code!  │        │
+│                         └──────────────────────────┘        │
+│                                        │                    │
+│                                        ↓                    │
+│                              Return result to editor        │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+                                         │
+                              TCP (compile request)
+                                         │
+┌────────────────────────────────────────│────────────────────┐
+│                        macOS           │                     │
+├────────────────────────────────────────│────────────────────┤
+│                                        ↓                     │
+│              ┌─────────────────────────────────┐            │
+│              │  Compilation Service             │            │
+│              │  ───────────────────────────     │            │
+│              │  1. Receive jank source code     │            │
+│              │  2. lex → parse → analyze        │            │
+│              │  3. codegen → C++                │            │
+│              │  4. Cross-compile to ARM64 .o    │            │
+│              │     (with iOS PCH + flags)       │            │
+│              │  5. Send .o back to iOS          │            │
+│              └─────────────────────────────────┘            │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Key Points
+
+1. **iOS is the nREPL server** - Editor connects directly to iOS
+2. **iOS delegates compilation** - When eval arrives, iOS asks macOS to compile
+3. **macOS is a "compilation service"** - Just compiles, doesn't run nREPL
+4. **iOS executes native code** - Loads object file, runs at full speed
 
 ### Key Insight: Why This Solves the Problem
 
@@ -276,15 +286,27 @@ void register_symbol(JITDylib& jd, char const* name, void* addr) {
   (imgui/end))
 ```
 
-### Step 2: macOS nREPL Receives Code
+### Step 2: Editor Sends to iOS nREPL Server
 
 ```
-Editor → nREPL → jank nREPL server (macOS)
+Editor (CIDER/Calva) ──nREPL──► iOS nREPL Server
 ```
 
-### Step 3: macOS Compiles for iOS
+### Step 3: iOS Requests Compilation from macOS
 
 ```cpp
+// In iOS nREPL eval handler:
+auto compile_result = request_compilation_from_macos(code, ns);
+
+// Protocol message to macOS:
+// { "op": "compile", "code": "(defn my-render ...)", "ns": "user" }
+```
+
+### Step 4: macOS Compiles and Returns Object
+
+```cpp
+// On macOS compilation service:
+
 // 1. Lex, parse, analyze, optimize (normal jank pipeline)
 auto expr = analyze_and_optimize(code);
 
@@ -292,37 +314,38 @@ auto expr = analyze_and_optimize(code);
 codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
 auto cpp_code = cg_prc.declaration_str();
 
-// 3. Cross-compile to ARM64 object
-auto object_data = cross_compile_to_ios(cpp_code);
+// 3. Cross-compile to ARM64 object (using iOS PCH!)
+auto object_data = cross_compile_to_ios_arm64(cpp_code);
 
-// 4. Send to iOS
-send_to_ios({ .op = "eval-object",
-              .object_data = object_data,
-              .entry_symbol = cg_prc.entry_symbol() });
+// 4. Return to iOS
+return { .object_data = object_data,
+         .entry_symbol = cg_prc.entry_symbol() };
 ```
 
-### Step 4: iOS Loads and Executes
+### Step 5: iOS Loads Object and Executes
 
 ```cpp
-// 1. Receive object data
-auto request = receive_request();
+// Back on iOS:
+
+// 1. Receive compiled object from macOS
+auto compiled = receive_from_macos();
 
 // 2. Load into ORC JIT (symbol resolution happens here!)
-auto buffer = llvm::MemoryBuffer::getMemBuffer(...);
+auto buffer = llvm::MemoryBuffer::getMemBuffer(compiled.object_data, ...);
 ee->addObjectFile(std::move(buffer));
 
-// 3. Call entry function
-auto fn = find_symbol(request.entry_symbol);
-auto result = fn();
+// 3. Find and call entry function
+auto fn_ptr = find_symbol(compiled.entry_symbol);
+auto result = reinterpret_cast<object_ref(*)()>(fn_ptr)();
 
-// 4. Send result back
-send_response({ .value = to_string(result) });
+// 4. Return result to editor via nREPL response
+return nrepl_response({ .value = to_string(result) });
 ```
 
-### Step 5: Result Returns to Editor
+### Step 6: Result Returns to Editor
 
 ```
-iOS → macOS nREPL → Editor
+iOS nREPL Server ──nREPL response──► Editor
 ```
 
 ---
@@ -365,68 +388,100 @@ When macOS cross-compiles:
 
 ## Files to Modify
 
+### On macOS (Compilation Service)
+
 | File | Change |
 |------|--------|
-| `include/cpp/jank/nrepl_server/ios_remote_eval.hpp` | Add `eval-object` op handler |
-| `include/cpp/jank/nrepl_server/ops/ios_eval.hpp` | Handle compiled object loading |
-| NEW: `src/cpp/jank/cross_compile/ios.cpp` | Cross-compilation wrapper |
-| `src/cpp/jank/c_api.cpp` | Add `jank_load_object_data()` C API |
-| iOS app code | Register AOT symbols on startup |
+| NEW: `src/cpp/jank/compile_server/server.cpp` | TCP server that accepts compile requests |
+| NEW: `include/cpp/jank/compile_server/protocol.hpp` | Protocol definitions |
+| NEW: `src/cpp/jank/cross_compile/ios.cpp` | Cross-compilation to ARM64 |
+
+### On iOS (nREPL Server + Object Loader)
+
+| File | Change |
+|------|--------|
+| `include/cpp/jank/nrepl_server/ops/eval.hpp` | Delegate to macOS instead of local JIT |
+| NEW: `include/cpp/jank/compile_client/client.hpp` | Client to connect to macOS compile service |
+| `src/cpp/jank/jit/processor.cpp` | Add `load_object_data()` for in-memory loading |
+| iOS app code | Register AOT symbols on startup, connect to macOS |
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: macOS Cross-Compilation (3-4 days)
+### Phase 1: macOS Compilation Service (3-4 days)
 
-1. **Create cross-compilation module**
+1. **Create compilation server**
    ```cpp
-   // cross_compile/ios.hpp
-   namespace jank::cross_compile {
-       struct ios_compile_result {
-           std::vector<uint8_t> object_data;
-           std::string entry_symbol;
-           std::string error;  // Empty on success
-       };
+   // compile_server/server.hpp
+   namespace jank::compile_server {
+       class server {
+       public:
+           server(uint16_t port, std::string const& ios_pch_path);
+           void start();  // Blocking, runs event loop
 
-       ios_compile_result compile_for_ios(
-           std::string const& cpp_code,
-           std::string const& pch_path,
-           std::vector<std::string> const& include_paths);
+       private:
+           void handle_compile_request(connection& conn, compile_request const& req);
+       };
    }
    ```
 
-2. **Invoke clang for cross-compilation**
-   - Use `llvm::sys::ExecuteAndWait` to run clang
-   - Or use clang as a library (CompilerInvocation)
-
-3. **Integrate with nREPL eval handler**
-   - When iOS is connected, cross-compile instead of local JIT
-   - Send object data via new `eval-object` protocol message
-
-### Phase 2: iOS Object Loading (2-3 days)
-
-1. **Add C API for object loading**
+2. **Implement cross-compilation**
    ```cpp
-   extern "C" jank_object_ref jank_load_object_and_call(
-       uint8_t const* object_data,
-       size_t object_size,
-       char const* entry_symbol);
+   // cross_compile/ios.hpp
+   struct compile_result {
+       std::vector<uint8_t> object_data;
+       std::string entry_symbol;
+       std::string error;
+   };
+
+   compile_result compile_for_ios(
+       std::string const& jank_code,
+       std::string const& ns,
+       std::string const& pch_path);
    ```
 
-2. **Extend iOS eval server protocol**
-   - Handle `eval-object` messages
-   - Load object via ORC JIT
-   - Call entry symbol, return result
+3. **Protocol definition**
+   ```cpp
+   // Request: { "op": "compile", "code": "...", "ns": "user" }
+   // Response: { "op": "compiled", "object": <base64>, "symbol": "..." }
+   // Or error: { "op": "error", "message": "..." }
+   ```
+
+### Phase 2: iOS Compile Client + Object Loading (3-4 days)
+
+1. **Connect iOS to macOS compile service**
+   ```cpp
+   // In iOS nREPL eval handler:
+   if(macos_compile_client.is_connected()) {
+       auto result = macos_compile_client.compile(code, ns);
+       if(result.is_ok()) {
+           return load_and_execute(result.object_data, result.entry_symbol);
+       }
+   }
+   // Fallback to local JIT (may crash for inline C++ functions)
+   ```
+
+2. **In-memory object loading**
+   ```cpp
+   // jit/processor.cpp - add method:
+   void processor::load_object_data(
+       std::span<uint8_t const> object_data) const
+   {
+       auto buffer = llvm::MemoryBuffer::getMemBuffer(...);
+       auto const ee = interpreter->getExecutionEngine();
+       llvm::cantFail(ee->addObjectFile(std::move(buffer)));
+   }
+   ```
 
 3. **Symbol registration on iOS startup**
-   - Register all required AOT symbols before any remote eval
+   - Register AOT symbols before any eval
 
 ### Phase 3: Testing & Polish (2-3 days)
 
 1. **Test with ImGui functions** (the original problem case)
-2. **Error handling** for missing symbols
-3. **Performance testing** - compare to local JIT
+2. **Error handling** - missing symbols, connection failures
+3. **Graceful fallback** - if macOS unavailable, warn but try local JIT
 
 ---
 
@@ -541,11 +596,15 @@ __rt_ctx->jit_prc.load_ir_module(std::move(module));
 
 This approach solves the iOS JIT symbol duplication problem by:
 
-1. **Moving compilation to macOS** - where we have full access to headers and can compile correctly
-2. **Using ORC JIT's object loading** - which handles symbol resolution via registered symbols
-3. **Avoiding CppInterOp on iOS** - no header parsing, no duplicate symbol creation
+1. **iOS runs nREPL server** - Editor connects directly to iOS app
+2. **iOS delegates compilation to macOS** - Sends jank code, receives ARM64 object
+3. **macOS cross-compiles with iOS PCH** - Same headers, same symbols as AOT
+4. **iOS loads object via ORC JIT** - Symbol resolution uses registered AOT addresses
+5. **Native ARM64 execution** - No interpretation, full speed
 
-The result is **native ARM64 execution on iOS** with **no interpretation overhead** - the code runs at full speed, just like it was AOT compiled.
+The result: **Editor → iOS nREPL → (compile on macOS) → native execution on iOS**
+
+No duplicate symbols, no crashes, native performance.
 
 ---
 
@@ -555,3 +614,98 @@ The result is **native ARM64 execution on iOS** with **no interpretation overhea
 - `src/cpp/jank/jit/processor.cpp:431-443` - load_ir_module implementation
 - `include/cpp/jank/nrepl_server/ios_remote_eval.hpp` - existing iOS remote eval
 - ORC JIT symbol resolution: https://llvm.org/docs/ORCv2.html
+
+---
+
+## Implementation Status (2025-12-25)
+
+### Files Created
+
+| File | Description |
+|------|-------------|
+| `include/cpp/jank/compile_server/protocol.hpp` | Protocol definitions for compile requests/responses |
+| `include/cpp/jank/compile_server/server.hpp` | macOS compilation server (TCP, cross-compiles to ARM64) |
+| `include/cpp/jank/compile_server/client.hpp` | iOS compile client (connects to macOS) |
+| `include/cpp/jank/compile_server/remote_eval.hpp` | iOS remote eval using compile client + ORC JIT |
+| `src/cpp/compile_server_main.cpp` | macOS compile server main program |
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `include/cpp/jank/ios/eval_server.hpp` | Added remote compilation support via `enable_remote_compile()` |
+| `include/cpp/jank/c_api.h` | Added iOS eval server C API functions |
+| `src/cpp/jank/c_api.cpp` | Implemented iOS eval server C API |
+
+### C API Functions
+
+```c
+// Start eval server on iOS without remote compilation
+void jank_ios_start_eval_server(jank_u16 port);
+
+// Start eval server with remote compilation to macOS
+void jank_ios_start_eval_server_remote(jank_u16 eval_port,
+                                       char const *compile_host,
+                                       jank_u16 compile_port);
+
+// Stop eval server
+void jank_ios_stop_eval_server(void);
+
+// Enable remote compilation on running server
+void jank_ios_enable_remote_compile(char const *compile_host, jank_u16 compile_port);
+```
+
+### Usage
+
+**On macOS** (development machine):
+```bash
+# Start the compile server
+./compile-server --port 5559 --target sim
+```
+
+**On iOS** (called from jank code or app startup):
+```cpp
+// Option 1: Start with remote compilation from the beginning
+jank_ios_start_eval_server_remote(5558, "192.168.1.100", 5559);
+
+// Option 2: Enable remote compilation on existing server
+jank_ios_start_eval_server(5558);
+jank_ios_enable_remote_compile("192.168.1.100", 5559);
+```
+
+**From editor** (CIDER, Calva, etc.):
+```
+Connect to iOS-device-IP:5558 as nREPL server
+Evaluate (defn foo [] (ImGui::Begin "Test"))  ; Compiled on macOS, runs on iOS!
+```
+
+### How It Works
+
+1. Editor sends eval request to iOS nREPL server (port 5558)
+2. iOS nREPL receives the code and sends it to macOS compile server (port 5559)
+3. macOS:
+   - Parses and analyzes the jank code
+   - Generates C++ code
+   - Cross-compiles to ARM64 object file using iOS SDK
+   - Returns object file (base64 encoded) + entry symbol
+4. iOS:
+   - Receives object file bytes
+   - Loads into ORC JIT via `addObjectFile()`
+   - Calls entry symbol to execute
+   - Returns result to editor
+
+### Why This Works
+
+The key insight is that **CppInterOp creates tentative definitions at parse time**, while **cross-compiled objects have relocations that get resolved at load time**.
+
+When macOS compiles the code:
+- It uses the same iOS PCH as the AOT build
+- Generated object has relocations to symbols like `GImGui`
+- No tentative definitions are created
+
+When iOS loads the object:
+- ORC JIT resolves relocations using registered symbols
+- `dlsym(RTLD_DEFAULT, "GImGui")` finds the AOT symbol
+- Relocation is patched with the correct address
+
+Result: Same `GImGui` as AOT code - no duplicate symbols, no crashes!

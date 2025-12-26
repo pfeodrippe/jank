@@ -355,6 +355,50 @@ extern "C"
 
   jank_object_ref jank_parse_command_line_args(int const argc, char const **argv);
 
+  /* iOS Remote Eval Server API
+   * These functions start an eval server on iOS that can optionally delegate
+   * compilation to a macOS compile server for better performance. */
+
+  /* Start eval server on iOS without remote compilation.
+   * The server will compile code locally using CppInterOp. */
+  void jank_ios_start_eval_server(jank_u16 port);
+
+  /* Start eval server on iOS with remote compilation enabled.
+   * Code will be sent to the macOS compile server for cross-compilation.
+   * @param eval_port Port for iOS eval server (clients connect here)
+   * @param compile_host macOS compile server hostname/IP
+   * @param compile_port macOS compile server port (default: 5559) */
+  void jank_ios_start_eval_server_remote(jank_u16 eval_port,
+                                         char const *compile_host,
+                                         jank_u16 compile_port);
+
+  /* Stop the iOS eval server. */
+  void jank_ios_stop_eval_server(void);
+
+  /* Enable remote compilation on an already-running eval server. */
+  void jank_ios_enable_remote_compile(char const *compile_host, jank_u16 compile_port);
+
+  /* ---- Remote Compilation (for iOS nREPL server using full eval_string) ---- */
+  /* These functions enable remote JIT compilation where iOS sends jank source code
+   * to a macOS compile-server, which cross-compiles to ARM64 object files that
+   * iOS loads and executes. This allows full JIT on iOS without CppInterOp. */
+
+  /* Configure remote compilation host and port (call before connect).
+   * @param host macOS compile-server hostname/IP (e.g., "192.168.1.100")
+   * @param port macOS compile-server port (default: 5570) */
+  void jank_remote_compile_configure(char const *host, jank_u16 port);
+
+  /* Connect to the remote compile server.
+   * @return 1 if connected successfully, 0 if connection failed */
+  jank_bool jank_remote_compile_connect(void);
+
+  /* Disconnect from the remote compile server. */
+  void jank_remote_compile_disconnect(void);
+
+  /* Check if remote compilation is enabled and connected.
+   * @return 1 if remote compilation is active, 0 otherwise */
+  jank_bool jank_remote_compile_is_enabled(void);
+
 #ifdef __cplusplus
 }
 #endif

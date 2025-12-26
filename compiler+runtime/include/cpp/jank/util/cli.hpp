@@ -90,6 +90,9 @@ namespace jank::util::cli
     /* REPL command. */
     bool repl_server{};
 
+    /* iOS compile server (for run-main command). */
+    uint16_t ios_compile_server_port{}; /* 0 = disabled, otherwise port number */
+
     /* Extras.
      * TODO: Use a native_persistent_vector instead.
      * */
