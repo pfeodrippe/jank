@@ -1,0 +1,11 @@
+; Test :tag metadata with string type for cpp/unbox type inference.
+; Using a string like "int*" should work directly.
+
+(defn ^{:tag "int*"} get-int-ptr-str []
+  (cpp/box (cpp/new (cpp/type "int") 42)))
+
+; Unbox should infer int* from function's :tag metadata
+(let* [raw-ptr (cpp/unbox (get-int-ptr-str))
+       value (cpp/* raw-ptr)]
+  (if (= value 42)
+    :success))

@@ -1,0 +1,8 @@
+; Test type inference for boxed double pointer across top-level forms.
+(def double-ptr (cpp/box (cpp/new (cpp/type "double") 3.14159)))
+
+; Unbox should infer double* from var's boxed_type
+(let* [raw-ptr (cpp/unbox double-ptr)
+       value (cpp/* raw-ptr)]
+  (if (> value 3.14)
+    :success))

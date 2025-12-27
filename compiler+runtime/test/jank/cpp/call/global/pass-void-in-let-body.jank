@@ -1,0 +1,16 @@
+(cpp/raw "namespace jank::cpp::call::global::pass_void_in_let_body
+          {
+            int counter{ 0 };
+
+            void increment()
+            {
+              counter++;
+            }
+          }")
+
+; Test: let returns the void function call directly - should be nil
+(let [result (let [_ (assert (= 0 cpp/jank.cpp.call.global.pass_void_in_let_body.counter))]
+               (cpp/jank.cpp.call.global.pass_void_in_let_body.increment))]
+  (assert (nil? result))
+  (assert (= 1 cpp/jank.cpp.call.global.pass_void_in_let_body.counter))
+  :success)

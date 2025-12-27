@@ -6,7 +6,6 @@ a.out
 .jank-repl-history
 .envrc
 .direnv
-/notes
 
 # Vim files
 /.ycm_extra_conf.py*
@@ -25,6 +24,7 @@ pom.xml.asc
 .hg/
 .clj-kondo
 .nrepl-port
+.calva
 
 # C++
 .ccls-cache
@@ -58,8 +58,15 @@ node_modules
 /llvm.sh
 /linux-install.sh
 
+# Temp files
+/tmp/
+
+# WASM LLVM build (Phase 0 artifacts)
+wasm-llvm-build/
+
 # MacOS
 .DS_Store
 
 # Nix (outcome of `nix build`)
 /result
+

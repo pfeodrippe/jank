@@ -1,0 +1,39 @@
+; Test callable user-type behavior
+
+(defn make-user-type [type-name constructor-fn]
+  (cpp/jank.runtime.make_user_type type-name constructor-fn))
+
+; Define a callable type (returns a factory)
+(def MyFn
+  (make-user-type
+    "MyFn"
+    (fn [{:keys [multiplier]}]
+      {:call (fn [this x] (* multiplier x))
+       :to-string (fn [this] (str "#MyFn{:multiplier " multiplier "}"))})))
+
+; Create an instance
+(def my-fn (MyFn {:multiplier 3}))
+
+; Test calling with one arg
+(assert (= 9 (my-fn 3)))
+(assert (= 15 (my-fn 5)))
+(assert (= 0 (my-fn 0)))
+
+; Define another callable type with variadic args
+(def MyAdder
+  (make-user-type
+    "MyAdder"
+    (fn [{:keys [base]}]
+      {:call (fn [this & args]
+               (apply + base args))
+       :to-string (fn [this] (str "#MyAdder{:base " base "}"))})))
+
+; Create an instance
+(def my-adder (MyAdder {:base 10}))
+
+; Test calling with various arities
+(assert (= 10 (my-adder)))
+(assert (= 15 (my-adder 5)))
+(assert (= 25 (my-adder 5 10)))
+
+:success

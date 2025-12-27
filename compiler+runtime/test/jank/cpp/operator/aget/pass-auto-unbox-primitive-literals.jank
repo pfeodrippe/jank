@@ -1,0 +1,25 @@
+(cpp/raw "namespace jank::cpp::operator_::aget::pass_auto_unbox
+          {
+            int arr[3]{ 100, 200, 300 };
+            struct Data {
+              int count;
+              Data() : count(3) {}
+            };
+            Data data;
+          }")
+
+; Test auto-unboxing of primitive literals for cpp/aget index
+(let* [; Test 1: Direct primitive literal in binding
+       n 1
+       _ (assert (= 200 (cpp/aget cpp/jank.cpp.operator_.aget.pass_auto_unbox.arr n)))
+       ; Test 2: Native-typed variable from C++ member access
+       idx (cpp/.-count cpp/jank.cpp.operator_.aget.pass_auto_unbox.data)
+       ; idx is 3, but we subtract 1 using cpp/-
+       idx2 (cpp/- idx (cpp/int. 1))
+       _ (assert (= 300 (cpp/aget cpp/jank.cpp.operator_.aget.pass_auto_unbox.arr idx2)))]
+  ; Test 3: dotimes iteration variable
+  (dotimes [i (cpp/.-count cpp/jank.cpp.operator_.aget.pass_auto_unbox.data)]
+    (let [v (cpp/aget cpp/jank.cpp.operator_.aget.pass_auto_unbox.arr i)
+          expected (cpp/+ (cpp/* i (cpp/int. 100)) (cpp/int. 100))]
+      (assert (= expected v))))
+  :success)

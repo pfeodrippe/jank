@@ -11,6 +11,15 @@
 
 namespace jank::runtime
 {
+  /* Forward declaration for allocator interface support.
+   * The actual allocator type is defined in core/arena.hpp. */
+  struct allocator;
+  extern thread_local allocator *current_allocator;
+
+  /* Try to allocate from the current allocator if one is active.
+   * Returns nullptr if no allocator is active. Defined in core/arena.cpp. */
+  void *try_allocator_alloc(usize size, usize alignment);
+
   namespace obj
   {
     struct nil;
@@ -99,6 +108,14 @@ namespace jank::runtime
 
     constexpr oref &operator=(oref const &rhs) noexcept = default;
     constexpr oref &operator=(oref &&rhs) noexcept = default;
+
+    template <typename T>
+    requires behavior::object_like<T>
+    constexpr oref &operator=(oref<T> const &rhs) noexcept
+    {
+      data = &rhs->base;
+      return *this;
+    }
 
     constexpr bool operator==(oref const &rhs) const noexcept
     {
@@ -404,20 +421,39 @@ namespace jank::runtime
   {
     static_assert(sizeof(jtl::ref<T>) == sizeof(T *));
     T *ret{};
+
     if constexpr(requires { T::pointer_free; })
     {
       if constexpr(T::pointer_free)
       {
+        /* pointer_free types (integers, reals, etc.) use caching and
+         * PointerFreeGC - don't allocate from arena to preserve cache semantics. */
         ret = new(PointerFreeGC) T{ std::forward<Args>(args)... };
+      }
+      else
+      {
+        /* Try allocator interface first, then GC */
+        if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
+        {
+          ret = new(alloc_mem) T{ std::forward<Args>(args)... };
+        }
+        else
+        {
+          ret = new(GC) T{ std::forward<Args>(args)... };
+        }
+      }
+    }
+    else
+    {
+      /* Try allocator interface first, then GC */
+      if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
+      {
+        ret = new(alloc_mem) T{ std::forward<Args>(args)... };
       }
       else
       {
         ret = new(GC) T{ std::forward<Args>(args)... };
       }
-    }
-    else
-    {
-      ret = new(GC) T{ std::forward<Args>(args)... };
     }
 
     if(!ret)
@@ -440,21 +476,40 @@ namespace jank::runtime
   oref<T> make_box(Args &&...args)
   {
     static_assert(sizeof(oref<T>) == sizeof(T *));
-    oref<T> ret;
+    T *ret{};
+
     if constexpr(requires { T::pointer_free; })
     {
       if constexpr(T::pointer_free)
       {
+        /* pointer_free types (integers, reals, etc.) use caching and
+         * PointerFreeGC - don't allocate from arena to preserve cache semantics. */
         ret = new(PointerFreeGC) T{ std::forward<Args>(args)... };
+      }
+      else
+      {
+        /* Try allocator interface first, then GC */
+        if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
+        {
+          ret = new(alloc_mem) T{ std::forward<Args>(args)... };
+        }
+        else
+        {
+          ret = new(GC) T{ std::forward<Args>(args)... };
+        }
+      }
+    }
+    else
+    {
+      /* Try allocator interface first, then GC */
+      if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
+      {
+        ret = new(alloc_mem) T{ std::forward<Args>(args)... };
       }
       else
       {
         ret = new(GC) T{ std::forward<Args>(args)... };
       }
-    }
-    else
-    {
-      ret = new(GC) T{ std::forward<Args>(args)... };
     }
 
     return ret;
@@ -499,5 +554,4 @@ namespace jank::runtime
   {
     return static_cast<D *>(ptr.data);
   }
-
 }

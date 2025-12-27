@@ -1,0 +1,28 @@
+(cpp/raw "namespace jank::cpp::call::function_pointer::pass_member_callback
+          {
+            using Callback = int (*)(int, int);
+
+            struct DrawCmd {
+              Callback UserCallback;
+              DrawCmd() : UserCallback(nullptr) {}
+            };
+
+            int my_callback(int a, int b)
+            {
+              return a + b;
+            }
+
+            DrawCmd* make_cmd()
+            {
+              static DrawCmd cmd;
+              cmd.UserCallback = my_callback;
+              return &cmd;
+            }
+          }")
+
+; Test calling a function pointer accessed via member access
+; Accessing cmd->UserCallback returns a reference to function pointer (Callback &)
+; The fix strips the reference before checking IsFunctionPointerType
+(let* [cmd (cpp/jank.cpp.call.function_pointer.pass_member_callback.make_cmd)]
+  (if (= 142 ((-> cmd cpp/* cpp/.-UserCallback) (cpp/int. 100) (cpp/int. 42)))
+    :success))

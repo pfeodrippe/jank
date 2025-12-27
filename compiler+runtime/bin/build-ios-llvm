@@ -1,0 +1,352 @@
+#!/bin/bash
+# Build LLVM/Clang for iOS with JIT support
+#
+# This script builds LLVM and CppInterOp for iOS (device and simulator).
+# The resulting libraries can be used to enable JIT compilation on iOS
+# during development (requires proper entitlements).
+#
+# Usage:
+#   ./bin/build-ios-llvm [device|simulator|both]
+#
+# Prerequisites:
+#   - Xcode with iOS SDK
+#   - CMake >= 3.20
+#   - Ninja
+#   - ~50GB disk space
+#   - ~2 hours build time
+#
+# Output:
+#   build/ios-llvm-device/     - Device (arm64-apple-ios) build
+#   build/ios-llvm-simulator/  - Simulator (arm64-apple-ios-simulator) build
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+JANK_ROOT="$(dirname "$SCRIPT_DIR")"
+# Use ~/dev/ios-llvm-build to avoid polluting jank's build directory
+BUILD_ROOT="${IOS_LLVM_BUILD_ROOT:-$HOME/dev/ios-llvm-build}"
+
+# Use jank's local LLVM source (already cloned in build/llvm)
+LLVM_SRC="${JANK_ROOT}/build/llvm"
+
+# iOS deployment target
+IOS_DEPLOYMENT_TARGET="17.0"
+
+# Number of parallel jobs
+JOBS=$(sysctl -n hw.ncpu)
+
+usage() {
+    echo "Usage: $0 [device|simulator|both]"
+    echo ""
+    echo "Builds LLVM and CppInterOp for iOS JIT support."
+    echo ""
+    echo "Options:"
+    echo "  device     - Build for iOS device (arm64-apple-ios)"
+    echo "  simulator  - Build for iOS simulator (arm64-apple-ios-simulator)"
+    echo "  both       - Build for both (default)"
+    echo ""
+    echo "Environment variables:"
+    echo "  IOS_LLVM_BUILD_ROOT - Override build directory (default: ~/dev/ios-llvm-build)"
+    echo ""
+    echo "Output will be in:"
+    echo "  $BUILD_ROOT/ios-llvm-device/"
+    echo "  $BUILD_ROOT/ios-llvm-simulator/"
+    exit 1
+}
+
+# Get SDK paths
+get_sdk_path() {
+    local sdk="$1"
+    xcrun --sdk "$sdk" --show-sdk-path
+}
+
+# Get target triple
+get_target_triple() {
+    local target="$1"
+    if [[ "$target" == "device" ]]; then
+        echo "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}"
+    else
+        echo "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}-simulator"
+    fi
+}
+
+# Check LLVM source exists
+check_llvm_src() {
+    if [[ ! -d "$LLVM_SRC" ]]; then
+        echo "[llvm] ERROR: LLVM source not found at $LLVM_SRC"
+        echo "[llvm] Please run ./bin/configure first to download LLVM source."
+        exit 1
+    fi
+
+    cd "$LLVM_SRC"
+    local llvm_version=$(git log -1 --format="%h %s" 2>/dev/null || echo "unknown")
+    echo "[llvm] Using jank's LLVM source: $LLVM_SRC"
+    echo "[llvm] LLVM version: $llvm_version"
+}
+
+# Patch LLVM cmake for iOS compatibility
+# The -Wl,-z,defs linker flag is not supported by Apple's linker
+patch_llvm_cmake() {
+    local handle_opts="$LLVM_SRC/llvm/cmake/modules/HandleLLVMOptions.cmake"
+    if grep -q 'CMAKE_SYSTEM_NAME MATCHES "Darwin|iOS' "$handle_opts"; then
+        echo "[llvm] LLVM cmake already patched for iOS"
+        return
+    fi
+
+    echo "[llvm] Patching LLVM cmake for iOS compatibility..."
+    sed -i '' 's/CMAKE_SYSTEM_NAME MATCHES "Darwin/CMAKE_SYSTEM_NAME MATCHES "Darwin|iOS/' "$handle_opts"
+    echo "[llvm] Patched HandleLLVMOptions.cmake to include iOS in Darwin-like systems"
+}
+
+# Build LLVM for iOS
+build_llvm() {
+    local target="$1"  # device or simulator
+    local sdk
+    local triple
+    local build_dir
+    local install_dir
+
+    if [[ "$target" == "device" ]]; then
+        sdk="iphoneos"
+        triple=$(get_target_triple device)
+        build_dir="$BUILD_ROOT/ios-llvm-device-build"
+        install_dir="$BUILD_ROOT/ios-llvm-device"
+    else
+        sdk="iphonesimulator"
+        triple=$(get_target_triple simulator)
+        build_dir="$BUILD_ROOT/ios-llvm-simulator-build"
+        install_dir="$BUILD_ROOT/ios-llvm-simulator"
+    fi
+
+    local sdk_path=$(get_sdk_path "$sdk")
+
+    echo "[llvm] Building for $target ($triple)"
+    echo "[llvm] SDK: $sdk_path"
+    echo "[llvm] Build dir: $build_dir"
+    echo "[llvm] Install dir: $install_dir"
+
+    mkdir -p "$build_dir"
+    cd "$build_dir"
+
+    # Use jank's existing native LLVM tools for tablegen (required for cross-compilation)
+    local native_llvm="$JANK_ROOT/build/llvm-install/usr/local"
+
+    if [[ ! -x "$native_llvm/bin/llvm-tblgen" ]]; then
+        echo "[llvm] ERROR: Native LLVM tools not found at $native_llvm"
+        echo "[llvm] Please build jank for desktop first (./bin/configure && ./bin/compile)"
+        exit 1
+    fi
+
+    echo "[llvm] Using native LLVM tools from: $native_llvm"
+
+    # Configure LLVM
+    # We build a minimal LLVM with just what's needed for JIT
+    # Use native tablegen tools to avoid building host tools with iOS flags
+    # Add explicit C++ include path to avoid libc++ header resolution issues
+    local cxx_include="$sdk_path/usr/include/c++/v1"
+    cmake -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$install_dir" \
+        -DCMAKE_OSX_SYSROOT="$sdk_path" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+        -DCMAKE_SYSTEM_NAME=iOS \
+        -DCMAKE_C_FLAGS="-target $triple" \
+        -DCMAKE_CXX_FLAGS="-target $triple -isystem $cxx_include" \
+        -DCMAKE_EXE_LINKER_FLAGS="" \
+        -DCMAKE_SHARED_LINKER_FLAGS="" \
+        -DLLVM_NO_DEAD_STRIP=ON \
+        -DLLVM_TABLEGEN="$native_llvm/bin/llvm-tblgen" \
+        -DCLANG_TABLEGEN="$native_llvm/bin/clang-tblgen" \
+        -DLLVM_NATIVE_TOOL_DIR="$native_llvm/bin" \
+        -DLLVM_TARGET_ARCH=AArch64 \
+        -DLLVM_TARGETS_TO_BUILD="AArch64" \
+        -DLLVM_DEFAULT_TARGET_TRIPLE="$triple" \
+        -DLLVM_ENABLE_PROJECTS="clang" \
+        -DLLVM_ENABLE_RUNTIMES="" \
+        -DLLVM_ENABLE_ZLIB=FORCE_ON \
+        -DLLVM_ENABLE_ZSTD=OFF \
+        -DLLVM_ENABLE_TERMINFO=OFF \
+        -DLLVM_ENABLE_FFI=OFF \
+        -DLLVM_ENABLE_LIBEDIT=OFF \
+        -DLLVM_ENABLE_LIBXML2=OFF \
+        -DLLVM_ENABLE_ASSERTIONS=OFF \
+        -DLLVM_BUILD_TOOLS=OFF \
+        -DLLVM_BUILD_UTILS=OFF \
+        -DLLVM_BUILD_EXAMPLES=OFF \
+        -DLLVM_BUILD_TESTS=OFF \
+        -DLLVM_BUILD_BENCHMARKS=OFF \
+        -DLLVM_BUILD_DOCS=OFF \
+        -DLLVM_INCLUDE_TOOLS=ON \
+        -DLLVM_INCLUDE_UTILS=OFF \
+        -DLLVM_INCLUDE_EXAMPLES=OFF \
+        -DLLVM_INCLUDE_TESTS=OFF \
+        -DLLVM_INCLUDE_BENCHMARKS=OFF \
+        -DLLVM_INCLUDE_DOCS=OFF \
+        -DCLANG_BUILD_TOOLS=OFF \
+        -DCLANG_TOOL_C_INDEX_TEST_BUILD=OFF \
+        -DCLANG_TOOL_CLANG_IMPORT_TEST_BUILD=OFF \
+        -DCLANG_TOOL_CLANG_LINKER_WRAPPER_BUILD=OFF \
+        -DCLANG_TOOL_CLANG_OFFLOAD_BUNDLER_BUILD=OFF \
+        -DCLANG_TOOL_CLANG_OFFLOAD_PACKAGER_BUILD=OFF \
+        -DCLANG_TOOL_CLANG_SCAN_DEPS_BUILD=OFF \
+        -DCLANG_ENABLE_STATIC_ANALYZER=OFF \
+        -DCLANG_ENABLE_ARCMT=OFF \
+        -DCLANG_INCLUDE_TESTS=OFF \
+        -DCLANG_INCLUDE_DOCS=OFF \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DLLVM_BUILD_LLVM_DYLIB=OFF \
+        -DLLVM_LINK_LLVM_DYLIB=OFF \
+        -DCLANG_LINK_CLANG_DYLIB=OFF \
+        -DLIBCLANG_BUILD_STATIC=ON \
+        -DLLVM_ENABLE_LTO=OFF \
+        -DLLVM_ENABLE_RTTI=ON \
+        "$LLVM_SRC/llvm"
+
+    # Build
+    echo "[llvm] Building LLVM (this will take a while)..."
+    ninja -j"$JOBS"
+
+    # Install
+    echo "[llvm] Installing LLVM to $install_dir..."
+    ninja install
+
+    echo "[llvm] LLVM build complete for $target"
+}
+
+# Build CppInterOp for iOS
+build_cppinterop() {
+    local target="$1"  # device or simulator
+    local sdk
+    local triple
+    local llvm_install_dir
+    local build_dir
+    local install_dir
+
+    if [[ "$target" == "device" ]]; then
+        sdk="iphoneos"
+        triple=$(get_target_triple device)
+        llvm_install_dir="$BUILD_ROOT/ios-llvm-device"
+        build_dir="$BUILD_ROOT/ios-cppinterop-device-build"
+        install_dir="$BUILD_ROOT/ios-llvm-device"  # Install alongside LLVM
+    else
+        sdk="iphonesimulator"
+        triple=$(get_target_triple simulator)
+        llvm_install_dir="$BUILD_ROOT/ios-llvm-simulator"
+        build_dir="$BUILD_ROOT/ios-cppinterop-simulator-build"
+        install_dir="$BUILD_ROOT/ios-llvm-simulator"  # Install alongside LLVM
+    fi
+
+    local sdk_path=$(get_sdk_path "$sdk")
+    local cppinterop_src="$JANK_ROOT/third-party/cppinterop"
+
+    echo "[cppinterop] Building for $target ($triple)"
+
+    if [[ ! -d "$cppinterop_src" ]]; then
+        echo "[cppinterop] ERROR: CppInterOp source not found at $cppinterop_src"
+        exit 1
+    fi
+
+    mkdir -p "$build_dir"
+    cd "$build_dir"
+
+    # Configure CppInterOp
+    cmake -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$install_dir" \
+        -DCMAKE_OSX_SYSROOT="$sdk_path" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+        -DCMAKE_SYSTEM_NAME=iOS \
+        -DCMAKE_C_FLAGS="-target $triple" \
+        -DCMAKE_CXX_FLAGS="-target $triple" \
+        -DLLVM_DIR="$llvm_install_dir/lib/cmake/llvm" \
+        -DClang_DIR="$llvm_install_dir/lib/cmake/clang" \
+        -DCPPINTEROP_ENABLE_TESTING=OFF \
+        -DCPPINTEROP_USE_REPL=ON \
+        -DCPPINTEROP_INCLUDE_DOCS=OFF \
+        -DCPPINTEROP_ENABLE_DOXYGEN=OFF \
+        -DCPPINTEROP_ENABLE_SPHINX=OFF \
+        -DBUILD_SHARED_LIBS=OFF \
+        "$cppinterop_src"
+
+    # Build
+    echo "[cppinterop] Building CppInterOp..."
+    ninja -j"$JOBS"
+
+    # Install
+    echo "[cppinterop] Installing CppInterOp..."
+    ninja install
+
+    echo "[cppinterop] CppInterOp build complete for $target"
+}
+
+# Main
+main() {
+    local target="${1:-both}"
+
+    case "$target" in
+        device|simulator|both)
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            echo "Unknown target: $target"
+            usage
+            ;;
+    esac
+
+    echo "========================================"
+    echo "Building LLVM/CppInterOp for iOS"
+    echo "Target: $target"
+    echo "LLVM Source: $LLVM_SRC"
+    echo "iOS Deployment Target: $IOS_DEPLOYMENT_TARGET"
+    echo "Jobs: $JOBS"
+    echo "========================================"
+
+    # Check LLVM source exists
+    check_llvm_src
+
+    # Patch LLVM cmake for iOS
+    patch_llvm_cmake
+
+    # Build for selected target(s)
+    if [[ "$target" == "device" || "$target" == "both" ]]; then
+        echo ""
+        echo "========================================"
+        echo "Building for iOS Device"
+        echo "========================================"
+        build_llvm device
+        build_cppinterop device
+    fi
+
+    if [[ "$target" == "simulator" || "$target" == "both" ]]; then
+        echo ""
+        echo "========================================"
+        echo "Building for iOS Simulator"
+        echo "========================================"
+        build_llvm simulator
+        build_cppinterop simulator
+    fi
+
+    echo ""
+    echo "========================================"
+    echo "Build Complete!"
+    echo "========================================"
+    echo ""
+    echo "iOS LLVM/CppInterOp libraries are at:"
+    if [[ "$target" == "device" || "$target" == "both" ]]; then
+        echo "  Device:    $BUILD_ROOT/ios-llvm-device/"
+    fi
+    if [[ "$target" == "simulator" || "$target" == "both" ]]; then
+        echo "  Simulator: $BUILD_ROOT/ios-llvm-simulator/"
+    fi
+    echo ""
+    echo "To use in jank iOS build:"
+    echo "  1. Set jank_ios_jit=ON in CMake"
+    echo "  2. Set IOS_LLVM_DIR to the appropriate directory"
+    echo ""
+    echo "Note: JIT on iOS requires development entitlements."
+    echo "It will NOT work on App Store builds or without Xcode."
+}
+
+main "$@"

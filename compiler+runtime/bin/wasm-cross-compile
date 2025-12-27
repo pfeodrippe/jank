@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# Strategy 5: WASM Cross-Compilation Script
+#
+# This script takes jank code, compiles it to a WASM side module
+# that can be loaded by the jank WASM runtime via dlopen.
+#
+# Usage: ./wasm-cross-compile input.jank output.wasm
+
+set -e
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+jank_root="${script_dir}/.."
+
+# Native jank binary for compilation
+native_jank="${jank_root}/build/jank"
+
+# Include paths for jank runtime
+jank_include="${jank_root}/include/cpp"
+immer_include="${jank_root}/third-party/immer"
+bdwgc_include="${jank_root}/third-party/bdwgc/include"
+folly_include="${jank_root}/third-party/folly"
+bpptree_include="${jank_root}/third-party/bpptree/include"
+cli11_include="${jank_root}/third-party/cli11/include"
+boost_pp_include="${jank_root}/third-party/boost-preprocessor/include"
+
+usage() {
+  echo "Usage: $(basename "$0") [options] <input.jank> [output.wasm]"
+  echo ""
+  echo "Compile jank code to a WASM side module for dynamic loading."
+  echo ""
+  echo "Options:"
+  echo "  -h, --help         Show this help message"
+  echo "  -v, --verbose      Show compilation commands"
+  echo "  -k, --keep-cpp     Keep intermediate C++ file"
+  echo "  --cpp-only         Only generate C++, don't compile to WASM"
+  echo ""
+  echo "Examples:"
+  echo "  $(basename "$0") hello.jank hello.wasm"
+  echo "  $(basename "$0") --cpp-only hello.jank hello.cpp"
+  exit 1
+}
+
+# Parse options
+verbose=false
+keep_cpp=false
+cpp_only=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      ;;
+    -v|--verbose)
+      verbose=true
+      shift
+      ;;
+    -k|--keep-cpp)
+      keep_cpp=true
+      shift
+      ;;
+    --cpp-only)
+      cpp_only=true
+      shift
+      ;;
+    -*)
+      echo "Unknown option: $1"
+      usage
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ $# -lt 1 ]]; then
+  usage
+fi
+
+input_file="$1"
+output_file="${2:-${input_file%.jank}.wasm}"
+
+if [[ ! -f "${input_file}" ]]; then
+  echo "Error: Input file not found: ${input_file}"
+  exit 1
+fi
+
+# Temporary files
+tmp_dir=$(mktemp -d)
+trap "rm -rf ${tmp_dir}" EXIT
+
+cpp_file="${tmp_dir}/generated.cpp"
+
+if [[ "${cpp_only}" == "true" ]]; then
+  cpp_file="${output_file%.wasm}.cpp"
+  if [[ "${output_file}" == *.wasm ]]; then
+    cpp_file="${output_file%.wasm}.cpp"
+  else
+    cpp_file="${output_file}"
+  fi
+fi
+
+# Check for native jank
+if [[ ! -x "${native_jank}" ]]; then
+  echo "Error: Native jank not found at ${native_jank}"
+  echo "Build native jank first: cmake --build build"
+  exit 1
+fi
+
+echo "[wasm-cross-compile] Compiling: ${input_file}"
+
+# Step 1: Generate C++ from jank code using native jank
+# For now, use compile-cpp command (if available) or read-print-codegen
+if [[ "${verbose}" == "true" ]]; then
+  echo "[wasm-cross-compile] Step 1: Generating C++ code..."
+fi
+
+# Read jank code
+jank_code=$(cat "${input_file}")
+
+# Use jank to compile to C++ (this requires jank to have an AOT-like mode)
+# For this POC, we'll generate a simple wrapper
+# In a full implementation, jank would directly output the C++
+
+# For POC: create a simple generated code file that calls into jank
+cat > "${cpp_file}" << 'CPP_TEMPLATE'
+// Generated WASM side module for jank code
+// This module can be loaded by the jank WASM runtime via dlopen
+
+#include <emscripten.h>
+
+// Declare jank runtime functions that we'll import from main module
+extern "C" {
+  // These would be real jank runtime functions in production
+  void* jank_eval(const char* code);
+  const char* jank_to_string(void* obj);
+}
+
+// Entry point for the side module - called after dlopen
+extern "C" EMSCRIPTEN_KEEPALIVE
+int jank_side_module_init() {
+  return 0;  // Success
+}
+
+// Export function to get module info
+extern "C" EMSCRIPTEN_KEEPALIVE
+const char* jank_side_module_name() {
+  return "user-code";
+}
+CPP_TEMPLATE
+
+if [[ "${cpp_only}" == "true" ]]; then
+  echo "[wasm-cross-compile] Generated: ${cpp_file}"
+  exit 0
+fi
+
+# Step 2: Compile C++ to WASM side module
+if [[ "${verbose}" == "true" ]]; then
+  echo "[wasm-cross-compile] Step 2: Compiling to WASM side module..."
+fi
+
+emcc_cmd=(
+  emcc
+  -sSIDE_MODULE=1
+  -O2
+  -std=c++20
+  -fexceptions
+  -o "${output_file}"
+  "${cpp_file}"
+  -I"${jank_include}"
+  -I"${immer_include}"
+  -I"${bdwgc_include}"
+  -I"${folly_include}"
+  -I"${bpptree_include}"
+  -I"${cli11_include}"
+  -I"${boost_pp_include}"
+  -DJANK_TARGET_WASM=1
+  -DJANK_TARGET_EMSCRIPTEN
+  -DNDEBUG
+)
+
+if [[ "${verbose}" == "true" ]]; then
+  echo "${emcc_cmd[*]}"
+fi
+
+"${emcc_cmd[@]}"
+
+if [[ "${keep_cpp}" == "true" ]]; then
+  cp "${cpp_file}" "${output_file%.wasm}.cpp"
+  echo "[wasm-cross-compile] Kept C++: ${output_file%.wasm}.cpp"
+fi
+
+echo "[wasm-cross-compile] Generated: ${output_file}"
+ls -la "${output_file}"

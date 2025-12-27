@@ -1,0 +1,97 @@
+#!/bin/bash
+# Build jank runtime for iOS
+# This script builds libjank.a and dependencies for iOS arm64
+#
+# Usage:
+#   ./bin/build-ios [build_dir] [build_type] [target] [jit]
+#
+# Examples:
+#   ./bin/build-ios build-ios Release device        # Device AOT (default)
+#   ./bin/build-ios build-ios-sim Release simulator # Simulator AOT
+#   ./bin/build-ios build-ios-jit Debug simulator jit  # Simulator JIT
+
+set -e
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repo_root"
+
+build_dir="${1:-build-ios}"
+build_type="${2:-Release}"
+target="${3:-device}"  # device or simulator
+jit_mode="${4:-}"      # "jit" to enable JIT
+
+echo "[build-ios] Building jank for iOS..."
+echo "[build-ios] Build dir: ${build_dir}"
+echo "[build-ios] Build type: ${build_type}"
+echo "[build-ios] Target: ${target}"
+echo "[build-ios] JIT: ${jit_mode:-disabled}"
+echo ""
+
+# Select toolchain based on target
+if [[ "${target}" == "simulator" ]]; then
+  toolchain="${repo_root}/cmake/toolchain-ios-simulator.cmake"
+  echo "[build-ios] Using iOS Simulator toolchain"
+else
+  toolchain="${repo_root}/cmake/toolchain-ios.cmake"
+  echo "[build-ios] Using iOS Device toolchain"
+fi
+
+# JIT configuration
+JIT_OPTS=""
+if [[ "${jit_mode}" == "jit" ]]; then
+  # Check if iOS LLVM is available
+  if [[ "${target}" == "simulator" ]]; then
+    IOS_LLVM_DIR="$HOME/dev/ios-llvm-build/ios-llvm-simulator"
+  else
+    IOS_LLVM_DIR="$HOME/dev/ios-llvm-build/ios-llvm-device"
+  fi
+
+  if [[ ! -d "${IOS_LLVM_DIR}/lib/cmake/llvm" ]]; then
+    echo "ERROR: iOS LLVM not found at ${IOS_LLVM_DIR}"
+    echo ""
+    echo "To build iOS LLVM, run:"
+    echo "  ./bin/build-ios-llvm ${target}"
+    echo ""
+    echo "This takes ~2 hours and requires ~50GB disk space."
+    exit 1
+  fi
+
+  JIT_OPTS="-Djank_ios_jit=ON"
+  echo "[build-ios] Using iOS LLVM from: ${IOS_LLVM_DIR}"
+fi
+
+# Clean previous iOS build if it exists
+if [[ -d "${build_dir}" ]]; then
+  echo "[build-ios] Cleaning previous build..."
+  rm -rf "${build_dir}/CMakeCache.txt" "${build_dir}/CMakeFiles"
+fi
+
+mkdir -p "${build_dir}"
+
+# Configure with iOS toolchain
+echo "[build-ios] Configuring CMake for iOS..."
+cmake -S . -B "${build_dir}" \
+  -DCMAKE_TOOLCHAIN_FILE="${toolchain}" \
+  -Djank_target_ios=ON \
+  ${JIT_OPTS} \
+  -DCMAKE_BUILD_TYPE="${build_type}" \
+  -G Ninja
+
+# Build
+echo ""
+echo "[build-ios] Building..."
+cmake --build "${build_dir}" --target jank_lib jankzip_lib gc
+
+echo ""
+echo "[build-ios] Build complete!"
+echo ""
+echo "Libraries:"
+ls -lh "${build_dir}/libjank.a" 2>/dev/null || echo "  libjank.a not found"
+ls -lh "${build_dir}/libjankzip.a" 2>/dev/null || echo "  libjankzip.a not found"
+ls -lh "${build_dir}/third-party/bdwgc/libgc.a" 2>/dev/null || echo "  libgc.a not found"
+echo ""
+echo "To use these libraries in your iOS project:"
+echo "  LIBRARY_SEARCH_PATHS:"
+echo "    - ${repo_root}/${build_dir}"
+echo "    - ${repo_root}/${build_dir}/third-party/bdwgc"
+echo ""

@@ -28,6 +28,20 @@ namespace jank::util::cli
         "A {} separated list of directories, JAR files, and ZIP files to search for modules.",
         runtime::module::loader::module_separator_name));
     cli.add_flag("--profile", opts.profiler_enabled, "Enable compiler and runtime profiling.");
+    cli.add_flag("--profile-fns",
+                 opts.profiler_fns_enabled,
+                 "Automatically profile all function calls (implies --profile).");
+    cli.add_flag("--profile-core",
+                 opts.profiler_core_enabled,
+                 "Also profile clojure.core functions (implies --profile-fns).");
+    cli.add_flag("--profile-interop",
+                 opts.profiler_interop_enabled,
+                 "Profile cpp/ interop operations like box/unbox (implies --profile).");
+    cli
+      .add_option("--profile-sample",
+                  opts.profiler_sample_rate,
+                  "Sample 1 in N events (e.g., 10=10%, 100=1%). 0 or omit for all events.")
+      ->default_str("0");
     cli
       .add_option("--profile-output",
                   opts.profiler_file,
@@ -35,6 +49,10 @@ namespace jank::util::cli
       ->default_str(make_default(opts.profiler_file));
     cli.add_flag("--perf", opts.perf_profiling_enabled, "Enable Linux perf event sampling.");
     cli.add_flag("--gc-incremental", opts.gc_incremental, "Enable incremental GC collection.");
+    cli.add_flag(
+      "!--no-jit-cache",
+      opts.jit_cache_enabled,
+      "Disable JIT cache (cache is enabled by default to skip redundant recompilation).");
     cli.add_flag("--debug", opts.debug, "Enable debug symbol generation for generated code.");
     cli.add_flag("--direct-call",
                  opts.direct_call,
@@ -47,12 +65,27 @@ namespace jank::util::cli
       ->check(CLI::Range(0, 3));
 
     std::map<std::string, codegen_type> const codegen_types{
-      { "llvm_ir", codegen_type::llvm_ir },
-      {     "cpp",     codegen_type::cpp }
+      {    "llvm-ir",    codegen_type::llvm_ir },
+      {        "cpp",        codegen_type::cpp },
+      {   "wasm-aot",   codegen_type::wasm_aot },
+      { "wasm-patch", codegen_type::wasm_patch }
     };
     cli.add_option("--codegen", opts.codegen, "The type of code generation to use.")
-      ->transform(CLI::CheckedTransformer(codegen_types).description("{llvm_ir,cpp}"))
-      ->default_str(make_default("llvm_ir"));
+      ->transform(
+        CLI::CheckedTransformer(codegen_types).description("{llvm-ir,cpp,wasm-aot,wasm-patch}"))
+      ->default_str(make_default(codegen_type_str(opts.codegen)));
+    cli.add_flag("--save-cpp",
+                 opts.save_cpp,
+                 "Save generated C++ code to a file (useful for AOT/WASM compilation).");
+    cli.add_option("--save-cpp-path",
+                   opts.save_cpp_path,
+                   "Path to save generated C++ code (requires --save-cpp or --codegen wasm-aot).");
+    cli.add_flag("--save-llvm-ir",
+                 opts.save_llvm_ir,
+                 "Save generated LLVM IR to a file (useful for WASM/cross-compilation).");
+    cli.add_option("--save-llvm-ir-path",
+                   opts.save_llvm_ir_path,
+                   "Path to save generated LLVM IR code.");
 
     /* Native dependencies. */
     cli.add_option("-I,--include-dir",
@@ -66,10 +99,29 @@ namespace jank::util::cli
     cli.add_option("-D,--define-macro",
                    opts.define_macros,
                    "Defines macro value, sets to 1 if omitted. Can be specified multiple times.");
-    cli.add_option("-l",
+    cli.add_option("-l,--lib",
                    opts.libs,
                    "Library identifiers, absolute or relative paths eg. -lfoo for libfoo.so or "
                    "foo.dylib. Can be specified multiple times.");
+    cli.add_option(
+      "--jit-lib",
+      opts.jit_libs,
+      "Libraries to load into JIT only (not passed to AOT linker). "
+      "Use for symbol resolution during compilation without creating runtime dependency. "
+      "Can be specified multiple times.");
+    cli.add_option("--link-lib",
+                   opts.link_libs,
+                   "Libraries to pass to AOT linker only (not loaded into JIT). "
+                   "Use for static libraries (.a) or libraries only needed at link time. "
+                   "Can be specified multiple times.");
+    cli.add_option("--obj",
+                   opts.object_files,
+                   "Absolute or relative path to object files (.o) to load into JIT. "
+                   "Can be specified multiple times.");
+    cli.add_option("--framework",
+                   opts.frameworks,
+                   "macOS framework to link (e.g., --framework Cocoa). "
+                   "Can be specified multiple times.");
 
     /* Run subcommand. */
     auto &cli_run(*cli.add_subcommand("run", "Load and run a file."));
@@ -91,6 +143,9 @@ namespace jank::util::cli
       .add_option("module", opts.target_module, "Module to compile (must be on the module path).")
       ->required();
     cli_compile_module.add_option("-o", opts.output_object_filename, "Output object file name.");
+    cli_compile_module.add_flag("--list-modules",
+                                opts.list_modules,
+                                "Print loaded modules in dependency order (for AOT build scripts).");
 
     /* REPL subcommand. */
     auto &cli_repl(*cli.add_subcommand("repl", "Start up a terminal REPL and optional server."));
@@ -109,6 +164,12 @@ namespace jank::util::cli
                   opts.target_module,
                   "The entrypoint module (must be on the module path.")
       ->required();
+    cli_run_main.add_option("--ios-compile-server",
+                            opts.ios_compile_server_port,
+                            "Start iOS compile server on specified port (for remote JIT).");
+    cli_run_main.add_option("--ios-resource-dir",
+                            opts.ios_resource_dir,
+                            "Path to iOS resources (PCH, headers) for compile server.");
 
     /* Compile subcommand. */
     auto &cli_compile(*cli.add_subcommand(
@@ -173,6 +234,24 @@ namespace jank::util::cli
     else if(cli.got_subcommand(&cli_check_health))
     {
       opts.command = command::check_health;
+    }
+
+    /* --profile-core implies --profile-fns */
+    if(opts.profiler_core_enabled)
+    {
+      opts.profiler_fns_enabled = true;
+    }
+
+    /* --profile-fns implies --profile */
+    if(opts.profiler_fns_enabled)
+    {
+      opts.profiler_enabled = true;
+    }
+
+    /* --profile-interop implies --profile */
+    if(opts.profiler_interop_enabled)
+    {
+      opts.profiler_enabled = true;
     }
 
     return ok();

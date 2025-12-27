@@ -1,7 +1,6 @@
 #pragma once
 
-#include <folly/Synchronized.h>
-
+#include <jank/util/folly_shim.hpp>
 #include <jank/runtime/object.hpp>
 
 namespace jank::runtime::obj

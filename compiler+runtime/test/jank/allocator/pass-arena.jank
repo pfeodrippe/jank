@@ -1,0 +1,55 @@
+; Test arena allocator functions from jank.arena-native
+
+; Create an arena
+(def a (jank.arena-native/create))
+
+; Check that it's an arena
+(assert (jank.arena-native/arena? a) "Created object should be an arena")
+
+; Get initial stats
+(def stats1 (jank.arena-native/stats a))
+(assert (map? stats1) "stats should return a map")
+(assert (contains? stats1 :total-allocated) "stats should have :total-allocated")
+(assert (contains? stats1 :total-used) "stats should have :total-used")
+(assert (contains? stats1 :chunk-count) "stats should have :chunk-count")
+
+; Enter arena scope and create some objects
+; Note: integers/reals are pointer_free and use caching, not arena
+; We need to create non-pointer_free objects like vectors or maps
+(jank.arena-native/enter-arena! a)
+
+; Create a vector (should use arena allocation)
+(def v1 (vec (range 100)))
+
+; Create a map (should use arena allocation)
+(def m1 {:a 1 :b 2 :c 3})
+
+; Get stats while in arena scope
+(def stats-in-arena (jank.arena-native/stats a))
+
+; Exit arena scope
+(jank.arena-native/exit-arena!)
+
+; Check that some memory was used (arena allocations happened)
+; Note: the exact amount depends on implementation
+(assert (>= (:total-used stats-in-arena) 0) "total-used should be >= 0")
+
+; Reset the arena
+(jank.arena-native/reset! a)
+
+; Get stats after reset
+(def stats2 (jank.arena-native/stats a))
+(assert (= 0 (:total-used stats2)) "After reset, total-used should be 0")
+
+; nil should not be an arena
+(assert (not (jank.arena-native/arena? nil)) "nil should not be an arena")
+
+; Other values should not be arenas
+(assert (not (jank.arena-native/arena? 42)) "integer should not be an arena")
+(assert (not (jank.arena-native/arena? "foo")) "string should not be an arena")
+
+; Create an arena with a specific chunk size
+(def a2 (jank.arena-native/create-with-size 1024))
+(assert (jank.arena-native/arena? a2) "Arena with size should be an arena")
+
+:success

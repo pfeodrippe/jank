@@ -81,7 +81,7 @@ namespace jank::runtime::obj
     real() = default;
     real(real &&) noexcept = default;
     real(real const &) = default;
-    real(f64 const d);
+    real(f64 const d, bool single_precision = false);
 
     /* behavior::object_like */
     bool equal(object const &) const;
@@ -99,8 +99,10 @@ namespace jank::runtime::obj
     /* behavior::number_like */
     i64 to_integer() const;
     f64 to_real() const;
+    bool is_single_precision() const;
 
     f64 data{};
+    bool single_precision{ false };
     object base{ obj_type };
   };
 }

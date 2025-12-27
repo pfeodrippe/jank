@@ -1,0 +1,11 @@
+; Test that namespace aliases are resolved correctly in find_var
+; This tests the fix to context::find_var that resolves namespace aliases
+; when the direct namespace lookup fails.
+
+(require '[clojure.string :as str])
+
+; Use the alias to access vars from the aliased namespace
+(let [result (str/join ", " ["a" "b" "c"])]
+  (if (= "a, b, c" result)
+    :success
+    :failure))

@@ -1,0 +1,57 @@
+; Test debug allocator using generic allocator interface from jank.arena-native
+
+; Create a debug allocator
+(def d (jank.debug-allocator-native/create))
+
+; Check that it's a debug allocator and an allocator
+(assert (jank.debug-allocator-native/debug-allocator? d) "Created object should be a debug-allocator")
+(assert (jank.arena-native/allocator? d) "Debug allocator should be an allocator")
+
+; Get initial debug stats
+(def stats1 (jank.debug-allocator-native/debug-stats d))
+(assert (map? stats1) "debug-stats should return a map")
+(assert (contains? stats1 :total-allocated) "stats should have :total-allocated")
+(assert (contains? stats1 :allocation-count) "stats should have :allocation-count")
+(assert (contains? stats1 :double-free-count) "stats should have :double-free-count")
+(assert (contains? stats1 :leak-count) "stats should have :leak-count")
+
+; Initially should have no allocations
+(assert (= 0 (:allocation-count stats1)) "Initial allocation-count should be 0")
+(assert (= 0 (:double-free-count stats1)) "Initial double-free-count should be 0")
+
+; Initially should have no leaks
+(assert (not (jank.debug-allocator-native/has-leaks? d)) "Should have no leaks initially")
+
+; Test double-free detection using GENERIC alloc! and free! from arena-native
+(def ptr1 (jank.arena-native/alloc! d 64))
+(jank.arena-native/free! d ptr1)
+(jank.arena-native/free! d ptr1) ; This should trigger double-free detection
+(def stats2 (jank.debug-allocator-native/debug-stats d))
+(assert (= 1 (:double-free-count stats2)) "Should detect one double-free")
+
+; Test leak detection - allocate without freeing
+(def ptr2 (jank.arena-native/alloc! d 128))
+(assert (jank.debug-allocator-native/has-leaks? d) "Should detect leak after alloc! without free!")
+(def leak-count (jank.debug-allocator-native/detect-leaks d))
+(assert (= 1 leak-count) "Should detect exactly 1 leak")
+
+; Get debug stats after allocations
+(def stats3 (jank.debug-allocator-native/debug-stats d))
+(assert (= 1 (:leak-count stats3)) "Stats should show 1 leak")
+(assert (= 2 (:allocation-count stats3)) "Should have 2 allocations")
+
+; Reset using GENERIC allocator-reset! should clear everything
+(jank.arena-native/allocator-reset! d)
+(def stats4 (jank.debug-allocator-native/debug-stats d))
+(assert (= 0 (:allocation-count stats4)) "After reset, allocation-count should be 0")
+(assert (= 0 (:double-free-count stats4)) "After reset, double-free-count should be 0")
+(assert (not (jank.debug-allocator-native/has-leaks? d)) "After reset, should have no leaks")
+
+; nil should not be a debug allocator
+(assert (not (jank.debug-allocator-native/debug-allocator? nil)) "nil should not be a debug-allocator")
+
+; Other values should not be debug allocators
+(assert (not (jank.debug-allocator-native/debug-allocator? 42)) "integer should not be a debug-allocator")
+(assert (not (jank.debug-allocator-native/debug-allocator? "foo")) "string should not be a debug-allocator")
+
+:success
