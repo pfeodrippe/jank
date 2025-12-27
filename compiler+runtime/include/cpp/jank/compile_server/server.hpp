@@ -422,6 +422,33 @@ namespace jank::compile_server
       return sym->name == "ns";
     }
 
+
+    /* Helper to check if a form is a namespace-affecting form that should be
+     * executed on the compile server to keep namespace state in sync.
+     * This includes: require, use, refer, alias, in-ns */
+    static bool is_namespace_affecting_form(runtime::object_ref form)
+    {
+      auto const list = runtime::dyn_cast<runtime::obj::persistent_list>(form);
+      if(list.is_nil() || list->data.empty())
+      {
+        return false;
+      }
+      auto const first = list->data.first();
+      if(first.is_none())
+      {
+        return false;
+      }
+      auto const sym = runtime::dyn_cast<runtime::obj::symbol>(first.unwrap());
+      if(sym.is_nil())
+      {
+        return false;
+      }
+      // These forms modify namespace state (aliases, refers, etc.)
+      return sym->name == "require" || sym->name == "use" ||
+             sym->name == "refer" || sym->name == "alias" ||
+             sym->name == "in-ns";
+    }
+
     std::string compile_code(int64_t id, std::string const &code, std::string const &ns,
                              std::string const &module_hint)
     {
@@ -496,7 +523,87 @@ namespace jank::compile_server
           }
         }
 
-        // Step 3: Analyze all forms with proper namespace binding
+        // Step 3: Execute namespace-affecting forms to keep compile server in sync
+        // This handles require, use, refer, alias, in-ns which register aliases/refers
+        // Without this, aliases created on iOS won't be known to the compile server
+        for(auto const &form : all_forms)
+        {
+          // Skip ns forms - already handled above
+          if(is_ns_form(form))
+          {
+            continue;
+          }
+
+          if(is_namespace_affecting_form(form))
+          {
+            runtime::context::binding_scope const ns_scope{
+              runtime::obj::persistent_hash_map::create_unique(
+                std::make_pair(runtime::__rt_ctx->current_ns_var, eval_ns))
+            };
+
+            try
+            {
+              std::cout << "[compile-server] Executing namespace-affecting form on server..." << std::endl;
+              auto result = runtime::__rt_ctx->eval(form);
+
+              // If this was in-ns, update eval_ns to the new namespace
+              // Note: in-ns returns nil, not the namespace, so we look it up by name
+              auto const list = runtime::dyn_cast<runtime::obj::persistent_list>(form);
+              if(!list.is_nil() && runtime::sequence_length(list) >= 2)
+              {
+                auto const first = list->data.first();
+                if(first.is_some())
+                {
+                  auto const sym = runtime::dyn_cast<runtime::obj::symbol>(first.unwrap());
+                  if(!sym.is_nil() && sym->name == "in-ns")
+                  {
+                    // Get the namespace name from the second argument: (in-ns 'ns-name)
+                    // The second element is a quoted symbol: 'ns-name -> (quote ns-name)
+                    auto const second = list->data.rest().first();
+                    if(second.is_some())
+                    {
+                      // The argument could be 'ns-name (which is (quote ns-name)) or just ns-name
+                      auto ns_sym = runtime::dyn_cast<runtime::obj::symbol>(second.unwrap());
+                      if(ns_sym.is_nil())
+                      {
+                        // Check if it's a quoted symbol
+                        auto const quote_list = runtime::dyn_cast<runtime::obj::persistent_list>(second.unwrap());
+                        if(!quote_list.is_nil() && runtime::sequence_length(quote_list) >= 2)
+                        {
+                          ns_sym = runtime::dyn_cast<runtime::obj::symbol>(quote_list->data.rest().first().unwrap());
+                        }
+                      }
+
+                      if(!ns_sym.is_nil())
+                      {
+                        auto const new_ns = runtime::__rt_ctx->find_ns(ns_sym);
+                        if(!new_ns.is_nil())
+                        {
+                          eval_ns = new_ns;
+                          std::cout << "[compile-server] Switched to namespace via in-ns: "
+                                    << new_ns->name->to_string() << std::endl;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            catch(std::exception const &e)
+            {
+              // This can happen if namespace source doesn't exist (REPL-created namespace)
+              // That's OK - the alias might still work if the namespace was previously loaded
+              std::cerr << "[compile-server] Warning: namespace-affecting form failed: "
+                        << e.what() << std::endl;
+            }
+            catch(...)
+            {
+              std::cerr << "[compile-server] Warning: namespace-affecting form failed (unknown)" << std::endl;
+            }
+          }
+        }
+
+        // Step 4: Analyze all forms with proper namespace binding
         auto const bindings = runtime::obj::persistent_hash_map::create_unique(
           std::make_pair(runtime::__rt_ctx->current_ns_var, eval_ns));
         runtime::context::binding_scope const scope{ bindings };
@@ -511,7 +618,7 @@ namespace jank::compile_server
           exprs.push_back(expr);
         }
 
-        // Step 4: Wrap expressions in a function for codegen
+        // Step 5: Wrap expressions in a function for codegen
         jtl::immutable_string module_name;
         if(module_hint.empty())
         {
@@ -525,7 +632,7 @@ namespace jank::compile_server
         auto const fn_expr = evaluate::wrap_expressions(exprs, an_prc,
                                                         runtime::__rt_ctx->unique_munged_string("repl_fn"));
 
-        // Step 5: Generate C++ code
+        // Step 6: Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::eval };
         auto const cpp_code_body = cg_prc.declaration_str();
         auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name.name).data());
@@ -562,7 +669,7 @@ namespace jank::compile_server
         cpp_code += "  return ::jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
         cpp_code += "}\n";
 
-        // Step 6: Cross-compile to ARM64 object file
+        // Step 7: Cross-compile to ARM64 object file
         auto const object_result = cross_compile(id, cpp_code);
 
         if(!object_result.success)
@@ -570,7 +677,7 @@ namespace jank::compile_server
           return error_response(id, object_result.error, "cross-compile");
         }
 
-        // Step 7: Return compiled object (base64 encoded)
+        // Step 8: Return compiled object (base64 encoded)
         auto const encoded = base64_encode(object_result.object_data);
 
         return R"({"op":"compiled","id":)" + std::to_string(id)
