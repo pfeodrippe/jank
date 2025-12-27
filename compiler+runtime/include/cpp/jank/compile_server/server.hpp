@@ -401,6 +401,27 @@ namespace jank::compile_server
       }
     }
 
+    // Helper to check if a form is an ns form
+    static bool is_ns_form(runtime::object_ref form)
+    {
+      auto const list = runtime::dyn_cast<runtime::obj::persistent_list>(form);
+      if(list.is_nil() || list->data.empty())
+      {
+        return false;
+      }
+      auto const first = list->data.first();
+      if(first.is_none())
+      {
+        return false;
+      }
+      auto const sym = runtime::dyn_cast<runtime::obj::symbol>(first.unwrap());
+      if(sym.is_nil())
+      {
+        return false;
+      }
+      return sym->name == "ns";
+    }
+
     std::string compile_code(int64_t id, std::string const &code, std::string const &ns,
                              std::string const &module_hint)
     {
@@ -412,37 +433,85 @@ namespace jank::compile_server
         // Set up namespace binding for compilation
         // This ensures def/defn create vars in the correct namespace
         auto const ns_sym = runtime::make_box<runtime::obj::symbol>(jtl::immutable_string(ns));
-        auto const eval_ns = runtime::__rt_ctx->intern_ns(ns_sym);
+        auto eval_ns = runtime::__rt_ctx->intern_ns(ns_sym);
 
         // CRITICAL: Refer clojure.core vars to the namespace
         // Without this, macros like 'fn' won't be found during macroexpand
         refer_clojure_core(eval_ns);
 
+        // Step 1: Parse all forms first
+        read::lex::processor l_prc{ code };
+        read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
+
+        native_vector<runtime::object_ref> all_forms;
+        for(auto const &form : p_prc)
+        {
+          all_forms.push_back(form.expect_ok().unwrap().ptr);
+        }
+
+        if(all_forms.empty())
+        {
+          return error_response(id, "No expressions to compile", "compile");
+        }
+
+        // Step 2: If first form is an ns form, evaluate it to load requires
+        // This is critical for load-file where the ns form sets up aliases
+        if(is_ns_form(all_forms.front()))
+        {
+          std::cout << "[compile-server] Evaluating ns form to load requires..." << std::endl;
+
+          runtime::context::binding_scope const ns_scope{
+            runtime::obj::persistent_hash_map::create_unique(
+              std::make_pair(runtime::__rt_ctx->current_ns_var, eval_ns))
+          };
+
+          try
+          {
+            runtime::__rt_ctx->eval(all_forms.front());
+
+            // Update eval_ns to the namespace created by the ns form
+            auto const ns_list = runtime::try_object<runtime::obj::persistent_list>(all_forms.front());
+            if(runtime::sequence_length(ns_list) >= 2)
+            {
+              auto const ns_name_sym = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
+              if(!ns_name_sym.is_nil())
+              {
+                auto const target_ns = runtime::__rt_ctx->find_ns(ns_name_sym);
+                if(!target_ns.is_nil())
+                {
+                  eval_ns = target_ns;
+                  std::cout << "[compile-server] Switched to namespace: " << ns_name_sym->to_string() << std::endl;
+                }
+              }
+            }
+          }
+          catch(std::exception const &e)
+          {
+            std::cerr << "[compile-server] Warning: ns form evaluation failed: " << e.what() << std::endl;
+            // Continue with analysis - will likely fail but gives better error message
+          }
+          catch(...)
+          {
+            std::cerr << "[compile-server] Warning: ns form evaluation failed (unknown error)" << std::endl;
+          }
+        }
+
+        // Step 3: Analyze all forms with proper namespace binding
         auto const bindings = runtime::obj::persistent_hash_map::create_unique(
           std::make_pair(runtime::__rt_ctx->current_ns_var, eval_ns));
         runtime::context::binding_scope const scope{ bindings };
 
-        // Step 1: Parse and analyze the jank code
-        read::lex::processor l_prc{ code };
-        read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
-
         analyze::processor an_prc;
         native_vector<analyze::expression_ref> exprs;
 
-        for(auto const &form : p_prc)
+        for(auto const &parsed_form : all_forms)
         {
-          auto const parsed_form = form.expect_ok().unwrap().ptr;
           auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
           expr = analyze::pass::optimize(expr);
           exprs.push_back(expr);
         }
 
-        if(exprs.empty())
-        {
-          return error_response(id, "No expressions to compile", "compile");
-        }
-
-        // Step 2: Wrap expressions in a function for codegen
+        // Step 4: Wrap expressions in a function for codegen
         jtl::immutable_string module_name;
         if(module_hint.empty())
         {
@@ -456,7 +525,7 @@ namespace jank::compile_server
         auto const fn_expr = evaluate::wrap_expressions(exprs, an_prc,
                                                         runtime::__rt_ctx->unique_munged_string("repl_fn"));
 
-        // Step 3: Generate C++ code
+        // Step 5: Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::eval };
         auto const cpp_code_body = cg_prc.declaration_str();
         auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name.name).data());
@@ -493,7 +562,7 @@ namespace jank::compile_server
         cpp_code += "  return ::jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
         cpp_code += "}\n";
 
-        // Step 4: Cross-compile to ARM64 object file
+        // Step 6: Cross-compile to ARM64 object file
         auto const object_result = cross_compile(id, cpp_code);
 
         if(!object_result.success)
@@ -501,7 +570,7 @@ namespace jank::compile_server
           return error_response(id, object_result.error, "cross-compile");
         }
 
-        // Step 5: Return compiled object (base64 encoded)
+        // Step 7: Return compiled object (base64 encoded)
         auto const encoded = base64_encode(object_result.object_data);
 
         return R"({"op":"compiled","id":)" + std::to_string(id)
@@ -669,10 +738,13 @@ namespace jank::compile_server
         }
 
         // Step 3: Get ALL modules that need to be compiled for iOS
-        // We check ALL loaded modules (not just newly loaded) because dependencies
-        // may already be loaded on macOS from the desktop app initialization.
+        // We check ALL loaded namespaces (not just from loaded_modules_in_order) because
+        // a previous client connection may have loaded namespaces that are still in the
+        // runtime but weren't sent to iOS (e.g., client disconnected).
         // We compile any module that hasn't been sent to iOS yet.
         native_vector<jtl::immutable_string> modules_to_compile;
+
+        // First, collect from loaded_modules_in_order (freshly loaded this session)
         {
           auto locked = runtime::__rt_ctx->loaded_modules_in_order.rlock();
           for(auto const &mod : *locked)
@@ -686,6 +758,54 @@ namespace jank::compile_server
             modules_to_compile.push_back(mod);
           }
         }
+
+        // Also check all namespaces that exist in the runtime but might not be
+        // in loaded_modules_in_order (from previous connections)
+        // NOTE: We copy the namespace names first to avoid holding the lock while compiling
+        native_vector<std::string> additional_namespaces;
+        {
+          auto const all_namespaces = runtime::__rt_ctx->namespaces.rlock();
+          for(auto const &[ns_sym, ns_obj] : *all_namespaces)
+          {
+            auto const ns_name = ns_sym->to_string();
+            std::string ns_str(ns_name.data(), ns_name.size());
+            additional_namespaces.push_back(ns_str);
+          }
+        }
+
+        for(auto const &ns_str : additional_namespaces)
+        {
+          // Skip if already in our compile list
+          bool already_in_list = false;
+          for(auto const &m : modules_to_compile)
+          {
+            if(std::string(m.data(), m.size()) == ns_str)
+            {
+              already_in_list = true;
+              break;
+            }
+          }
+          if(already_in_list)
+          {
+            continue;
+          }
+
+          // Skip if already sent to iOS
+          if(loaded_namespaces_.find(ns_str) != loaded_namespaces_.end())
+          {
+            continue;
+          }
+
+          // Skip clojure.core (always pre-loaded)
+          if(ns_str == "clojure.core" || ns_str == "user")
+          {
+            continue;
+          }
+
+          // Add to compile list
+          modules_to_compile.push_back(jtl::immutable_string(ns_str));
+        }
+
         std::cout << "[compile-server] Modules to compile for iOS: " << modules_to_compile.size() << std::endl;
 
         // Step 4: Collect all modules to compile
