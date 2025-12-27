@@ -924,6 +924,8 @@ else()
       src/cpp/jank/llvm_rtti_stub.cpp
       # Remote compilation client for iOS -> macOS JIT
       src/cpp/jank/compile_server/remote_compile.cpp
+      # Compiler native functions (native-source, etc.) - requires full compiler
+      src/cpp/jank/compiler_native.cpp
     )
     # environment_ios.cpp uses Objective-C APIs
     set_source_files_properties(

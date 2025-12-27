@@ -379,6 +379,18 @@ namespace jank::compile_server
 
         return require_ns(id, ns, source);
       }
+      else if(op == "native-source")
+      {
+        auto code = get_json_string(msg, "code");
+        auto ns = get_json_string(msg, "ns");
+
+        if(code.empty())
+        {
+          return error_response(id, "Missing 'code' field", "protocol");
+        }
+
+        return native_source_code(id, code, ns.empty() ? "user" : ns);
+      }
       else if(op == "ping")
       {
         return R"({"op":"pong","id":)" + std::to_string(id) + "}";
@@ -509,6 +521,73 @@ namespace jank::compile_server
       catch(...)
       {
         return error_response(id, "Unknown compilation error", "compile");
+      }
+    }
+
+    // Generate C++ source for a form (for jank.compiler-native/native-source)
+    std::string native_source_code(int64_t id, std::string const &code, std::string const &ns)
+    {
+      try
+      {
+        std::cout << "[compile-server] Generating native source (id=" << id << ") in ns=" << ns << ": "
+                  << code.substr(0, 50) << (code.size() > 50 ? "..." : "") << std::endl;
+
+        // Set up namespace binding for analysis
+        auto const ns_sym = runtime::make_box<runtime::obj::symbol>(jtl::immutable_string(ns));
+        auto const eval_ns = runtime::__rt_ctx->intern_ns(ns_sym);
+
+        // Refer clojure.core vars to the namespace
+        refer_clojure_core(eval_ns);
+
+        auto const bindings = runtime::obj::persistent_hash_map::create_unique(
+          std::make_pair(runtime::__rt_ctx->current_ns_var, eval_ns));
+        runtime::context::binding_scope const scope{ bindings };
+
+        // Parse the form
+        read::lex::processor l_prc{ code };
+        read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
+
+        runtime::object_ref form;
+        for(auto const &parsed : p_prc)
+        {
+          form = parsed.expect_ok().unwrap().ptr;
+          break;  // Only take first form
+        }
+
+        if(form.is_nil())
+        {
+          return error_response(id, "No form to analyze", "compile");
+        }
+
+        // Analyze the form
+        analyze::processor an_prc;
+        auto const analyzed_expr(an_prc.analyze(form, analyze::expression_position::value).expect_ok());
+        auto const optimized_expr(analyze::pass::optimize(analyzed_expr));
+        auto const wrapped_expr(evaluate::wrap_expression(optimized_expr, "native_source", {}));
+        auto const module(eval_ns->to_string());
+
+        // Generate C++ code
+        codegen::processor cg_prc{ wrapped_expr, module, codegen::compilation_target::eval };
+        auto const cpp_source = cg_prc.declaration_str();
+
+        std::cout << "[compile-server] Generated native source (" << cpp_source.size() << " bytes)" << std::endl;
+
+        return R"({"op":"native-source-result","id":)" + std::to_string(id)
+          + R"(,"source":")" + escape_json(std::string(cpp_source.data(), cpp_source.size())) + R"("})";
+      }
+      catch(jtl::ref<error::base> const &e)
+      {
+        std::string msg = std::string(error::kind_str(e->kind)) + ": "
+                        + std::string(e->message.data(), e->message.size());
+        return error_response(id, msg, "compile");
+      }
+      catch(std::exception const &e)
+      {
+        return error_response(id, e.what(), "compile");
+      }
+      catch(...)
+      {
+        return error_response(id, "Unknown error generating native source", "compile");
       }
     }
 

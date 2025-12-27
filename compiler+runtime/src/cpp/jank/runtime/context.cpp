@@ -674,6 +674,21 @@ namespace jank::runtime
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   object_ref context::eval(object_ref const o)
   {
+#ifdef JANK_IOS_JIT
+    /* On iOS JIT mode with remote compilation enabled, delegate to eval_string
+     * which handles the compile server communication. This is necessary because
+     * local analysis can't resolve C++ interop symbols (headers aren't loaded
+     * on iOS). By going through eval_string, the code is sent to the compile
+     * server which has full C++ header access via CppInterOp. */
+    if(compile_server::is_remote_compile_enabled())
+    {
+      /* Convert the form to a string representation that can be sent to
+       * the compile server. We use to_code_string for proper formatting. */
+      auto const code = runtime::to_code_string(o);
+      return eval_string(code);
+    }
+#endif
+
     auto const expr(
       analyze::pass::optimize(an_prc.analyze(o, analyze::expression_position::value).expect_ok()));
     return evaluate::eval(expr);

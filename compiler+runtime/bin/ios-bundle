@@ -607,6 +607,9 @@ extern "C" void* jank_load_test();
 // nREPL native module loader (required for JIT mode)
 extern "C" void* jank_load_jank_nrepl_server_asio();
 
+// Compiler native module (native-source, etc.)
+extern "C" void* jank_load_jank_compiler_native();
+
 // nREPL server module (jank code that wraps the native module)
 // Note: jank uses only the last segment for function names, so jank.nrepl-server.server -> jank_load_server
 extern "C" void* jank_load_server();
@@ -639,6 +642,10 @@ extern "C" void jank_aot_init() {
     std::cout << "[jank] Loading nREPL native module..." << std::endl;
     jank_load_jank_nrepl_server_asio();
     jank_module_set_loaded("jank.nrepl-server.asio");
+
+    // Load compiler native module (native-source, etc.)
+    std::cout << "[jank] Loading compiler native module..." << std::endl;
+    jank_load_jank_compiler_native();
 
     // Load nREPL server module (jank code)
     std::cout << "[jank] Loading nREPL server module..." << std::endl;

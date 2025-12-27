@@ -22,6 +22,8 @@
 #include <jank/util/cli.hpp>
 #include <jank/util/clang_format.hpp>
 #include <jank/util/fmt/print.hpp>
+#include <jank/compile_server/remote_compile.hpp>
+#include <jank/runtime/core/to_string.hpp>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -33,15 +35,26 @@ namespace jank::compiler_native
   template <typename Fn>
   static object_ref with_pipeline(object_ref const form, Fn &&fn)
   {
+    /* Get the current namespace from *ns* var. This is needed for proper symbol resolution,
+     * especially for C++ interop symbols that are namespace-scoped. */
+    auto const ns_obj(__rt_ctx->intern_var("clojure.core", "*ns*").expect_ok()->deref());
+    auto const current_ns(expect_object<runtime::ns>(ns_obj));
+
+    /* Set up thread bindings for *ns* so the analyzer can properly resolve symbols.
+     * This is essential for C++ interop where symbols like 'sdfx' are aliases defined
+     * in the namespace's native requires. Without this binding, the analyzer can't
+     * find those aliases. */
+    auto const bindings = runtime::obj::persistent_hash_map::create_unique(
+      std::make_pair(__rt_ctx->current_ns_var, current_ns));
+    runtime::context::binding_scope const scope{ bindings };
+
     /* We use a clean analyze::processor so we don't share lifted items from other REPL
      * evaluations. */
     analyze::processor an_prc;
     auto const analyzed_expr(an_prc.analyze(form, analyze::expression_position::value).expect_ok());
     auto const optimized_expr(analyze::pass::optimize(analyzed_expr));
     auto const wrapped_expr(evaluate::wrap_expression(optimized_expr, "native_source", {}));
-    auto module(
-      expect_object<runtime::ns>(__rt_ctx->intern_var("clojure.core", "*ns*").expect_ok()->deref())
-        ->to_string());
+    auto module(current_ns->to_string());
 
     return fn(analyzed_expr, optimized_expr, wrapped_expr, module);
   }
@@ -106,6 +119,30 @@ namespace jank::compiler_native
 
   static object_ref native_source(object_ref const form)
   {
+#ifdef JANK_IOS_JIT
+    /* On iOS JIT mode with remote compilation enabled, delegate to the compile server.
+     * This is necessary because local analysis can't resolve C++ interop symbols
+     * (headers aren't loaded on iOS). */
+    if(compile_server::is_remote_compile_enabled())
+    {
+      auto const code = runtime::to_code_string(form);
+      auto const current_ns = __rt_ctx->current_ns();
+      auto const ns_str = std::string(current_ns->name->name.data(), current_ns->name->name.size());
+
+      auto const response = compile_server::remote_native_source(code, ns_str);
+      if(response.success)
+      {
+        auto formatted(util::format_cpp_source(response.source).expect_ok());
+        forward_string(std::string_view{ formatted.data(), formatted.size() });
+      }
+      else
+      {
+        throw std::runtime_error("Remote native-source failed: " + response.error);
+      }
+      return jank_nil;
+    }
+#endif
+
     return with_pipeline(
       form,
       [](auto const &, auto const &, auto const &wrapped_expr, auto const &module) {

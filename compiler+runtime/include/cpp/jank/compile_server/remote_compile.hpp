@@ -121,4 +121,19 @@ namespace jank::compile_server
     return remote_client->require_ns(ns, source);
   }
 
+  // Generate native C++ source remotely (for jank.compiler-native/native-source)
+  // Sends form to compile server which has C++ headers loaded
+  inline native_source_response remote_native_source(std::string const &code, std::string const &ns = "user")
+  {
+    std::lock_guard<std::mutex> lock(remote_config_mutex);
+    if(!remote_client)
+    {
+      native_source_response resp;
+      resp.success = false;
+      resp.error = "Remote compile not connected";
+      return resp;
+    }
+    return remote_client->native_source(code, ns);
+  }
+
 } // namespace jank::compile_server

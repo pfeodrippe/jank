@@ -114,6 +114,19 @@ namespace jank::compile_server
     bool found{ true };  // false if source not found
   };
 
+  // Native-source request - generate C++ source code for a form
+  struct native_source_response
+  {
+    int64_t id{ 0 };
+    bool success{ false };
+
+    // On success:
+    std::string source;  // Generated C++ source code
+
+    // On error:
+    std::string error;
+  };
+
   // Default port for compilation service
   constexpr uint16_t default_compile_port = 5570;
 

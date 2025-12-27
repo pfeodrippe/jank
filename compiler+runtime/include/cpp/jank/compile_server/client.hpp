@@ -226,6 +226,77 @@ namespace jank::compile_server
       return op == "pong";
     }
 
+    // Request native C++ source for a form (for jank.compiler-native/native-source)
+    native_source_response native_source(std::string const &code, std::string const &ns = "user")
+    {
+      native_source_response response;
+
+      if(!connect())
+      {
+        response.success = false;
+        response.error = "Not connected to compile server";
+        return response;
+      }
+
+      // Build request
+      int64_t const id = next_id_++;
+      std::string request = R"({"op":"native-source","id":)" + std::to_string(id)
+        + R"(,"code":")" + escape_json(code)
+        + R"(","ns":")" + escape_json(ns) + R"("})" + "\n";
+
+      // Send request
+      if(send_all(request) < 0)
+      {
+        response.success = false;
+        response.error = "Failed to send native-source request";
+        disconnect();
+        return response;
+      }
+
+      // Receive response (single line)
+      std::string line = recv_line();
+      if(line.empty())
+      {
+        response.success = false;
+        response.error = "No response from compile server";
+        disconnect();
+        return response;
+      }
+
+      // Parse response
+      auto op = get_json_string(line, "op");
+      auto resp_id = get_json_int(line, "id");
+
+      if(resp_id != id)
+      {
+        response.success = false;
+        response.error = "Response ID mismatch";
+        return response;
+      }
+
+      if(op == "native-source-result")
+      {
+        response.id = resp_id;
+        response.success = true;
+        response.source = get_json_string(line, "source");
+      }
+      else if(op == "error")
+      {
+        response.id = resp_id;
+        response.success = false;
+        response.error = get_json_string(line, "error");
+
+        std::cerr << "[compile-client] Native-source error: " << response.error << std::endl;
+      }
+      else
+      {
+        response.success = false;
+        response.error = "Unknown response op: " + op;
+      }
+
+      return response;
+    }
+
     // Require (load) a namespace - send source to compile server
     require_response require_ns(std::string const &ns, std::string const &source)
     {
