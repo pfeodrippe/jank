@@ -21,7 +21,19 @@
 #include <filesystem>
 #include <sstream>
 #include <unordered_set>
+#include <unordered_map>
+#include <mutex>
+#include <chrono>
 #include <cxxabi.h>
+
+// Persistent compiler is only available in the standalone compile-server binary.
+// In JIT mode (when jank loads server.hpp at runtime), LLVM/Clang headers conflict
+// with the system standard library. The standalone binary is AOT-compiled with
+// proper LLVM linking, so it can use the persistent compiler.
+#ifdef JANK_COMPILE_SERVER_BINARY
+  #include <jank/compile_server/persistent_compiler.hpp>
+#endif
+
 #include <cstdlib>
 #include <pthread.h>
 
@@ -46,6 +58,7 @@ GC_API int GC_CALL GC_pthread_create(pthread_t *, const pthread_attr_t *,
 #include <jank/runtime/obj/persistent_hash_map.hpp>
 #include <jank/runtime/obj/persistent_list.hpp>
 #include <jank/runtime/obj/symbol.hpp>
+#include <jank/runtime/obj/keyword.hpp>
 #include <jank/runtime/module/loader.hpp>
 #include <jank/read/lex.hpp>
 #include <jank/read/parse.hpp>
@@ -84,11 +97,101 @@ namespace jank::compile_server
     {
       // Ensure temp directory exists
       std::filesystem::create_directories(config_.temp_dir);
+
+#ifdef JANK_COMPILE_SERVER_BINARY
+      // First try incremental compiler (true incremental with headers parsed once)
+      if(incremental_compiler_.init(
+        config_.clang_path,
+        config_.target_triple,
+        config_.ios_sdk_path,
+        config_.pch_path,
+        config_.include_paths,
+        config_.flags))
+      {
+        std::cout << "[compile-server] Incremental compiler initialized!" << std::endl;
+        // Parse jank runtime headers once at startup (expensive but done only once)
+        std::string prelude = R"cpp(
+#include <jank/prelude.hpp>
+)cpp";
+        if(incremental_compiler_.parse_runtime_headers(prelude))
+        {
+          std::cout << "[compile-server] Headers parsed - ready for fast compilation!" << std::endl;
+        }
+        else
+        {
+          std::cerr << "[compile-server] Warning: Header parsing failed, trying persistent compiler" << std::endl;
+          // Try persistent compiler as fallback
+          if(persistent_compiler_.init(
+            config_.clang_path,
+            config_.target_triple,
+            config_.ios_sdk_path,
+            config_.pch_path,
+            config_.include_paths,
+            config_.flags))
+          {
+            std::cout << "[compile-server] Persistent compiler initialized as fallback!" << std::endl;
+          }
+        }
+      }
+      // Fall back to persistent compiler if incremental fails
+      else if(persistent_compiler_.init(
+        config_.clang_path,
+        config_.target_triple,
+        config_.ios_sdk_path,
+        config_.pch_path,
+        config_.include_paths,
+        config_.flags))
+      {
+        std::cout << "[compile-server] Persistent compiler initialized!" << std::endl;
+      }
+      else
+      {
+        std::cerr << "[compile-server] Warning: Both compilers failed, using popen fallback" << std::endl;
+      }
+#endif
     }
 
     ~server()
     {
       stop();
+    }
+
+    // Refer all public vars from clojure.core to the given namespace.
+    // This is necessary for macros like 'fn', 'defn', etc. to work during compilation.
+    static void refer_clojure_core(runtime::ns_ref const &target_ns)
+    {
+      static auto const core_ns_sym = runtime::make_box<runtime::obj::symbol>("clojure.core");
+      auto const core_ns = runtime::__rt_ctx->find_ns(core_ns_sym);
+      if(core_ns.is_nil())
+      {
+        std::cerr << "[compile-server] Warning: clojure.core not loaded!" << std::endl;
+        return;
+      }
+
+      // Check if we already have clojure.core referred (e.g., if 'fn' is present)
+      static auto const fn_sym = runtime::make_box<runtime::obj::symbol>("fn");
+      auto const existing = target_ns->find_var(fn_sym);
+      if(!existing.is_nil())
+      {
+        // Already referred
+        return;
+      }
+
+      // Refer all public vars from clojure.core
+      auto const mappings = core_ns->get_mappings();
+      for(auto it = mappings->fresh_seq(); !it.is_nil(); it = it->next_in_place())
+      {
+        auto const entry = it->first();
+        auto const sym = runtime::expect_object<runtime::obj::symbol>(runtime::first(entry));
+        auto const val = runtime::second(entry);
+
+        // Only refer vars (skip the private check for simplicity - most clojure.core vars are public)
+        if(!val.is_nil() && val->type == runtime::object_type::var)
+        {
+          auto const v = runtime::expect_object<runtime::var>(val);
+          target_ns->refer(sym, v).expect_ok();
+        }
+      }
     }
 
     void start()
@@ -298,6 +401,11 @@ namespace jank::compile_server
         // This ensures def/defn create vars in the correct namespace
         auto const ns_sym = runtime::make_box<runtime::obj::symbol>(jtl::immutable_string(ns));
         auto const eval_ns = runtime::__rt_ctx->intern_ns(ns_sym);
+
+        // CRITICAL: Refer clojure.core vars to the namespace
+        // Without this, macros like 'fn' won't be found during macroexpand
+        refer_clojure_core(eval_ns);
+
         auto const bindings = runtime::obj::persistent_hash_map::create_unique(
           std::make_pair(runtime::__rt_ctx->current_ns_var, eval_ns));
         runtime::context::binding_scope const scope{ bindings };
@@ -698,6 +806,23 @@ namespace jank::compile_server
 
     cross_compile_result cross_compile(int64_t id, std::string const &cpp_code)
     {
+#ifdef JANK_COMPILE_SERVER_BINARY
+      // Use incremental compiler if available (fastest - headers already parsed!)
+      if(incremental_compiler_.is_initialized())
+      {
+        auto result = incremental_compiler_.compile(cpp_code, "compile_" + std::to_string(id));
+        return { result.success, std::move(result.object_data), result.error };
+      }
+      // Fall back to persistent compiler (faster than popen)
+      else if(persistent_compiler_.is_initialized())
+      {
+        auto result = persistent_compiler_.compile(cpp_code, "compile_" + std::to_string(id));
+        return { result.success, std::move(result.object_data), result.error };
+      }
+#endif
+
+      // Fallback: Cross-compilation using clang CLI (spawns process per compilation)
+
       // Write C++ to temp file
       auto const cpp_path = config_.temp_dir + "/compile_" + std::to_string(id) + ".cpp";
       auto const obj_path = config_.temp_dir + "/compile_" + std::to_string(id) + ".o";
@@ -937,6 +1062,10 @@ namespace jank::compile_server
     std::atomic<bool> running_;
     pthread_t server_thread_;
     std::unordered_set<std::string> loaded_namespaces_;  // Track loaded namespaces
+#ifdef JANK_COMPILE_SERVER_BINARY
+    incremental_compiler incremental_compiler_;  // Fast incremental compiler (headers parsed once)
+    persistent_compiler persistent_compiler_;    // Fallback persistent compiler
+#endif
 
     // Helper struct for compiled module info
     struct compiled_module_info

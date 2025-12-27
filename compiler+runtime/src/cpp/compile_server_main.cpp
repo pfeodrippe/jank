@@ -27,6 +27,9 @@
 #include <jank/compiler_native.hpp>
 #include <jank/perf_native.hpp>
 
+// nREPL server asio native module (no header - declare extern)
+extern "C" void *jank_load_jank_nrepl_server_asio();
+
 namespace
 {
   std::atomic<bool> running{ true };
@@ -40,8 +43,10 @@ namespace
   uint16_t g_port = jank::compile_server::default_compile_port;
   std::string g_target;  // Required - must be "sim" or "device"
   std::string g_clang_path;
+  std::string g_module_path;  // Path to jank source files
   std::vector<std::string> g_include_paths;  // Additional include paths for app headers
   std::vector<std::string> g_defines;  // Preprocessor defines for app code
+  std::vector<std::string> g_jit_libs;  // Libraries to load into JIT for symbol resolution
 }
 
 int compile_server_main(int const /* argc */, char const ** /* argv */)
@@ -59,6 +64,7 @@ int compile_server_main(int const /* argc */, char const ** /* argv */)
     jank_load_clojure_core_native();
     jank_load_jank_compiler_native();
     jank_load_jank_perf_native();
+    jank_load_jank_nrepl_server_asio();
   }
 
   // Load clojure.core for compilation
@@ -82,9 +88,13 @@ int compile_server_main(int const /* argc */, char const ** /* argv */)
   }
 
   // Add app-specific include paths
+  // These need to be added to BOTH:
+  // 1. config.include_paths - for cross-compilation to iOS
+  // 2. util::cli::opts.include_dirs - for local JIT compilation of native headers
   for(auto const &inc : g_include_paths)
   {
     config.include_paths.push_back(inc);
+    util::cli::opts.include_dirs.push_back(inc);
     std::cout << "[compile-server] Added include path: " << inc << std::endl;
   }
 
@@ -143,9 +153,17 @@ int main(int argc, char **argv)
     {
       g_clang_path = argv[++i];
     }
+    else if(arg == "--module-path" && i + 1 < argc)
+    {
+      g_module_path = argv[++i];
+    }
     else if((arg == "--include" || arg == "-I") && i + 1 < argc)
     {
       g_include_paths.push_back(argv[++i]);
+    }
+    else if(arg == "--jit-lib" && i + 1 < argc)
+    {
+      g_jit_libs.push_back(argv[++i]);
     }
     else if(arg == "-D" && i + 1 < argc)
     {
@@ -162,8 +180,10 @@ int main(int argc, char **argv)
                 << "Options:\n"
                 << "  --target TARGET       iOS target: sim or device (REQUIRED)\n"
                 << "  --port PORT           Compile server port (default: 5559)\n"
+                << "  --module-path PATH    Path to jank source files\n"
                 << "  --clang PATH          Path to clang++ for cross-compilation\n"
                 << "  --include PATH, -I    Additional include path (can be repeated)\n"
+                << "  --jit-lib PATH        Library to load into JIT (can be repeated)\n"
                 << "  -D DEFINE             Preprocessor define (can be repeated)\n"
                 << "  --help, -h            Show this help message\n";
       return 0;
@@ -181,6 +201,29 @@ int main(int argc, char **argv)
   {
     std::cerr << "Error: --target must be 'sim' or 'device', got: " << g_target << "\n";
     return 1;
+  }
+
+  // CRITICAL: Set cli options BEFORE jank_init()
+  // The runtime context and JIT processor are initialized during jank_init() and read these at that time.
+
+  // Set module path for finding jank source files
+  if(!g_module_path.empty())
+  {
+    jank::util::cli::opts.module_path = g_module_path;
+    std::cout << "[compile-server] Module path: " << g_module_path << std::endl;
+  }
+
+  // Add include paths for native header compilation
+  for(auto const &inc : g_include_paths)
+  {
+    jank::util::cli::opts.include_dirs.push_back(inc);
+  }
+
+  // Add JIT libraries for symbol resolution
+  for(auto const &lib : g_jit_libs)
+  {
+    jank::util::cli::opts.jit_libs.push_back(lib);
+    std::cout << "[compile-server] JIT lib: " << lib << std::endl;
   }
 
   // Use jank_init to properly initialize GC, LLVM, and runtime context
