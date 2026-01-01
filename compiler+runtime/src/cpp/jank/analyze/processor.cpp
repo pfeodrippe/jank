@@ -5020,15 +5020,8 @@ namespace jank::analyze
     if(count < 2)
     {
       return error::analyze_invalid_cpp_unbox(
-               "This call to 'cpp/unbox' is missing a C++ type and a value as arguments.",
-               object_source(l->first()),
-               latest_expansion(macro_expansions))
-        ->add_usage(read::parse::reparse_nth(l, 0));
-    }
-    else if(count < 3)
-    {
-      return error::analyze_invalid_cpp_unbox(
-               "This call to 'cpp/unbox' is missing a value to unbox as an argument.",
+               "This call to 'cpp/unbox' requires at least one argument (either just a value for "
+               "type inference, or both a type and a value).",
                object_source(l->first()),
                latest_expansion(macro_expansions))
         ->add_usage(read::parse::reparse_nth(l, 0));
@@ -5036,8 +5029,7 @@ namespace jank::analyze
     else if(3 < count)
     {
       return error::analyze_invalid_cpp_unbox(
-               "A call to 'cpp/unbox' must only have a C++ type and a "
-               "value as arguments and nothing else.",
+               "A call to 'cpp/unbox' takes at most two arguments (a C++ type and a value).",
                object_source(l->next()->next()->next()->first()),
                latest_expansion(macro_expansions))
         ->add_usage(read::parse::reparse_nth(l, 3));

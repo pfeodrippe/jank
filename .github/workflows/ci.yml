@@ -1,23 +1,11 @@
 name: Build compiler+runtime
 
-<<<<<<<< HEAD:.github/workflows/ci.yml
 on: [ push, pull_request ]
 # on:
 #   pull_request:
 #   push:
 #     branches:
 #       - main
-========
-on:
-  pull_request:
-    paths:
-      - 'compiler+runtime/**'
-  push:
-    branches:
-      - main
-    paths:
-      - 'compiler+runtime/**'
->>>>>>>> origin/main:.github/workflows/build-compiler+runtime.yml
 
 permissions:
   contents: read
@@ -114,7 +102,6 @@ jobs:
             analyze: on
 
           ## Debug + sanitization
-          # TODO: Fix this. GC issue: https://github.com/bdwgc/bdwgc/issues/772
           #- name: Ubuntu - address sanitizer
           #  os: ubuntu-24.04
           #  build_type: Debug
@@ -226,12 +213,6 @@ jobs:
           path: |
             ${{ github.workspace }}/compiler+runtime/.ctcache
           key: ctcache-${{ env.JANK_MATRIX_ID }}-${{ github.ref_name }}
-      - uses: thejerrybao/setup-swap-space@466d59798fb9263b9c2331c83cf71f9b7bfd0c78
-        if: runner.os == 'Linux'
-        with:
-          swap-space-path: /swapfile
-          swap-size-gb: 8
-          remove-existing-swap-files: true
       - name: Build and test jank
         id: jank-build-step
         run: |
@@ -247,94 +228,3 @@ jobs:
             export JANK_SKIP_AOT_CHECK=1
           fi
           JANK_INSTALL_DEPS=true ./bin/jank/check_everything.clj
-<<<<<<<< HEAD:.github/workflows/ci.yml
-========
-      - name: Upload .deb for publishing
-        if: github.ref == 'refs/heads/main' && steps.jank-build-step.outputs.deb
-        uses: actions/upload-artifact@v4
-        with:
-          name: jank-deb
-          path: ${{ steps.jank-build-step.outputs.deb }}
-      - name: Upload Homebrew tarball for publishing
-        if: github.ref == 'refs/heads/main' && steps.jank-build-step.outputs.homebrew-tarball
-        uses: actions/upload-artifact@v4
-        with:
-          name: jank-homebrew-tarball
-          path: ${{ steps.jank-build-step.outputs.homebrew-tarball }}
-
-  publish-deb:
-    if: github.ref == 'refs/heads/main'
-    needs: build-jank
-    name: Publish .deb
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          name: jank-deb
-          path: ~/
-      - name: Import SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.PPA_SSH_KEY }}" > ~/.ssh/jank_id_ed25519
-          chmod 400 ~/.ssh/jank_id_ed25519
-      - name: Publish to PPA
-        run: |
-          scp -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no ~/*.deb root@ppa.jank-lang.org:/var/www/ppa.jank-lang.org/html/
-          ssh -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no root@ppa.jank-lang.org "~/update+sign"
-
-  publish-homebrew-tarball:
-    if: github.ref == 'refs/heads/main'
-    needs: build-jank
-    name: Publish Homebrew package
-    runs-on: macos-26
-    timeout-minutes: 5
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          name: jank-homebrew-tarball
-          path: ~/
-      - name: Import SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.PPA_SSH_KEY }}" > ~/.ssh/jank_id_ed25519
-          chmod 400 ~/.ssh/jank_id_ed25519
-      - name: Publish to cache
-        run: |
-          scp -i ~/.ssh/jank_id_ed25519 -o StrictHostKeyChecking=no ~/*.tar.gz root@cache.jank-lang.org:/var/www/cache.jank-lang.org/html/
-
-  # TODO: Fix Nix in CI!
-  # We're currently running out of memory in CI, due to Clang's memory usage for
-  # JIT compiled C++ code. Nix, unsurprisingly, uses more RAM than others, so it's
-  # blocked while others are merely hindered. We should be able to fix this by
-  # optimizing Clang's memory usage for JIT compiled code. See this gist for
-  # much more details: https://gist.github.com/jeaye/9adaaa56aee50d5912207907a48d1006
-  #
-  # It's also possible that we can just use IR gen for Nix. That would require
-  # some additional CMake support, but is definitely doable. For the alpha, since
-  # we don't have a finished Nix package anyway, I'm not too concerned about this.
-  #
-  #build-nix:
-  #  name: "Nix - release"
-  #  runs-on: ubuntu-latest
-  #  steps:
-  #  - name: "Set up nix"
-  #    uses: cachix/install-nix-action@v31
-  #    with:
-  #      nix_path: nixpkgs=channel:nixos-unstable
-  #  - name: "Set up cachix"
-  #    uses: cachix/cachix-action@v16
-  #    with:
-  #      name: jank-lang
-  #      # If you chose API tokens for write access OR if you have a private cache
-  #      authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-  #      # Only push to cache on main branch, not PRs
-  #      skipPush: "${{ github.ref != 'refs/heads/main' }}"
-  #  - uses: actions/checkout@v4
-  #    with:
-  #      submodules: 'recursive'
-  #  - name: "Build jank"
-  #    run: nix build .?submodules=1 -L
-  #  - name: "Check health"
-  #    run: nix run .?submodules=1 check-health
->>>>>>>> origin/main:.github/workflows/build-compiler+runtime.yml

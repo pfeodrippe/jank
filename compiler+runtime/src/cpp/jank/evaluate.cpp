@@ -689,7 +689,7 @@ namespace jank::evaluate
       profile::timer const jtimer{ "eval:fn:cpp_jit_decl" };
       __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
     }
-    auto const expr_str{ cg_prc.expression_str() + ".erase()" };
+    auto const expr_str{ cg_prc.expression_str() + ".erase().data" };
     clang::Value v;
     {
       profile::timer const etimer{ "eval:fn:cpp_jit_expr" };

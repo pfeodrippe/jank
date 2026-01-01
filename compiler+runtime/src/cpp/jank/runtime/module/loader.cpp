@@ -1199,7 +1199,7 @@ namespace jank::runtime::module
           auto const path{ util::format("{}:{}", entry.archive_path.unwrap(), entry.path) };
           context::binding_scope const preserve{ runtime::obj::persistent_hash_map::create_unique(
             std::make_pair(__rt_ctx->current_file_var, make_box(path))) };
-          __rt_ctx->eval_string(read_result.expect_ok());
+          __rt_ctx->eval_string(read_result.expect_ok()).unwrap();
           return ok();
         }) };
       if(res.is_err())
@@ -1209,7 +1209,7 @@ namespace jank::runtime::module
     }
     else
     {
-      __rt_ctx->eval_file(entry.path);
+      __rt_ctx->eval_file(entry.path).unwrap();
     }
 
     return ok();

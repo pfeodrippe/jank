@@ -143,8 +143,12 @@ OPTIONS
   -L,     --library-dir <path>
                               Absolute or relative path to the directory to search dynamic
                               libraries in. Can be specified multiple times.
-  -l <lib>                    Library identifiers, absolute or relative paths eg. -lfoo for
+  -l,     --lib <lib>         Library identifiers, absolute or relative paths eg. -lfoo for
                               libfoo.so or foo.dylib. Can be specified multiple times.
+          --obj <path>        Object files (.o) to load into JIT. Can be specified multiple times.
+          --framework <name>  macOS framework to link. Can be specified multiple times.
+          --jit-lib <path>    Libraries for JIT only (not AOT linker). Can be specified multiple times.
+          --link-lib <path>   Libraries for AOT linker only (not JIT). Can be specified multiple times.
 
 RUN-MAIN SPECIFIC OPTIONS
           --ios-compile-server <port>
@@ -293,9 +297,25 @@ RUN-MAIN SPECIFIC OPTIONS
         {
           opts.library_dirs.emplace_back(value);
         }
-        else if(check_flag(it, end, value, "-l", "--link", true))
+        else if(check_flag(it, end, value, "-l", "--lib", true))
         {
           opts.libs.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "--obj", true))
+        {
+          opts.object_files.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "--framework", true))
+        {
+          opts.frameworks.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "--jit-lib", true))
+        {
+          opts.jit_libs.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "--link-lib", true))
+        {
+          opts.link_libs.emplace_back(value);
         }
 
         /**** These are command-specific flags which we will store until we know the command. ****/

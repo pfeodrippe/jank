@@ -1415,14 +1415,15 @@ namespace jank::codegen
     auto const &ret_tmp{ runtime::munge(__rt_ctx->unique_string("let")) };
     bool used_option{};
 
-    auto const last_expr_type{ cpp_util::expression_type(
+    auto const last_expr_type{ cpp_util::non_void_expression_type(
       expr->body->values[expr->body->values.size() - 1]) };
 
     auto const &type_name{ cpp_util::get_qualified_type_name(
       Cpp::GetNonReferenceType(last_expr_type)) };
     if(cpp_util::is_any_object(last_expr_type))
     {
-      util::format_to(body_buffer, "{} {}{ }; {", type_name, ret_tmp);
+      util::format_to(body_buffer, "{} {}( jank::runtime::jank_nil() ); ", type_name, ret_tmp);
+      util::format_to(body_buffer, "{");
     }
     else
     {
@@ -1530,14 +1531,15 @@ namespace jank::codegen
     auto const &ret_tmp{ runtime::munge(__rt_ctx->unique_string("letfn")) };
     bool used_option{};
 
-    auto const last_expr_type{ cpp_util::expression_type(
+    auto const last_expr_type{ cpp_util::non_void_expression_type(
       expr->body->values[expr->body->values.size() - 1]) };
 
     auto const &type_name{ cpp_util::get_qualified_type_name(
       Cpp::GetNonReferenceType(last_expr_type)) };
     if(cpp_util::is_any_object(last_expr_type))
     {
-      util::format_to(body_buffer, "{} {}{ }; {", type_name, ret_tmp);
+      util::format_to(body_buffer, "{} {}( jank::runtime::jank_nil() ); ", type_name, ret_tmp);
+      util::format_to(body_buffer, "{");
     }
     else
     {
@@ -1660,7 +1662,7 @@ namespace jank::codegen
   processor::gen(analyze::expr::if_ref const expr, analyze::expr::function_arity const &fn_arity)
   {
     auto ret_tmp(runtime::munge(__rt_ctx->unique_string("if")));
-    auto const expr_type{ cpp_util::expression_type(expr->then) };
+    auto const expr_type{ cpp_util::non_void_expression_type(expr->then) };
     util::format_to(body_buffer,
                     "{} {}{ };",
                     cpp_util::get_qualified_type_name(expr_type),
@@ -1963,11 +1965,7 @@ namespace jank::codegen
 
       auto const is_void{ Cpp::IsVoid(Cpp::GetFunctionReturnType(source->scope)) };
 
-      if(is_void)
-      {
-        util::format_to(body_buffer, "jank::runtime::object_ref const {};", ret_tmp);
-      }
-      else
+      if(!is_void)
       {
         util::format_to(body_buffer, "auto &&{}{ ", ret_tmp);
       }
@@ -2002,7 +2000,10 @@ namespace jank::codegen
       }
       else
       {
-        util::format_to(body_buffer, ";");
+        /* For void-returning functions, call the function first, then set return temp to nil. */
+        util::format_to(body_buffer,
+                        ";jank::runtime::object_ref const {}{ jank::runtime::jank_nil() };",
+                        ret_tmp);
       }
 
       if(expr->position == expression_position::tail)
@@ -2028,11 +2029,7 @@ namespace jank::codegen
 
       auto const is_void{ Cpp::IsVoid(expr->type) };
 
-      if(is_void)
-      {
-        util::format_to(body_buffer, "jank::runtime::object_ref const {};", ret_tmp);
-      }
-      else
+      if(!is_void)
       {
         util::format_to(body_buffer, "auto &&{}{ ", ret_tmp);
       }
@@ -2058,7 +2055,10 @@ namespace jank::codegen
       }
       else
       {
-        util::format_to(body_buffer, ";");
+        /* For void-returning functions, call the function first, then set return temp to nil. */
+        util::format_to(body_buffer,
+                        ";jank::runtime::object_ref const {}{ jank::runtime::jank_nil() };",
+                        ret_tmp);
       }
 
       if(expr->position == expression_position::tail)
@@ -2171,12 +2171,12 @@ namespace jank::codegen
 
     auto const is_void{ Cpp::IsVoid(Cpp::GetFunctionReturnType(expr->fn)) };
 
-    if(is_void)
+    if(!is_void)
     {
-      util::format_to(body_buffer, "jank::runtime::object_ref {}{ };", ret_tmp);
       util::format_to(
         body_buffer,
-        "{}{}{}(",
+        "auto &&{}{ {}{}{}(",
+        ret_tmp,
         arg_tmps[0].str(false),
         (Cpp::IsPointerType(cpp_util::expression_type(expr->arg_exprs[0])) ? "->" : "."),
         fn_name);
@@ -2185,8 +2185,7 @@ namespace jank::codegen
     {
       util::format_to(
         body_buffer,
-        "auto &&{}{ {}{}{}(",
-        ret_tmp,
+        "{}{}{}(",
         arg_tmps[0].str(false),
         (Cpp::IsPointerType(cpp_util::expression_type(expr->arg_exprs[0])) ? "->" : "."),
         fn_name);
@@ -2203,13 +2202,16 @@ namespace jank::codegen
       need_comma = true;
     }
 
-    if(is_void)
+    if(!is_void)
     {
-      util::format_to(body_buffer, ");");
+      util::format_to(body_buffer, ") };");
     }
     else
     {
-      util::format_to(body_buffer, ") };");
+      /* For void-returning functions, call the function first, then set return temp to nil. */
+      util::format_to(body_buffer,
+                      ");jank::runtime::object_ref const {}{ jank::runtime::jank_nil };",
+                      ret_tmp);
     }
 
     if(expr->position == expression_position::tail)
@@ -2252,7 +2254,25 @@ namespace jank::codegen
     arg_tmps.reserve(expr->arg_exprs.size());
     for(auto const &arg_expr : expr->arg_exprs)
     {
-      arg_tmps.emplace_back(gen(arg_expr, arity).unwrap());
+      auto arg_tmp{ gen(arg_expr, arity).unwrap() };
+
+      /* Unbox primitive literal constants for use in C++ operators */
+      if(arg_expr->kind == analyze::expression_kind::primitive_literal)
+      {
+        auto const lit{ static_cast<analyze::expr::primitive_literal *>(arg_expr.data) };
+        if(lit->data->type == runtime::object_type::integer)
+        {
+          arg_tmp = handle{ util::format("jank::runtime::expect_object<jank::runtime::obj::integer>({})->data",
+                                         arg_tmp.str(false)) };
+        }
+        else if(lit->data->type == runtime::object_type::real)
+        {
+          arg_tmp = handle{ util::format("jank::runtime::expect_object<jank::runtime::obj::real>({})->data",
+                                         arg_tmp.str(false)) };
+        }
+      }
+
+      arg_tmps.emplace_back(arg_tmp);
     }
 
     auto const op_name{ cpp_util::operator_name(static_cast<Cpp::Operator>(expr->op)).unwrap() };

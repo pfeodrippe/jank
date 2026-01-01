@@ -352,7 +352,18 @@ namespace jank::analyze::cpp_util
       return name;
     }
 
-    return Cpp::GetTypeAsString(type);
+    /* Before falling back to Cpp::GetTypeAsString, check for jank primitive types
+     * that need qualification. Cpp::GetTypeAsString returns unqualified names for
+     * type aliases like i64, f64, etc., which causes compilation errors. */
+    auto const type_str{ Cpp::GetTypeAsString(type) };
+    if(type_str == "i64" || type_str == "u64" || type_str == "f64"
+       || type_str == "i8" || type_str == "u8" || type_str == "i16"
+       || type_str == "u16" || type_str == "i32" || type_str == "u32")
+    {
+      return "jank::" + type_str;
+    }
+
+    return type_str;
   }
 
   /* This is a quick and dirty helper to get the RTTI for a given QualType. We need

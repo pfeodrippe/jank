@@ -105,7 +105,7 @@ namespace jank::perf
     /* Phase 2: Parsing */
     auto const parse_start{ high_resolution_clock::now() };
     read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
-    object_ref parsed_form{ jank_nil };
+    object_ref parsed_form{ jank_nil() };
     for(auto const &form : p_prc)
     {
       parsed_form = form.expect_ok().unwrap().ptr;
@@ -364,8 +364,8 @@ namespace jank::perf
       auto const arg_1{ make_box(1) };
       auto const arg_2{ make_box(2) };
       auto const arg_5{ make_box(5) };
-      auto const vec_123{ __rt_ctx->eval_string("[1 2 3]") };
-      auto const map_ab{ __rt_ctx->eval_string("{:a 1 :b 2}") };
+      auto const vec_123{ __rt_ctx->eval_string("[1 2 3]").unwrap() };
+      auto const map_ab{ __rt_ctx->eval_string("{:a 1 :b 2}").unwrap() };
       auto const kw_a{ __rt_ctx->intern_keyword("a").expect_ok() };
       auto const kw_c{ __rt_ctx->intern_keyword("c").expect_ok() };
       auto const arg_3{ make_box(3) };
@@ -529,7 +529,7 @@ namespace jank::perf
         /* Phase 1-3: Lex, Parse, Analyze (same as before) */
         read::lex::processor l_prc{ code, 1, 1 };
         read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
-        object_ref parsed_form{ jank_nil };
+        object_ref parsed_form{ jank_nil() };
         for(auto const &form : p_prc)
         {
           parsed_form = form.expect_ok().unwrap().ptr;
