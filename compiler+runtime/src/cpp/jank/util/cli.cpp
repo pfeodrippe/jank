@@ -19,9 +19,9 @@ namespace jank::util::cli
   {
     if(*it == long_flag)
     {
-      ++it;
       if(needs_value)
       {
+        ++it;
         if(it == end)
         {
           throw util::format("The '{}' flag requires an argument, but one was not provided.",
@@ -339,6 +339,10 @@ RUN-MAIN SPECIFIC OPTIONS
         {
           pending_flags["--ios-resource-dir"] = value;
         }
+        else if(check_flag(it, end, value, "--list-modules", false))
+        {
+          pending_flags["--list-modules"] = "";
+        }
         else if(command.empty())
         {
           command = *it;
@@ -427,6 +431,10 @@ RUN-MAIN SPECIFIC OPTIONS
         if(check_pending_flag("--runtime", value, pending_flags))
         {
           opts.target_file = value;
+        }
+        if(check_pending_flag("--list-modules", value, pending_flags))
+        {
+          opts.list_modules = true;
         }
 
         if(command == "compile" && opts.output_target == compilation_target::unspecified)

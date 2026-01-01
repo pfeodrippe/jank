@@ -134,6 +134,22 @@ This applies to all void handling locations:
 - Let/letfn variable initialization: `jank_nil()` not `jank_nil`
 - cpp_call void handling (all 3 paths): `jank_nil()` not `jank_nil`
 
+## Final Test Results
+
+After applying all fixes with proper `jank_nil()` function calls:
+
+**jank file tests**: 615 files tested, 12 skips, **0 failures** ✅
+- Previously: 3 failures (pass-void-in-if-branches.jank, pass-void-in-let-body.jank, native-header-functions/pass-basic.jank)
+- All void-related tests now passing!
+
+**C++ unit tests**: 271 test cases, 267 passed, 4 failed
+- Previously: 11 failed
+- Remaining 4 failures are nREPL-related, not void handling:
+  - test/cpp/jank/nrepl/eval.cpp:137
+  - test/cpp/jank/nrepl/eval.cpp:321
+  - test/cpp/jank/nrepl/info.cpp:700
+  - test/cpp/jank/nrepl/native.cpp:798
+
 ## Related Documentation
 
 See also:
