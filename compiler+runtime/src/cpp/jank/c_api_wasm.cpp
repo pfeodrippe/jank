@@ -52,7 +52,7 @@ extern "C"
   jank_object_ref jank_eval(jank_object_ref const s)
   {
     auto const s_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(s)));
-    return __rt_ctx->eval_string(s_obj->data).erase().data;
+    return __rt_ctx->eval_string(s_obj->data).unwrap_or(jank_nil()).erase().data;
   }
 
   jank_object_ref jank_read_string(jank_object_ref const s)
@@ -70,7 +70,7 @@ extern "C"
    * This is useful for WASM where we want to see the result printed. */
   char const *jank_eval_string_c(char const * const s)
   {
-    auto const result = __rt_ctx->eval_string(s);
+    auto const result = __rt_ctx->eval_string(s).unwrap_or(jank_nil());
     static thread_local jtl::immutable_string result_str;
     result_str = runtime::to_code_string(result);
     return result_str.c_str();
@@ -129,7 +129,8 @@ extern "C"
   jank_object_ref jank_call1(jank_object_ref const f, jank_object_ref const a1)
   {
     return runtime::dynamic_call(reinterpret_cast<object *>(f), reinterpret_cast<object *>(a1))
-      .erase().data;
+      .erase()
+      .data;
   }
 
   jank_object_ref
@@ -138,7 +139,8 @@ extern "C"
     return runtime::dynamic_call(reinterpret_cast<object *>(f),
                                  reinterpret_cast<object *>(a1),
                                  reinterpret_cast<object *>(a2))
-      .erase().data;
+      .erase()
+      .data;
   }
 
   jank_object_ref jank_call3(jank_object_ref const f,
@@ -150,7 +152,8 @@ extern "C"
                                  reinterpret_cast<object *>(a1),
                                  reinterpret_cast<object *>(a2),
                                  reinterpret_cast<object *>(a3))
-      .erase().data;
+      .erase()
+      .data;
   }
 
   jank_object_ref jank_call4(jank_object_ref const f,
@@ -164,7 +167,8 @@ extern "C"
                                  reinterpret_cast<object *>(a2),
                                  reinterpret_cast<object *>(a3),
                                  reinterpret_cast<object *>(a4))
-      .erase().data;
+      .erase()
+      .data;
   }
 
   jank_object_ref jank_call5(jank_object_ref const f,
@@ -180,7 +184,8 @@ extern "C"
                                  reinterpret_cast<object *>(a3),
                                  reinterpret_cast<object *>(a4),
                                  reinterpret_cast<object *>(a5))
-      .erase().data;
+      .erase()
+      .data;
   }
 
   jank_object_ref jank_call6(jank_object_ref const f,
@@ -198,7 +203,8 @@ extern "C"
                                  reinterpret_cast<object *>(a4),
                                  reinterpret_cast<object *>(a5),
                                  reinterpret_cast<object *>(a6))
-      .erase().data;
+      .erase()
+      .data;
   }
 
   jank_object_ref jank_integer_create(jank_i64 const i)
@@ -284,7 +290,8 @@ extern "C"
     auto const pv = v.persistent();
     return make_box<obj::persistent_list>(
              runtime::detail::native_persistent_list{ pv.begin(), pv.end() })
-      .erase().data;
+      .erase()
+      .data;
   }
 
   jank_object_ref jank_vector_create(jank_u64 const size, ...)
@@ -493,12 +500,12 @@ extern "C"
 
   jank_object_ref jank_const_true()
   {
-    return jank_true().erase().data;
+    return jank_true.erase().data;
   }
 
   jank_object_ref jank_const_false()
   {
-    return jank_false().erase().data;
+    return jank_false.erase().data;
   }
 
   jank_bool jank_truthy(jank_object_ref const o)
@@ -519,7 +526,8 @@ extern "C"
         invoke(callback, context, reinterpret_cast<jank_object_ref const *>(args), size));
     };
     return make_box<obj::native_function_wrapper>(obj::detail::function_type{ std::move(fn) })
-      .erase().data;
+      .erase()
+      .data;
   }
 
   void *jank_native_function_wrapper_get_pointer(jank_object_ref const /* o */)
@@ -530,9 +538,9 @@ extern "C"
 
   void jank_throw(jank_object_ref const o)
   {
-    util::println("jank_throw called with object: {}",
-                  runtime::to_code_string(reinterpret_cast<object *>(o)));
-    throw runtime::object_ref{ reinterpret_cast<object *>(o) };
+    auto const obj_ref = runtime::object_ref{ reinterpret_cast<object *>(o) };
+    util::println("jank_throw called with object: {}", runtime::to_code_string(obj_ref));
+    throw obj_ref;
   }
 
   void jank_profile_enter(char const * const label)

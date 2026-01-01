@@ -335,20 +335,23 @@ namespace jank::runtime
           return dynamic_call(fn,
                               object_ref{ reinterpret_cast<object *>(args[0]) },
                               object_ref{ reinterpret_cast<object *>(args[1]) })
-            .erase().data;
+            .erase()
+            .data;
         case 3:
           return dynamic_call(fn,
                               object_ref{ reinterpret_cast<object *>(args[0]) },
                               object_ref{ reinterpret_cast<object *>(args[1]) },
                               object_ref{ reinterpret_cast<object *>(args[2]) })
-            .erase().data;
+            .erase()
+            .data;
         case 4:
           return dynamic_call(fn,
                               object_ref{ reinterpret_cast<object *>(args[0]) },
                               object_ref{ reinterpret_cast<object *>(args[1]) },
                               object_ref{ reinterpret_cast<object *>(args[2]) },
                               object_ref{ reinterpret_cast<object *>(args[3]) })
-            .erase().data;
+            .erase()
+            .data;
         case 5:
           return dynamic_call(fn,
                               object_ref{ reinterpret_cast<object *>(args[0]) },
@@ -356,7 +359,8 @@ namespace jank::runtime
                               object_ref{ reinterpret_cast<object *>(args[2]) },
                               object_ref{ reinterpret_cast<object *>(args[3]) },
                               object_ref{ reinterpret_cast<object *>(args[4]) })
-            .erase().data;
+            .erase()
+            .data;
         default:
           util::println("[hot-reload] ERROR: jank_call_var only supports up to 5 args, got {}",
                         argc);

@@ -600,7 +600,7 @@ extern "C"
       auto const wrapper                                                                       \
         = make_box<obj::native_function_wrapper>(obj::detail::function_type{ std::move(fn) }); \
       wrapper->native_callback_ptr = callback_ptr;                                             \
-      return wrapper.erase().data;                                                              \
+      return wrapper.erase().data;                                                             \
     }
 
   jank_object_ref jank_native_function_wrapper_create(void * const callback_ptr,

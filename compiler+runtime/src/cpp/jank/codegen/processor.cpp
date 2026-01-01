@@ -2210,7 +2210,7 @@ namespace jank::codegen
     {
       /* For void-returning functions, call the function first, then set return temp to nil. */
       util::format_to(body_buffer,
-                      ");jank::runtime::object_ref const {}{ jank::runtime::jank_nil };",
+                      ");jank::runtime::object_ref const {}{ jank::runtime::jank_nil() };",
                       ret_tmp);
     }
 
@@ -2262,13 +2262,15 @@ namespace jank::codegen
         auto const lit{ static_cast<analyze::expr::primitive_literal *>(arg_expr.data) };
         if(lit->data->type == runtime::object_type::integer)
         {
-          arg_tmp = handle{ util::format("jank::runtime::expect_object<jank::runtime::obj::integer>({})->data",
-                                         arg_tmp.str(false)) };
+          arg_tmp = handle{ util::format(
+            "jank::runtime::expect_object<jank::runtime::obj::integer>({})->data",
+            arg_tmp.str(false)) };
         }
         else if(lit->data->type == runtime::object_type::real)
         {
-          arg_tmp = handle{ util::format("jank::runtime::expect_object<jank::runtime::obj::real>({})->data",
-                                         arg_tmp.str(false)) };
+          arg_tmp = handle{ util::format(
+            "jank::runtime::expect_object<jank::runtime::obj::real>({})->data",
+            arg_tmp.str(false)) };
         }
       }
 

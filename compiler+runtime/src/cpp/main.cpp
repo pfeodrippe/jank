@@ -78,7 +78,8 @@ namespace jank
         context::binding_scope const compile_scope{ obj::persistent_hash_map::create_unique(
           std::make_pair(__rt_ctx->compile_files_var, jank_true),
           std::make_pair(__rt_ctx->current_module_var, make_box(module_name))) };
-        util::println("{}", to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file).unwrap()));
+        util::println("{}",
+                      to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file).unwrap()));
 
         /* For WASM AOT, generate export wrappers for vars with ^:export metadata */
         if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot

@@ -209,8 +209,8 @@ namespace jank::runtime
   }
 
   jtl::option<object_ref> context::eval_string(jtl::immutable_string const &code,
-                                                usize const start_line,
-                                                usize const start_col)
+                                               usize const start_line,
+                                               usize const start_col)
   {
     profile::timer const timer{ "rt eval_string" };
 
@@ -239,7 +239,7 @@ namespace jank::runtime
       if(response.object_data.empty())
       {
         /* No object generated - might be a no-op form */
-        return jank_nil;
+        return jank_nil();
       }
 
       /* Load the object file into the JIT */
@@ -395,7 +395,8 @@ namespace jank::runtime
           }
         }
 
-        write_module(cg_prc.get_module_name(), "", cg_prc.get_module().getModuleUnlocked()).expect_ok();
+        write_module(cg_prc.get_module_name(), "", cg_prc.get_module().getModuleUnlocked())
+          .expect_ok();
       }
       else
       {
@@ -760,7 +761,6 @@ namespace jank::runtime
       ? util::format("{}/{}.{}", binary_cache_dir, module::module_to_path(module_name), ext)
       : jtl::immutable_string{ util::cli::opts.output_module_filename };
   }
-
 
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
                                                  jtl::immutable_string const &cpp_code,

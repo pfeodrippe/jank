@@ -645,9 +645,7 @@ namespace jank::compile_server
         }
 
         auto const fn_expr
-          = evaluate::wrap_expressions(exprs,
-                                       an_prc,
-                                       runtime::__rt_ctx->unique_string("repl_fn"));
+          = evaluate::wrap_expressions(exprs, an_prc, runtime::__rt_ctx->unique_string("repl_fn"));
 
         // Step 6: Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::eval };
@@ -1061,9 +1059,7 @@ namespace jank::compile_server
 
         // Wrap expressions in a function for codegen
         auto const fn_expr
-          = evaluate::wrap_expressions(exprs,
-                                       an_prc,
-                                       runtime::__rt_ctx->unique_string("ns_load"));
+          = evaluate::wrap_expressions(exprs, an_prc, runtime::__rt_ctx->unique_string("ns_load"));
 
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
@@ -1557,9 +1553,7 @@ namespace jank::compile_server
 
         // Wrap expressions in a function for codegen
         auto const fn_expr
-          = evaluate::wrap_expressions(exprs,
-                                       an_prc,
-                                       runtime::__rt_ctx->unique_string("ns_load"));
+          = evaluate::wrap_expressions(exprs, an_prc, runtime::__rt_ctx->unique_string("ns_load"));
 
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };

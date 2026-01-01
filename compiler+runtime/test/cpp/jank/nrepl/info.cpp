@@ -709,9 +709,9 @@ namespace jank::nrepl_server::asio
         /* Should contain "Args" or the actual parameter pack type */
         bool const has_args_param = arglists_str.find("Args") != std::string::npos
           || arglists_str.find("args") != std::string::npos;
-        CHECK_MESSAGE(
-          has_args_param,
-          "arglists should contain template parameter name 'Args' or 'args', got: " << arglists_str);
+        CHECK_MESSAGE(has_args_param,
+                      "arglists should contain template parameter name 'Args' or 'args', got: "
+                        << arglists_str);
       }
 
       /* Also check return type is not "auto" (if available) */
@@ -799,8 +799,9 @@ namespace jank::nrepl_server::asio
                       "arglists should not contain 'auto', got: " << arglists_str);
 
         /* Should contain the const char* type */
-        CHECK_MESSAGE(arglists_str.find("char") != std::string::npos,
-                      "arglists should contain 'char' for const char* param, got: " << arglists_str);
+        CHECK_MESSAGE(
+          arglists_str.find("char") != std::string::npos,
+          "arglists should contain 'char' for const char* param, got: " << arglists_str);
 
         /* Should contain "T" for the template parameter */
         CHECK_MESSAGE(arglists_str.find("T ") != std::string::npos,

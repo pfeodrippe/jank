@@ -52,7 +52,9 @@ namespace clojure::core_native
                                         object_ref const alias,
                                         object_ref const local_sym,
                                         object_ref const member_sym);
-  object_ref native_header_functions(object_ref const current_ns, object_ref const alias, object_ref const prefix);
+  object_ref native_header_functions(object_ref const current_ns,
+                                     object_ref const alias,
+                                     object_ref const prefix);
 
   object_ref not_(object_ref const o);
 

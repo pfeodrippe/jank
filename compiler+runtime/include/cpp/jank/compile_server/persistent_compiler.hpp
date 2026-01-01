@@ -426,8 +426,11 @@ namespace jank::compile_server
       }
 
       llvm::TargetOptions target_opts;
-      target_machine_.reset(
-        target->createTargetMachine(llvm::Triple(target_triple), "generic", "", target_opts, llvm::Reloc::PIC_));
+      target_machine_.reset(target->createTargetMachine(llvm::Triple(target_triple),
+                                                        "generic",
+                                                        "",
+                                                        target_opts,
+                                                        llvm::Reloc::PIC_));
 
       if(!target_machine_)
       {

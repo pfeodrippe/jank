@@ -8,6 +8,6 @@ namespace jank::runtime::perf
   object_ref benchmark(object_ref const /* opts */, object_ref const /* f */)
   {
     // Benchmarking is not supported in WASM - just return nil
-    return jank_nil;
+    return jank_nil();
   }
 }
