@@ -36,7 +36,7 @@ namespace jank::compile_server
     bool success{ false };
     runtime::object_ref value{ runtime::jank_nil };
     std::string error;
-    std::string error_type;  // "connection", "compile", "load", "runtime"
+    std::string error_type; // "connection", "compile", "load", "runtime"
   };
 
   class remote_eval
@@ -116,7 +116,7 @@ namespace jank::compile_server
         }
 
         // The entry symbol is a function pointer: object_ref (*)()
-        using entry_fn_t = runtime::object_ref(*)();
+        using entry_fn_t = runtime::object_ref (*)();
         auto entry_fn = reinterpret_cast<entry_fn_t>(symbol_result.expect_ok());
 
         // Call the entry function
@@ -177,10 +177,9 @@ namespace jank::compile_server
         auto &jit_prc = runtime::__rt_ctx->jit_prc;
 
         // Use the processor's load_object method
-        bool result = jit_prc.load_object(
-          reinterpret_cast<char const *>(object_data.data()),
-          object_data.size(),
-          name);
+        bool result = jit_prc.load_object(reinterpret_cast<char const *>(object_data.data()),
+                                          object_data.size(),
+                                          name);
 
         if(result)
         {
@@ -209,8 +208,8 @@ namespace jank::compile_server
   }
 
   // Initialize remote eval with compile server address
-  inline void init_remote_eval(std::string const &host = "127.0.0.1",
-                               uint16_t port = default_compile_port)
+  inline void
+  init_remote_eval(std::string const &host = "127.0.0.1", uint16_t port = default_compile_port)
   {
     auto &ptr = get_remote_eval_ptr();
     ptr = std::make_unique<remote_eval>(host, port);

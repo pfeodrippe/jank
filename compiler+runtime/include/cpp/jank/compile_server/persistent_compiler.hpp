@@ -54,7 +54,7 @@
 
 namespace jank::compile_server
 {
-  struct ios_compile_config;  // Forward declaration
+  struct ios_compile_config; // Forward declaration
 
   struct compile_result
   {
@@ -123,8 +123,10 @@ namespace jank::compile_server
 
       auto setup_start = std::chrono::high_resolution_clock::now();
       // Create temp files for input/output
-      std::string const input_file = "/tmp/jank_persistent_" + std::to_string(compile_count_) + ".cpp";
-      std::string const output_file = "/tmp/jank_persistent_" + std::to_string(compile_count_) + ".o";
+      std::string const input_file
+        = "/tmp/jank_persistent_" + std::to_string(compile_count_) + ".cpp";
+      std::string const output_file
+        = "/tmp/jank_persistent_" + std::to_string(compile_count_) + ".o";
 
       // Write the C++ code to input file
       {
@@ -191,8 +193,7 @@ namespace jank::compile_server
       driver.setCheckInputsExist(false);
 
       // Create the Compilation
-      std::unique_ptr<clang::driver::Compilation> compilation(
-        driver.BuildCompilation(driver_args));
+      std::unique_ptr<clang::driver::Compilation> compilation(driver.BuildCompilation(driver_args));
 
       if(!compilation)
       {
@@ -249,7 +250,7 @@ namespace jank::compile_server
         return { false, {}, "Failed to read output file: " + output_file };
       }
       std::vector<uint8_t> result((std::istreambuf_iterator<char>(ifs)),
-                                   std::istreambuf_iterator<char>());
+                                  std::istreambuf_iterator<char>());
 
       // Clean up temp files
       std::remove(input_file.c_str());
@@ -257,13 +258,17 @@ namespace jank::compile_server
 
       auto total_end = std::chrono::high_resolution_clock::now();
 
-      auto setup_ms = std::chrono::duration_cast<std::chrono::milliseconds>(setup_end - setup_start).count();
-      auto compile_ms = std::chrono::duration_cast<std::chrono::milliseconds>(compile_end - compile_start).count();
-      auto total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
+      auto setup_ms
+        = std::chrono::duration_cast<std::chrono::milliseconds>(setup_end - setup_start).count();
+      auto compile_ms
+        = std::chrono::duration_cast<std::chrono::milliseconds>(compile_end - compile_start)
+            .count();
+      auto total_ms
+        = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
 
-      std::cout << "[persistent-compiler] Compiled " << module_name
-                << " (" << result.size() << " bytes) - setup: " << setup_ms
-                << "ms, compile: " << compile_ms << "ms, total: " << total_ms << "ms" << std::endl;
+      std::cout << "[persistent-compiler] Compiled " << module_name << " (" << result.size()
+                << " bytes) - setup: " << setup_ms << "ms, compile: " << compile_ms
+                << "ms, total: " << total_ms << "ms" << std::endl;
 
       return { true, std::move(result), "" };
     }
@@ -431,8 +436,8 @@ namespace jank::compile_server
       }
 
       auto init_end = std::chrono::high_resolution_clock::now();
-      auto init_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(init_end - init_start).count();
+      auto init_ms
+        = std::chrono::duration_cast<std::chrono::milliseconds>(init_end - init_start).count();
 
       initialized_ = true;
       std::cout << "[incremental-compiler] Initialized for " << target_triple << " in " << init_ms
@@ -534,12 +539,12 @@ namespace jank::compile_server
 
       auto total_end = std::chrono::high_resolution_clock::now();
 
-      auto parse_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(parse_end - parse_start).count();
-      auto emit_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(emit_end - emit_start).count();
-      auto total_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
+      auto parse_ms
+        = std::chrono::duration_cast<std::chrono::milliseconds>(parse_end - parse_start).count();
+      auto emit_ms
+        = std::chrono::duration_cast<std::chrono::milliseconds>(emit_end - emit_start).count();
+      auto total_ms
+        = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
 
       std::cout << "[incremental-compiler] Compiled " << module_name << " (" << result.size()
                 << " bytes) - parse: " << parse_ms << "ms, emit: " << emit_ms

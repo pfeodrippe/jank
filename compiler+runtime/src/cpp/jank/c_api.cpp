@@ -29,8 +29,8 @@
 /* For iOS JIT, native modules are statically linked but need to be
  * explicitly referenced to prevent dead code elimination. */
 #ifdef JANK_IOS_JIT
-#include <jank/ios/eval_server.hpp>
-#include <jank/compile_server/remote_compile.hpp>
+  #include <jank/ios/eval_server.hpp>
+  #include <jank/compile_server/remote_compile.hpp>
 
 extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
 extern "C" jank_object_ref jank_load_clojure_core_native();
@@ -39,8 +39,7 @@ extern "C" jank_object_ref jank_load_jank_debug_allocator_native();
 
 /* Force linker to include native modules. This function MUST be called
  * at init time to ensure the linker includes these symbols from the static library. */
-__attribute__((visibility("default")))
-extern "C" void jank_ios_register_native_modules()
+__attribute__((visibility("default"))) extern "C" void jank_ios_register_native_modules()
 {
   /* These calls load the native modules and register their namespaces/functions.
    * After loading, we must call jank_module_set_loaded to mark them as available

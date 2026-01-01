@@ -14,8 +14,8 @@
 
 #ifndef __EMSCRIPTEN__
 
-#include <boost/asio.hpp>
-#include <sys/socket.h>
+  #include <boost/asio.hpp>
+  #include <sys/socket.h>
 
 namespace jank::ios
 {
@@ -148,7 +148,8 @@ namespace jank::ios
         std::istream is(&buf);
         std::getline(is, response);
 
-        std::cout << "[ios-client] Got response: " << response.substr(0, 100) << (response.size() > 100 ? "..." : "") << std::endl;
+        std::cout << "[ios-client] Got response: " << response.substr(0, 100)
+                  << (response.size() > 100 ? "..." : "") << std::endl;
 
         if(response.empty())
         {

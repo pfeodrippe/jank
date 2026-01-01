@@ -43,23 +43,23 @@ extern "C" void GC_allow_register_threads(void); // Must be called before GC_reg
 extern "C" int GC_register_my_thread(const struct GC_stack_base *);
 extern "C" int GC_unregister_my_thread(void);
 #ifndef GC_SUCCESS
-#define GC_SUCCESS 0
+  #define GC_SUCCESS 0
 #endif
 
 #ifdef __APPLE__
-#include <TargetConditionals.h>
+  #include <TargetConditionals.h>
 #endif
 
 // Only include on non-WASM platforms
 #if !defined(__EMSCRIPTEN__)
 
-#include <jank/runtime/context.hpp>
-#include <jank/runtime/core/to_string.hpp>
-#include <jank/error.hpp>
-#include <jank/read/source.hpp>
+  #include <jank/runtime/context.hpp>
+  #include <jank/runtime/core/to_string.hpp>
+  #include <jank/error.hpp>
+  #include <jank/read/source.hpp>
 
-// Remote compilation support
-#include <jank/compile_server/remote_eval.hpp>
+  // Remote compilation support
+  #include <jank/compile_server/remote_eval.hpp>
 
 namespace jank::ios
 {
@@ -203,11 +203,13 @@ namespace jank::ios
     }
 
     // Enable remote compilation to macOS
-    void enable_remote_compile(std::string const &compile_host, uint16_t compile_port = compile_server::default_compile_port)
+    void enable_remote_compile(std::string const &compile_host,
+                               uint16_t compile_port = compile_server::default_compile_port)
     {
       compile_server::init_remote_eval(compile_host, compile_port);
       use_remote_compile_ = true;
-      std::cout << "[ios-eval] Remote compilation enabled: " << compile_host << ":" << compile_port << std::endl;
+      std::cout << "[ios-eval] Remote compilation enabled: " << compile_host << ":" << compile_port
+                << std::endl;
     }
 
     void disable_remote_compile()
@@ -243,8 +245,7 @@ namespace jank::ios
       pthread_attr_init(&attr);
       pthread_attr_setstacksize(&attr, 8 * 1024 * 1024); // 8MB stack
 
-      auto thread_func = [](void *arg) -> void *
-      {
+      auto thread_func = [](void *arg) -> void * {
         auto *self = static_cast<eval_server *>(arg);
         self->run_server();
         return nullptr;
@@ -329,9 +330,7 @@ namespace jank::ios
       setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
       // Bind to port
-      struct sockaddr_in addr
-      {
-      };
+      struct sockaddr_in addr{};
       addr.sin_family = AF_INET;
       addr.sin_addr.s_addr = INADDR_ANY;
       addr.sin_port = htons(port_);
@@ -362,12 +361,11 @@ namespace jank::ios
       // Accept loop
       while(running_)
       {
-        struct sockaddr_in client_addr
-        {
-        };
+        struct sockaddr_in client_addr{};
         socklen_t client_len = sizeof(client_addr);
 
-        int client_fd = accept(server_fd_, reinterpret_cast<struct sockaddr *>(&client_addr), &client_len);
+        int client_fd
+          = accept(server_fd_, reinterpret_cast<struct sockaddr *>(&client_addr), &client_len);
         if(client_fd < 0)
         {
           if(running_)
@@ -400,7 +398,8 @@ namespace jank::ios
     void handle_connection(int client_fd)
     {
       // Send welcome message
-      std::string welcome = R"({"op":"welcome","runtime":"jank-ios","version":"0.1"})" "\n";
+      std::string welcome = R"({"op":"welcome","runtime":"jank-ios","version":"0.1"})"
+                            "\n";
       send(client_fd, welcome.c_str(), welcome.size(), 0);
 
       std::string buffer;
@@ -449,7 +448,7 @@ namespace jank::ios
         }
       }
 
-    connection_end:
+connection_end:
       ::close(client_fd);
       std::cout << "[ios-eval] Client disconnected." << std::endl;
     }
@@ -494,9 +493,7 @@ namespace jank::ios
       static thread_local sigjmp_buf jmp_buf;
       static thread_local volatile sig_atomic_t signal_received = 0;
 
-      struct sigaction sa_new
-      {
-      }, sa_old_segv{}, sa_old_bus{}, sa_old_abrt{};
+      struct sigaction sa_new{}, sa_old_segv{}, sa_old_bus{}, sa_old_abrt{};
       sa_new.sa_handler = [](int sig) {
         signal_received = sig;
         siglongjmp(jmp_buf, sig);
@@ -644,8 +641,8 @@ namespace jank::ios
         }
         catch(std::string const &e)
         {
-          result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")"
-            + json::escape(e) + R"(","type":"runtime"})";
+          result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")" + json::escape(e)
+            + R"(","type":"runtime"})";
         }
         catch(...)
         {
@@ -671,8 +668,8 @@ namespace jank::ios
           default:
             sig_name = "signal " + std::to_string(signal_received);
         }
-        result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":"Crashed: )"
-          + sig_name + R"(","type":"crash"})";
+        result = R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":"Crashed: )" + sig_name
+          + R"(","type":"crash"})";
       }
 
       // Restore signal handlers
@@ -717,10 +714,10 @@ namespace jank::ios
   }
 
   // Start eval server with remote compilation enabled
-  inline void start_eval_server_with_remote_compile(
-    uint16_t eval_port,
-    std::string const &compile_host,
-    uint16_t compile_port = compile_server::default_compile_port)
+  inline void start_eval_server_with_remote_compile(uint16_t eval_port,
+                                                    std::string const &compile_host,
+                                                    uint16_t compile_port
+                                                    = compile_server::default_compile_port)
   {
     auto &server_ptr = get_eval_server_ptr();
     if(!server_ptr || !server_ptr->is_running())

@@ -244,10 +244,10 @@ namespace jank::runtime
       /* Load the object file into the JIT */
       {
         profile::timer const load_timer{ "rt eval_string:remote:load" };
-        auto load_result = jit_prc.load_object(
-          reinterpret_cast<char const *>(response.object_data.data()),
-          response.object_data.size(),
-          response.entry_symbol);
+        auto load_result
+          = jit_prc.load_object(reinterpret_cast<char const *>(response.object_data.data()),
+                                response.object_data.size(),
+                                response.entry_symbol);
 
         if(!load_result)
         {
@@ -674,7 +674,7 @@ namespace jank::runtime
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
   object_ref context::eval(object_ref const o)
   {
-#ifdef JANK_IOS_JIT
+  #ifdef JANK_IOS_JIT
     /* On iOS JIT mode with remote compilation enabled, delegate to eval_string
      * which handles the compile server communication. This is necessary because
      * local analysis can't resolve C++ interop symbols (headers aren't loaded
@@ -687,7 +687,7 @@ namespace jank::runtime
       auto const code = runtime::to_code_string(o);
       return eval_string(code);
     }
-#endif
+  #endif
 
     auto const expr(
       analyze::pass::optimize(an_prc.analyze(o, analyze::expression_position::value).expect_ok()));

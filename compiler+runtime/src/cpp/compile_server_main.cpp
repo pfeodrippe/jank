@@ -41,12 +41,12 @@ namespace
 
   // Command line options for compile server (parsed manually before jank_init)
   uint16_t g_port = jank::compile_server::default_compile_port;
-  std::string g_target;  // Required - must be "sim" or "device"
+  std::string g_target; // Required - must be "sim" or "device"
   std::string g_clang_path;
-  std::string g_module_path;  // Path to jank source files
-  std::vector<std::string> g_include_paths;  // Additional include paths for app headers
-  std::vector<std::string> g_defines;  // Preprocessor defines for app code
-  std::vector<std::string> g_jit_libs;  // Libraries to load into JIT for symbol resolution
+  std::string g_module_path; // Path to jank source files
+  std::vector<std::string> g_include_paths; // Additional include paths for app headers
+  std::vector<std::string> g_defines; // Preprocessor defines for app code
+  std::vector<std::string> g_jit_libs; // Libraries to load into JIT for symbol resolution
 }
 
 int compile_server_main(int const /* argc */, char const ** /* argv */)
@@ -227,5 +227,8 @@ int main(int argc, char **argv)
   }
 
   // Use jank_init to properly initialize GC, LLVM, and runtime context
-  return jank_init(argc, const_cast<char const **>(argv), /*init_default_ctx=*/true, compile_server_main);
+  return jank_init(argc,
+                   const_cast<char const **>(argv),
+                   /*init_default_ctx=*/true,
+                   compile_server_main);
 }

@@ -268,11 +268,11 @@ namespace jank::jit
       auto &ol{ ee->getObjLinkingLayer() };
       auto &oll{ llvm::cast<llvm::orc::ObjectLinkingLayer>(ol) };
 
-#define add_address_to_map(map, name)                                     \
-  ((map)[es.intern(ee->mangle(#name))]                                    \
-   = { llvm::orc::ExecutorAddr::fromPtr(&(name)),                         \
-       llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable }, \
-   llvm::orc::ExecutorAddr::fromPtr(&(name)))
+  #define add_address_to_map(map, name)                                     \
+    ((map)[es.intern(ee->mangle(#name))]                                    \
+     = { llvm::orc::ExecutorAddr::fromPtr(&(name)),                         \
+         llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable }, \
+     llvm::orc::ExecutorAddr::fromPtr(&(name)))
 
       llvm::orc::SymbolMap perf_fns;
       auto const start_addr{ add_address_to_map(perf_fns, llvm_orc_registerJITLoaderPerfStart) };
@@ -437,10 +437,9 @@ namespace jank::jit
     }
 
     auto const ee{ interpreter->getExecutionEngine() };
-    auto buffer{ llvm::MemoryBuffer::getMemBuffer(
-      llvm::StringRef{ data, size },
-      name,
-      /* RequiresNullTerminator */ false) };
+    auto buffer{ llvm::MemoryBuffer::getMemBuffer(llvm::StringRef{ data, size },
+                                                  name,
+                                                  /* RequiresNullTerminator */ false) };
 
     if(!buffer)
     {

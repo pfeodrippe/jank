@@ -47,18 +47,26 @@ std::string get_json_string(std::string const &json, std::string const &key)
 {
   auto key_pos = json.find("\"" + key + "\"");
   if(key_pos == std::string::npos)
+  {
     return "";
+  }
   auto colon_pos = json.find(':', key_pos);
   if(colon_pos == std::string::npos)
+  {
     return "";
+  }
   auto quote_start = json.find('"', colon_pos);
   if(quote_start == std::string::npos)
+  {
     return "";
+  }
   auto quote_end = quote_start + 1;
   while(quote_end < json.size())
   {
     if(json[quote_end] == '"' && json[quote_end - 1] != '\\')
+    {
       break;
+    }
     quote_end++;
   }
   std::string result;
@@ -157,8 +165,8 @@ int main(int argc, char *argv[])
       }
 
       // Build request
-      std::string request = R"({"op":"eval","id":)" + std::to_string(++request_id)
-        + R"(,"code":")" + escape_json(line) + R"(","ns":"user"})" + "\n";
+      std::string request = R"({"op":"eval","id":)" + std::to_string(++request_id) + R"(,"code":")"
+        + escape_json(line) + R"(","ns":"user"})" + "\n";
 
       // Send
       boost::asio::write(socket, boost::asio::buffer(request));

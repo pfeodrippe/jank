@@ -38,7 +38,7 @@
 #include <clojure/string_native.hpp>
 
 #ifndef JANK_TARGET_IOS
-#include <jank/compile_server/server.hpp>
+  #include <jank/compile_server/server.hpp>
 #endif
 
 #ifdef JANK_PHASE_2
@@ -204,16 +204,16 @@ namespace jank
     std::unique_ptr<compile_server::server> ios_server;
     if(opts.ios_compile_server_port != 0)
     {
-      std::cout << "[ios-compile-server] Starting on port " << opts.ios_compile_server_port
-                << "..." << std::endl;
+      std::cout << "[ios-compile-server] Starting on port " << opts.ios_compile_server_port << "..."
+                << std::endl;
 
       auto const ios_res_dir = opts.ios_resource_dir.empty()
-                               ? util::resource_dir()
-                               : jtl::immutable_string{ opts.ios_resource_dir };
+        ? util::resource_dir()
+        : jtl::immutable_string{ opts.ios_resource_dir };
       auto config = compile_server::make_ios_simulator_config(ios_res_dir);
 
-      ios_server = std::make_unique<compile_server::server>(opts.ios_compile_server_port,
-                                                            std::move(config));
+      ios_server
+        = std::make_unique<compile_server::server>(opts.ios_compile_server_port, std::move(config));
       ios_server->start();
 
       if(ios_server->is_running())

@@ -3292,8 +3292,8 @@ namespace jank::nrepl_server::asio
 }
 
 #ifndef __EMSCRIPTEN__
-// iOS remote eval utility functions (must be before eval.hpp)
-#include <jank/nrepl_server/ios_remote_eval.hpp>
+  // iOS remote eval utility functions (must be before eval.hpp)
+  #include <jank/nrepl_server/ios_remote_eval.hpp>
 #endif
 
 #include <jank/nrepl_server/ops/clone.hpp>
@@ -3319,6 +3319,6 @@ namespace jank::nrepl_server::asio
 #include <jank/nrepl_server/ops/test.hpp>
 #include <jank/nrepl_server/ops/test_var_query.hpp>
 #ifndef __EMSCRIPTEN__
-#include <jank/nrepl_server/ops/ios_eval.hpp>
-#include <jank/nrepl_server/ops/remote_compile.hpp>
+  #include <jank/nrepl_server/ops/ios_eval.hpp>
+  #include <jank/nrepl_server/ops/remote_compile.hpp>
 #endif

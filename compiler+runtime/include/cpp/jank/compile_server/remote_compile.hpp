@@ -84,7 +84,7 @@ namespace jank::compile_server
   }
 
   // Get the client for remote compilation (assumes lock is held or single-threaded context)
-  inline client* get_remote_client()
+  inline client *get_remote_client()
   {
     return remote_client.get();
   }
@@ -123,7 +123,8 @@ namespace jank::compile_server
 
   // Generate native C++ source remotely (for jank.compiler-native/native-source)
   // Sends form to compile server which has C++ headers loaded
-  inline native_source_response remote_native_source(std::string const &code, std::string const &ns = "user")
+  inline native_source_response
+  remote_native_source(std::string const &code, std::string const &ns = "user")
   {
     std::lock_guard<std::mutex> lock(remote_config_mutex);
     if(!remote_client)

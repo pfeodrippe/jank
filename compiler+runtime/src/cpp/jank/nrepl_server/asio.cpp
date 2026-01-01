@@ -595,8 +595,8 @@ namespace jank::nrepl_server::asio
 /* The 'used' and 'visibility' attributes prevent the linker from stripping
  * this symbol during dead code elimination. This is needed for iOS JIT where
  * native modules are looked up via dlsym at runtime. */
-extern "C" __attribute__((used, visibility("default")))
-jank_object_ref jank_load_jank_nrepl_server_asio()
+extern "C" __attribute__((used, visibility("default"))) jank_object_ref
+jank_load_jank_nrepl_server_asio()
 {
   jank::nrepl_server::asio::__ns loader;
   return loader.call().erase();
@@ -606,8 +606,8 @@ jank_object_ref jank_load_jank_nrepl_server_asio()
  * Returns a server handle that can be used to stop the server,
  * or nullptr if the server failed to start.
  * This is a C API wrapper for iOS to start the full nREPL server. */
-extern "C" __attribute__((used, visibility("default")))
-jank_object_ref jank_nrepl_start_server(int port, char const *bind_address)
+extern "C" __attribute__((used, visibility("default"))) jank_object_ref
+jank_nrepl_start_server(int port, char const *bind_address)
 {
   using namespace jank;
   using namespace jank::runtime;
@@ -667,8 +667,8 @@ jank_object_ref jank_nrepl_start_server(int port, char const *bind_address)
 }
 
 /* Stop the nREPL server given the server handle from jank_nrepl_start_server. */
-extern "C" __attribute__((used, visibility("default")))
-void jank_nrepl_stop_server(jank_object_ref server_handle)
+extern "C" __attribute__((used, visibility("default"))) void
+jank_nrepl_stop_server(jank_object_ref server_handle)
 {
   if(server_handle)
   {

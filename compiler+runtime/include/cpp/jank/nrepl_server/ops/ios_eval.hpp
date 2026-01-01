@@ -54,7 +54,8 @@ namespace jank::nrepl_server::asio
     else
     {
       response.emplace("status", bencode::list_of_strings({ "error", "done" }));
-      response.emplace("err", "Failed to connect to iOS device at " + host + ":" + std::to_string(port));
+      response.emplace("err",
+                       "Failed to connect to iOS device at " + host + ":" + std::to_string(port));
     }
 
     if(!msg.id().empty())

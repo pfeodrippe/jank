@@ -48,9 +48,9 @@ namespace jank::compile_server
   struct compile_request
   {
     int64_t id{ 0 };
-    std::string code;         // jank source code
-    std::string ns;           // namespace context
-    std::string module;       // module name for generated code
+    std::string code; // jank source code
+    std::string ns; // namespace context
+    std::string module; // module name for generated code
   };
 
   // Compile response from macOS to iOS
@@ -60,28 +60,28 @@ namespace jank::compile_server
     bool success{ false };
 
     // On success:
-    std::vector<uint8_t> object_data;  // ARM64 object file bytes
-    std::string entry_symbol;           // Symbol to call after loading
+    std::vector<uint8_t> object_data; // ARM64 object file bytes
+    std::string entry_symbol; // Symbol to call after loading
 
     // On error:
     std::string error;
-    std::string error_type;  // "compile", "codegen", "cross-compile"
+    std::string error_type; // "compile", "codegen", "cross-compile"
   };
 
   // Require request from iOS to macOS (load a namespace)
   struct require_request
   {
     int64_t id{ 0 };
-    std::string ns;           // namespace to load (e.g., "vybe.sdf.ui")
-    std::string source;       // full source code of the namespace
+    std::string ns; // namespace to load (e.g., "vybe.sdf.ui")
+    std::string source; // full source code of the namespace
   };
 
   // A compiled module (part of require response)
   struct compiled_module
   {
-    std::string name;                   // module name (e.g., "vybe.sdf.ui$loading__")
-    std::string entry_symbol;           // symbol to call after loading
-    std::vector<uint8_t> object_data;   // ARM64 object file bytes
+    std::string name; // module name (e.g., "vybe.sdf.ui$loading__")
+    std::string entry_symbol; // symbol to call after loading
+    std::vector<uint8_t> object_data; // ARM64 object file bytes
   };
 
   // Require response from macOS to iOS
@@ -91,7 +91,7 @@ namespace jank::compile_server
     bool success{ false };
 
     // On success:
-    std::vector<compiled_module> modules;  // compiled modules for this namespace
+    std::vector<compiled_module> modules; // compiled modules for this namespace
 
     // On error:
     std::string error;
@@ -102,7 +102,7 @@ namespace jank::compile_server
   struct need_source_request
   {
     int64_t id{ 0 };
-    std::string ns;  // namespace needed (e.g., "vybe.sdf.shader")
+    std::string ns; // namespace needed (e.g., "vybe.sdf.shader")
   };
 
   // Source response from iOS to macOS
@@ -111,7 +111,7 @@ namespace jank::compile_server
     int64_t id{ 0 };
     std::string ns;
     std::string source;
-    bool found{ true };  // false if source not found
+    bool found{ true }; // false if source not found
   };
 
   // Native-source request - generate C++ source code for a form
@@ -121,7 +121,7 @@ namespace jank::compile_server
     bool success{ false };
 
     // On success:
-    std::string source;  // Generated C++ source code
+    std::string source; // Generated C++ source code
 
     // On error:
     std::string error;

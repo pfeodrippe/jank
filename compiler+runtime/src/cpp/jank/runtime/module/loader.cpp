@@ -1075,7 +1075,7 @@ namespace jank::runtime::module
                                                 "on emscripten; precompile modules on the host.");
 #else
 
-#ifdef JANK_IOS_JIT
+  #ifdef JANK_IOS_JIT
     /* On iOS with JIT, delegate namespace loading to the compile server.
      * This allows the compile server to build up its namespace context
      * so that subsequent eval operations can resolve symbols correctly. */
@@ -1085,17 +1085,16 @@ namespace jank::runtime::module
 
       if(entry.archive_path.is_some())
       {
-        auto const res{ visit_jar_entry(
-          entry,
-          [&](zip_t * const zip) -> jtl::result<void, error_ref> {
-            auto const read_result{ read_zip_entry(zip) };
-            if(read_result.is_err())
-            {
-              return read_result.expect_err();
-            }
-            source = std::string(read_result.expect_ok());
-            return ok();
-          }) };
+        auto const res{ visit_jar_entry(entry,
+                                        [&](zip_t * const zip) -> jtl::result<void, error_ref> {
+                                          auto const read_result{ read_zip_entry(zip) };
+                                          if(read_result.is_err())
+                                          {
+                                            return read_result.expect_err();
+                                          }
+                                          source = std::string(read_result.expect_ok());
+                                          return ok();
+                                        }) };
         if(res.is_err())
         {
           return res;
@@ -1132,7 +1131,7 @@ namespace jank::runtime::module
       {
         if(mod.object_data.empty())
         {
-          continue;  /* Skip empty modules (already loaded) */
+          continue; /* Skip empty modules (already loaded) */
         }
 
         /* Extract clean module name (strip $loading__ suffix) */
@@ -1154,10 +1153,10 @@ namespace jank::runtime::module
         }
 
         /* Load object file into JIT */
-        bool load_success = __rt_ctx->jit_prc.load_object(
-          reinterpret_cast<char const *>(mod.object_data.data()),
-          mod.object_data.size(),
-          mod.entry_symbol);
+        bool load_success
+          = __rt_ctx->jit_prc.load_object(reinterpret_cast<char const *>(mod.object_data.data()),
+                                          mod.object_data.size(),
+                                          mod.entry_symbol);
         if(!load_success)
         {
           return error::runtime_unable_to_load_module(
@@ -1172,7 +1171,7 @@ namespace jank::runtime::module
             util::format("Failed to find symbol {} for {}", mod.entry_symbol, mod.name));
         }
 
-        auto fn_ptr = reinterpret_cast<object_ref(*)()>(sym_result.expect_ok());
+        auto fn_ptr = reinterpret_cast<object_ref (*)()>(sym_result.expect_ok());
         fn_ptr();
 
         std::cout << "[loader] Loaded remote module: " << clean_name << std::endl;
@@ -1180,7 +1179,7 @@ namespace jank::runtime::module
 
       return ok();
     }
-#endif
+  #endif
 
     /* Standard loading path (non-iOS or remote compile not enabled) */
     if(entry.archive_path.is_some())

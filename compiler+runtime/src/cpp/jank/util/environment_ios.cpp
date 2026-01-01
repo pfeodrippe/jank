@@ -5,8 +5,8 @@
 #include <iostream>
 
 #if defined(__OBJC__) || defined(JANK_TARGET_IOS)
-#import <Foundation/Foundation.h>
-#import <TargetConditionals.h>
+  #import <Foundation/Foundation.h>
+  #import <TargetConditionals.h>
 #endif
 
 namespace jank::util
@@ -49,8 +49,8 @@ namespace jank::util
 #if defined(__OBJC__) || defined(JANK_TARGET_IOS)
         @autoreleasepool
         {
-          NSArray *paths = NSSearchPathForDirectoriesInDomains(
-            NSDocumentDirectory, NSUserDomainMask, YES);
+          NSArray *paths
+            = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
           if(paths.count > 0)
           {
             cached_path = jtl::immutable_string{ [paths[0] UTF8String] };
@@ -76,8 +76,8 @@ namespace jank::util
 #if defined(__OBJC__) || defined(JANK_TARGET_IOS)
         @autoreleasepool
         {
-          NSArray *paths = NSSearchPathForDirectoriesInDomains(
-            NSCachesDirectory, NSUserDomainMask, YES);
+          NSArray *paths
+            = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES);
           if(paths.count > 0)
           {
             cached_path = jtl::immutable_string{ [paths[0] UTF8String] };

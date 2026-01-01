@@ -56,7 +56,7 @@ namespace jank::compile_server
     {
       if(socket_fd_ >= 0)
       {
-        return true;  // Already connected
+        return true; // Already connected
       }
 
       // Resolve hostname
@@ -77,7 +77,7 @@ namespace jank::compile_server
 
       // Set socket timeout for connect
       struct timeval timeout;
-      timeout.tv_sec = 5;  // 5 second connect timeout
+      timeout.tv_sec = 5; // 5 second connect timeout
       timeout.tv_usec = 0;
       setsockopt(socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
       setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -90,8 +90,8 @@ namespace jank::compile_server
 
       if(::connect(socket_fd_, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0)
       {
-        std::cerr << "[compile-client] Failed to connect to " << host_ << ":" << port_
-                  << " - " << strerror(errno) << std::endl;
+        std::cerr << "[compile-client] Failed to connect to " << host_ << ":" << port_ << " - "
+                  << strerror(errno) << std::endl;
         ::close(socket_fd_);
         socket_fd_ = -1;
         return false;
@@ -99,7 +99,7 @@ namespace jank::compile_server
 
       // Set longer timeout for compilation - needs to be long enough for compiling
       // many transitive dependencies (15+ modules can take several minutes)
-      timeout.tv_sec = 300;  // 5 minute compilation timeout
+      timeout.tv_sec = 300; // 5 minute compilation timeout
       setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 
       std::cout << "[compile-client] Connected to " << host_ << ":" << port_ << std::endl;
@@ -121,8 +121,8 @@ namespace jank::compile_server
     }
 
     // Compile jank code to ARM64 object file
-    compile_response compile(std::string const &code, std::string const &ns = "user",
-                             std::string const &module = "")
+    compile_response
+    compile(std::string const &code, std::string const &ns = "user", std::string const &module = "")
     {
       compile_response response;
 
@@ -136,10 +136,9 @@ namespace jank::compile_server
 
       // Build request
       int64_t const id = next_id_++;
-      std::string request = R"({"op":"compile","id":)" + std::to_string(id)
-        + R"(,"code":")" + escape_json(code)
-        + R"(","ns":")" + escape_json(ns)
-        + R"(","module":")" + escape_json(module) + R"("})" + "\n";
+      std::string request = R"({"op":"compile","id":)" + std::to_string(id) + R"(,"code":")"
+        + escape_json(code) + R"(","ns":")" + escape_json(ns) + R"(","module":")"
+        + escape_json(module) + R"("})" + "\n";
 
       // Send request
       if(send_all(request) < 0)
@@ -240,9 +239,8 @@ namespace jank::compile_server
 
       // Build request
       int64_t const id = next_id_++;
-      std::string request = R"({"op":"native-source","id":)" + std::to_string(id)
-        + R"(,"code":")" + escape_json(code)
-        + R"(","ns":")" + escape_json(ns) + R"("})" + "\n";
+      std::string request = R"({"op":"native-source","id":)" + std::to_string(id) + R"(,"code":")"
+        + escape_json(code) + R"(","ns":")" + escape_json(ns) + R"("})" + "\n";
 
       // Send request
       if(send_all(request) < 0)
@@ -312,9 +310,8 @@ namespace jank::compile_server
 
       // Build request
       int64_t const id = next_id_++;
-      std::string request = R"({"op":"require","id":)" + std::to_string(id)
-        + R"(,"ns":")" + escape_json(ns)
-        + R"(","source":")" + escape_json(source) + R"("})" + "\n";
+      std::string request = R"({"op":"require","id":)" + std::to_string(id) + R"(,"ns":")"
+        + escape_json(ns) + R"(","source":")" + escape_json(source) + R"("})" + "\n";
 
       // Send request
       if(send_all(request) < 0)
@@ -362,7 +359,8 @@ namespace jank::compile_server
           // Find array content
           auto array_start = line.find('[', modules_start);
           auto array_end = line.rfind(']');
-          if(array_start != std::string::npos && array_end != std::string::npos && array_end > array_start)
+          if(array_start != std::string::npos && array_end != std::string::npos
+             && array_end > array_start)
           {
             std::string array_content = line.substr(array_start + 1, array_end - array_start - 1);
 
@@ -371,10 +369,16 @@ namespace jank::compile_server
             while(pos < array_content.size())
             {
               auto obj_start = array_content.find('{', pos);
-              if(obj_start == std::string::npos) break;
+              if(obj_start == std::string::npos)
+              {
+                break;
+              }
 
               auto obj_end = array_content.find('}', obj_start);
-              if(obj_end == std::string::npos) break;
+              if(obj_end == std::string::npos)
+              {
+                break;
+              }
 
               std::string obj_str = array_content.substr(obj_start, obj_end - obj_start + 1);
 
@@ -394,8 +398,8 @@ namespace jank::compile_server
           }
         }
 
-        std::cout << "[compile-client] Required namespace successfully, "
-                  << response.modules.size() << " module(s)" << std::endl;
+        std::cout << "[compile-client] Required namespace successfully, " << response.modules.size()
+                  << " module(s)" << std::endl;
       }
       else if(op == "error")
       {
@@ -463,12 +467,23 @@ namespace jank::compile_server
       {
         switch(c)
         {
-          case '"': result += "\\\""; break;
-          case '\\': result += "\\\\"; break;
-          case '\n': result += "\\n"; break;
-          case '\r': result += "\\r"; break;
-          case '\t': result += "\\t"; break;
-          default: result += c;
+          case '"':
+            result += "\\\"";
+            break;
+          case '\\':
+            result += "\\\\";
+            break;
+          case '\n':
+            result += "\\n";
+            break;
+          case '\r':
+            result += "\\r";
+            break;
+          case '\t':
+            result += "\\t";
+            break;
+          default:
+            result += c;
         }
       }
       return result;
@@ -482,12 +497,17 @@ namespace jank::compile_server
       while(true)
       {
         key_pos = json.find(search_key, key_pos);
-        if(key_pos == std::string::npos) return "";
+        if(key_pos == std::string::npos)
+        {
+          return "";
+        }
 
         // Check if this is followed by a colon (possibly with whitespace)
         size_t after_key = key_pos + search_key.size();
         while(after_key < json.size() && (json[after_key] == ' ' || json[after_key] == '\t'))
+        {
           after_key++;
+        }
 
         if(after_key < json.size() && json[after_key] == ':')
         {
@@ -499,14 +519,22 @@ namespace jank::compile_server
       }
 
       auto colon_pos = json.find(':', key_pos);
-      if(colon_pos == std::string::npos) return "";
+      if(colon_pos == std::string::npos)
+      {
+        return "";
+      }
       auto quote_start = json.find('"', colon_pos);
-      if(quote_start == std::string::npos) return "";
+      if(quote_start == std::string::npos)
+      {
+        return "";
+      }
       auto quote_end = quote_start + 1;
       while(quote_end < json.size())
       {
         if(json[quote_end] == '"' && (quote_end == 0 || json[quote_end - 1] != '\\'))
+        {
           break;
+        }
         quote_end++;
       }
       std::string result;
@@ -516,12 +544,28 @@ namespace jank::compile_server
         {
           switch(json[i + 1])
           {
-            case 'n': result += '\n'; i++; break;
-            case 'r': result += '\r'; i++; break;
-            case 't': result += '\t'; i++; break;
-            case '"': result += '"'; i++; break;
-            case '\\': result += '\\'; i++; break;
-            default: result += json[i];
+            case 'n':
+              result += '\n';
+              i++;
+              break;
+            case 'r':
+              result += '\r';
+              i++;
+              break;
+            case 't':
+              result += '\t';
+              i++;
+              break;
+            case '"':
+              result += '"';
+              i++;
+              break;
+            case '\\':
+              result += '\\';
+              i++;
+              break;
+            default:
+              result += json[i];
           }
         }
         else
@@ -540,12 +584,17 @@ namespace jank::compile_server
       while(true)
       {
         key_pos = json.find(search_key, key_pos);
-        if(key_pos == std::string::npos) return 0;
+        if(key_pos == std::string::npos)
+        {
+          return 0;
+        }
 
         // Check if this is followed by a colon (possibly with whitespace)
         size_t after_key = key_pos + search_key.size();
         while(after_key < json.size() && (json[after_key] == ' ' || json[after_key] == '\t'))
+        {
           after_key++;
+        }
 
         if(after_key < json.size() && json[after_key] == ':')
         {
@@ -556,48 +605,60 @@ namespace jank::compile_server
         key_pos++;
       }
       auto colon_pos = json.find(':', key_pos);
-      if(colon_pos == std::string::npos) return 0;
+      if(colon_pos == std::string::npos)
+      {
+        return 0;
+      }
       auto num_start = colon_pos + 1;
       while(num_start < json.size() && (json[num_start] == ' ' || json[num_start] == '\t'))
+      {
         num_start++;
-      try { return std::stoll(json.substr(num_start)); }
-      catch(...) { return 0; }
+      }
+      try
+      {
+        return std::stoll(json.substr(num_start));
+      }
+      catch(...)
+      {
+        return 0;
+      }
     }
 
     static std::vector<uint8_t> base64_decode(std::string const &encoded)
     {
-      static constexpr int8_t table[256] = {
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
-        52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
-        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
-        15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
-        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
-        41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
-      };
+      static constexpr int8_t table[256]
+        = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62,
+            -1, -1, -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0,
+            1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+            23, 24, 25, -1, -1, -1, -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+            39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
 
       std::vector<uint8_t> result;
       result.reserve((encoded.size() / 4) * 3);
 
       for(size_t i = 0; i < encoded.size(); i += 4)
       {
-        if(i + 3 >= encoded.size()) break;
+        if(i + 3 >= encoded.size())
+        {
+          break;
+        }
 
         int8_t a = table[static_cast<uint8_t>(encoded[i])];
         int8_t b = table[static_cast<uint8_t>(encoded[i + 1])];
         int8_t c = table[static_cast<uint8_t>(encoded[i + 2])];
         int8_t d = table[static_cast<uint8_t>(encoded[i + 3])];
 
-        if(a < 0 || b < 0) break;
+        if(a < 0 || b < 0)
+        {
+          break;
+        }
 
         result.push_back((a << 2) | (b >> 4));
         if(c >= 0)

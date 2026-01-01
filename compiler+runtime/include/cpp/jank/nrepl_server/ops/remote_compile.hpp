@@ -11,7 +11,7 @@
 //   {"op":"remote-compile-status"}
 
 #ifdef JANK_IOS_JIT
-#include <jank/compile_server/remote_compile.hpp>
+  #include <jank/compile_server/remote_compile.hpp>
 #endif
 
 namespace jank::nrepl_server::asio
@@ -21,7 +21,7 @@ namespace jank::nrepl_server::asio
   inline std::vector<bencode::value::dict>
   engine::handle_remote_compile_connect([[maybe_unused]] message const &msg)
   {
-#ifdef JANK_IOS_JIT
+  #ifdef JANK_IOS_JIT
     auto const host(msg.get("host"));
     auto const port_opt(msg.get_integer("port"));
     uint16_t port = port_opt.value_or(compile_server::default_compile_port);
@@ -56,7 +56,9 @@ namespace jank::nrepl_server::asio
     else
     {
       response.emplace("status", bencode::list_of_strings({ "error", "done" }));
-      response.emplace("err", "Failed to connect to compile server at " + host + ":" + std::to_string(port));
+      response.emplace("err",
+                       "Failed to connect to compile server at " + host + ":"
+                         + std::to_string(port));
     }
 
     if(!msg.id().empty())
@@ -69,7 +71,7 @@ namespace jank::nrepl_server::asio
     }
 
     return { std::move(response) };
-#else
+  #else
     bencode::value::dict response;
     response.emplace("status", bencode::list_of_strings({ "error", "done" }));
     response.emplace("err", "Remote compilation is only available on iOS");
@@ -82,15 +84,15 @@ namespace jank::nrepl_server::asio
       response.emplace("session", msg.session());
     }
     return { std::move(response) };
-#endif
+  #endif
   }
 
   inline std::vector<bencode::value::dict>
   engine::handle_remote_compile_disconnect([[maybe_unused]] message const &msg)
   {
-#ifdef JANK_IOS_JIT
+  #ifdef JANK_IOS_JIT
     compile_server::disconnect_remote_compile();
-#endif
+  #endif
 
     bencode::value::dict response;
     response.emplace("status", bencode::list_of_strings({ "done" }));
@@ -114,7 +116,7 @@ namespace jank::nrepl_server::asio
     bencode::value::dict response;
     response.emplace("status", bencode::list_of_strings({ "done" }));
 
-#ifdef JANK_IOS_JIT
+  #ifdef JANK_IOS_JIT
     if(compile_server::is_remote_compile_enabled())
     {
       std::lock_guard<std::mutex> lock(compile_server::remote_config_mutex);
@@ -127,10 +129,10 @@ namespace jank::nrepl_server::asio
     {
       response.emplace("remote-compile-connected", "false");
     }
-#else
+  #else
     response.emplace("remote-compile-available", "false");
     response.emplace("remote-compile-connected", "false");
-#endif
+  #endif
 
     if(!msg.id().empty())
     {

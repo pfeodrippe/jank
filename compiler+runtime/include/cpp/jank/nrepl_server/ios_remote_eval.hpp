@@ -13,7 +13,7 @@
 #include <iostream>
 
 #ifndef __EMSCRIPTEN__
-#include <jank/ios/eval_client.hpp>
+  #include <jank/ios/eval_client.hpp>
 #endif
 
 namespace jank::nrepl_server::asio
@@ -153,8 +153,7 @@ namespace jank::nrepl_server::asio
   {
   }
 
-  inline std::pair<bool, std::string>
-  eval_on_ios(std::string const &, std::string const & = "user")
+  inline std::pair<bool, std::string> eval_on_ios(std::string const &, std::string const & = "user")
   {
     return { false, "Remote eval not supported on WASM" };
   }

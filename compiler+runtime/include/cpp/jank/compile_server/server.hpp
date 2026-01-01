@@ -39,10 +39,13 @@
 
 #include <gc/gc.h>
 // Forward declarations for GC thread registration (may not be exposed in all gc.h versions)
-extern "C" {
-GC_API void GC_CALL GC_allow_register_threads(void);
-GC_API int GC_CALL GC_pthread_create(pthread_t *, const pthread_attr_t *,
-                                      void *(*)(void *), void *);
+extern "C"
+{
+  GC_API void GC_CALL GC_allow_register_threads(void);
+  GC_API int GC_CALL GC_pthread_create(pthread_t *,
+                                       pthread_attr_t const *,
+                                       void *(*)(void *),
+                                       void *);
 }
 
 #include <boost/asio.hpp>
@@ -76,13 +79,13 @@ namespace jank::compile_server
   // Configuration for cross-compilation
   struct ios_compile_config
   {
-    std::string clang_path;           // Path to clang for cross-compilation
-    std::string ios_sdk_path;         // Path to iOS SDK (iPhoneSimulator or iPhoneOS)
-    std::string pch_path;             // Path to iOS PCH file
-    std::vector<std::string> include_paths;  // Additional include paths
-    std::vector<std::string> flags;          // Additional compiler flags
-    std::string target_triple;        // e.g., "arm64-apple-ios17.0-simulator"
-    std::string temp_dir;             // Temp directory for generated files
+    std::string clang_path; // Path to clang for cross-compilation
+    std::string ios_sdk_path; // Path to iOS SDK (iPhoneSimulator or iPhoneOS)
+    std::string pch_path; // Path to iOS PCH file
+    std::vector<std::string> include_paths; // Additional include paths
+    std::vector<std::string> flags; // Additional compiler flags
+    std::string target_triple; // e.g., "arm64-apple-ios17.0-simulator"
+    std::string temp_dir; // Temp directory for generated files
   };
 
   class server
@@ -100,13 +103,12 @@ namespace jank::compile_server
 
 #ifdef JANK_COMPILE_SERVER_BINARY
       // First try incremental compiler (true incremental with headers parsed once)
-      if(incremental_compiler_.init(
-        config_.clang_path,
-        config_.target_triple,
-        config_.ios_sdk_path,
-        config_.pch_path,
-        config_.include_paths,
-        config_.flags))
+      if(incremental_compiler_.init(config_.clang_path,
+                                    config_.target_triple,
+                                    config_.ios_sdk_path,
+                                    config_.pch_path,
+                                    config_.include_paths,
+                                    config_.flags))
       {
         std::cout << "[compile-server] Incremental compiler initialized!" << std::endl;
         // Parse jank runtime headers once at startup (expensive but done only once)
@@ -119,34 +121,35 @@ namespace jank::compile_server
         }
         else
         {
-          std::cerr << "[compile-server] Warning: Header parsing failed, trying persistent compiler" << std::endl;
+          std::cerr << "[compile-server] Warning: Header parsing failed, trying persistent compiler"
+                    << std::endl;
           // Try persistent compiler as fallback
-          if(persistent_compiler_.init(
-            config_.clang_path,
-            config_.target_triple,
-            config_.ios_sdk_path,
-            config_.pch_path,
-            config_.include_paths,
-            config_.flags))
+          if(persistent_compiler_.init(config_.clang_path,
+                                       config_.target_triple,
+                                       config_.ios_sdk_path,
+                                       config_.pch_path,
+                                       config_.include_paths,
+                                       config_.flags))
           {
-            std::cout << "[compile-server] Persistent compiler initialized as fallback!" << std::endl;
+            std::cout << "[compile-server] Persistent compiler initialized as fallback!"
+                      << std::endl;
           }
         }
       }
       // Fall back to persistent compiler if incremental fails
-      else if(persistent_compiler_.init(
-        config_.clang_path,
-        config_.target_triple,
-        config_.ios_sdk_path,
-        config_.pch_path,
-        config_.include_paths,
-        config_.flags))
+      else if(persistent_compiler_.init(config_.clang_path,
+                                        config_.target_triple,
+                                        config_.ios_sdk_path,
+                                        config_.pch_path,
+                                        config_.include_paths,
+                                        config_.flags))
       {
         std::cout << "[compile-server] Persistent compiler initialized!" << std::endl;
       }
       else
       {
-        std::cerr << "[compile-server] Warning: Both compilers failed, using popen fallback" << std::endl;
+        std::cerr << "[compile-server] Warning: Both compilers failed, using popen fallback"
+                  << std::endl;
       }
 #endif
     }
@@ -422,7 +425,6 @@ namespace jank::compile_server
       return sym->name == "ns";
     }
 
-
     /* Helper to check if a form is a namespace-affecting form that should be
      * executed on the compile server to keep namespace state in sync.
      * This includes: require, use, refer, alias, in-ns */
@@ -444,12 +446,13 @@ namespace jank::compile_server
         return false;
       }
       // These forms modify namespace state (aliases, refers, etc.)
-      return sym->name == "require" || sym->name == "use" ||
-             sym->name == "refer" || sym->name == "alias" ||
-             sym->name == "in-ns";
+      return sym->name == "require" || sym->name == "use" || sym->name == "refer"
+        || sym->name == "alias" || sym->name == "in-ns";
     }
 
-    std::string compile_code(int64_t id, std::string const &code, std::string const &ns,
+    std::string compile_code(int64_t id,
+                             std::string const &code,
+                             std::string const &ns,
                              std::string const &module_hint)
     {
       try
@@ -497,29 +500,34 @@ namespace jank::compile_server
             runtime::__rt_ctx->eval(all_forms.front());
 
             // Update eval_ns to the namespace created by the ns form
-            auto const ns_list = runtime::try_object<runtime::obj::persistent_list>(all_forms.front());
+            auto const ns_list
+              = runtime::try_object<runtime::obj::persistent_list>(all_forms.front());
             if(runtime::sequence_length(ns_list) >= 2)
             {
-              auto const ns_name_sym = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
+              auto const ns_name_sym
+                = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
               if(!ns_name_sym.is_nil())
               {
                 auto const target_ns = runtime::__rt_ctx->find_ns(ns_name_sym);
                 if(!target_ns.is_nil())
                 {
                   eval_ns = target_ns;
-                  std::cout << "[compile-server] Switched to namespace: " << ns_name_sym->to_string() << std::endl;
+                  std::cout << "[compile-server] Switched to namespace: "
+                            << ns_name_sym->to_string() << std::endl;
                 }
               }
             }
           }
           catch(std::exception const &e)
           {
-            std::cerr << "[compile-server] Warning: ns form evaluation failed: " << e.what() << std::endl;
+            std::cerr << "[compile-server] Warning: ns form evaluation failed: " << e.what()
+                      << std::endl;
             // Continue with analysis - will likely fail but gives better error message
           }
           catch(...)
           {
-            std::cerr << "[compile-server] Warning: ns form evaluation failed (unknown error)" << std::endl;
+            std::cerr << "[compile-server] Warning: ns form evaluation failed (unknown error)"
+                      << std::endl;
           }
         }
 
@@ -543,7 +551,8 @@ namespace jank::compile_server
 
             try
             {
-              std::cout << "[compile-server] Executing namespace-affecting form on server..." << std::endl;
+              std::cout << "[compile-server] Executing namespace-affecting form on server..."
+                        << std::endl;
               auto result = runtime::__rt_ctx->eval(form);
 
               // If this was in-ns, update eval_ns to the new namespace
@@ -567,10 +576,12 @@ namespace jank::compile_server
                       if(ns_sym.is_nil())
                       {
                         // Check if it's a quoted symbol
-                        auto const quote_list = runtime::dyn_cast<runtime::obj::persistent_list>(second.unwrap());
+                        auto const quote_list
+                          = runtime::dyn_cast<runtime::obj::persistent_list>(second.unwrap());
                         if(!quote_list.is_nil() && runtime::sequence_length(quote_list) >= 2)
                         {
-                          ns_sym = runtime::dyn_cast<runtime::obj::symbol>(quote_list->data.rest().first().unwrap());
+                          ns_sym = runtime::dyn_cast<runtime::obj::symbol>(
+                            quote_list->data.rest().first().unwrap());
                         }
                       }
 
@@ -593,12 +604,13 @@ namespace jank::compile_server
             {
               // This can happen if namespace source doesn't exist (REPL-created namespace)
               // That's OK - the alias might still work if the namespace was previously loaded
-              std::cerr << "[compile-server] Warning: namespace-affecting form failed: "
-                        << e.what() << std::endl;
+              std::cerr << "[compile-server] Warning: namespace-affecting form failed: " << e.what()
+                        << std::endl;
             }
             catch(...)
             {
-              std::cerr << "[compile-server] Warning: namespace-affecting form failed (unknown)" << std::endl;
+              std::cerr << "[compile-server] Warning: namespace-affecting form failed (unknown)"
+                        << std::endl;
             }
           }
         }
@@ -613,7 +625,8 @@ namespace jank::compile_server
 
         for(auto const &parsed_form : all_forms)
         {
-          auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+          auto expr
+            = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
           expr = analyze::pass::optimize(expr);
           exprs.push_back(expr);
         }
@@ -622,15 +635,19 @@ namespace jank::compile_server
         jtl::immutable_string module_name;
         if(module_hint.empty())
         {
-          module_name = runtime::module::nest_module(ns, runtime::munge(runtime::__rt_ctx->unique_munged_string("repl")));
+          module_name = runtime::module::nest_module(
+            ns,
+            runtime::munge(runtime::__rt_ctx->unique_munged_string("repl")));
         }
         else
         {
           module_name = module_hint;
         }
 
-        auto const fn_expr = evaluate::wrap_expressions(exprs, an_prc,
-                                                        runtime::__rt_ctx->unique_munged_string("repl_fn"));
+        auto const fn_expr
+          = evaluate::wrap_expressions(exprs,
+                                       an_prc,
+                                       runtime::__rt_ctx->unique_munged_string("repl_fn"));
 
         // Step 6: Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::eval };
@@ -640,8 +657,8 @@ namespace jank::compile_server
 
         // Get the fully qualified struct name for the factory
         auto const module_ns = runtime::module::module_to_native_ns(module_name);
-        auto const qualified_struct = std::string(module_ns.data(), module_ns.size()) +
-                                      "::" + munged_struct_name;
+        auto const qualified_struct
+          = std::string(module_ns.data(), module_ns.size()) + "::" + munged_struct_name;
 
         // Build complete C++ code with:
         // 1. Prelude include
@@ -680,14 +697,13 @@ namespace jank::compile_server
         // Step 8: Return compiled object (base64 encoded)
         auto const encoded = base64_encode(object_result.object_data);
 
-        return R"({"op":"compiled","id":)" + std::to_string(id)
-          + R"(,"symbol":")" + escape_json(entry_symbol)
-          + R"(","object":")" + encoded + R"("})";
+        return R"({"op":"compiled","id":)" + std::to_string(id) + R"(,"symbol":")"
+          + escape_json(entry_symbol) + R"(","object":")" + encoded + R"("})";
       }
       catch(jtl::ref<error::base> const &e)
       {
         std::string msg = std::string(error::kind_str(e->kind)) + ": "
-                        + std::string(e->message.data(), e->message.size());
+          + std::string(e->message.data(), e->message.size());
         return error_response(id, msg, "compile");
       }
       catch(std::exception const &e)
@@ -705,8 +721,8 @@ namespace jank::compile_server
     {
       try
       {
-        std::cout << "[compile-server] Generating native source (id=" << id << ") in ns=" << ns << ": "
-                  << code.substr(0, 50) << (code.size() > 50 ? "..." : "") << std::endl;
+        std::cout << "[compile-server] Generating native source (id=" << id << ") in ns=" << ns
+                  << ": " << code.substr(0, 50) << (code.size() > 50 ? "..." : "") << std::endl;
 
         // Set up namespace binding for analysis
         auto const ns_sym = runtime::make_box<runtime::obj::symbol>(jtl::immutable_string(ns));
@@ -727,7 +743,7 @@ namespace jank::compile_server
         for(auto const &parsed : p_prc)
         {
           form = parsed.expect_ok().unwrap().ptr;
-          break;  // Only take first form
+          break; // Only take first form
         }
 
         if(form.is_nil())
@@ -737,7 +753,8 @@ namespace jank::compile_server
 
         // Analyze the form
         analyze::processor an_prc;
-        auto const analyzed_expr(an_prc.analyze(form, analyze::expression_position::value).expect_ok());
+        auto const analyzed_expr(
+          an_prc.analyze(form, analyze::expression_position::value).expect_ok());
         auto const optimized_expr(analyze::pass::optimize(analyzed_expr));
         auto const wrapped_expr(evaluate::wrap_expression(optimized_expr, "native_source", {}));
         auto const module(eval_ns->to_string());
@@ -746,15 +763,16 @@ namespace jank::compile_server
         codegen::processor cg_prc{ wrapped_expr, module, codegen::compilation_target::eval };
         auto const cpp_source = cg_prc.declaration_str();
 
-        std::cout << "[compile-server] Generated native source (" << cpp_source.size() << " bytes)" << std::endl;
+        std::cout << "[compile-server] Generated native source (" << cpp_source.size() << " bytes)"
+                  << std::endl;
 
-        return R"({"op":"native-source-result","id":)" + std::to_string(id)
-          + R"(,"source":")" + escape_json(std::string(cpp_source.data(), cpp_source.size())) + R"("})";
+        return R"({"op":"native-source-result","id":)" + std::to_string(id) + R"(,"source":")"
+          + escape_json(std::string(cpp_source.data(), cpp_source.size())) + R"("})";
       }
       catch(jtl::ref<error::base> const &e)
       {
         std::string msg = std::string(error::kind_str(e->kind)) + ": "
-                        + std::string(e->message.data(), e->message.size());
+          + std::string(e->message.data(), e->message.size());
         return error_response(id, msg, "compile");
       }
       catch(std::exception const &e)
@@ -772,7 +790,8 @@ namespace jank::compile_server
     {
       try
       {
-        std::cout << "[compile-server] Requiring namespace (id=" << id << "): " << ns_name << std::endl;
+        std::cout << "[compile-server] Requiring namespace (id=" << id << "): " << ns_name
+                  << std::endl;
 
         // Check if already loaded
         if(loaded_namespaces_.find(ns_name) != loaded_namespaces_.end())
@@ -799,7 +818,8 @@ namespace jank::compile_server
         // Step 2: Evaluate the ns form (first form) to register native aliases
         // This will JIT-load all transitive dependencies on macOS
         auto const ns_form = all_forms.front();
-        std::cerr << "[compile-server] Evaluating ns form: " << runtime::to_string(ns_form) << std::endl;
+        std::cerr << "[compile-server] Evaluating ns form: " << runtime::to_string(ns_form)
+                  << std::endl;
 
         try
         {
@@ -815,15 +835,20 @@ namespace jank::compile_server
         }
         catch(jtl::immutable_string const &e)
         {
-          return error_response(id, util::format("ns eval failed: {}", std::string(e.data(), e.size())), "compile");
+          return error_response(id,
+                                util::format("ns eval failed: {}", std::string(e.data(), e.size())),
+                                "compile");
         }
         catch(runtime::object_ref const &e)
         {
-          return error_response(id, util::format("ns eval failed: {}", runtime::to_string(e)), "compile");
+          return error_response(id,
+                                util::format("ns eval failed: {}", runtime::to_string(e)),
+                                "compile");
         }
         catch(jtl::ref<error::base> const &e)
         {
-          std::string msg = std::string(error::kind_str(e->kind)) + ": " + std::string(e->message.data(), e->message.size());
+          std::string msg = std::string(error::kind_str(e->kind)) + ": "
+            + std::string(e->message.data(), e->message.size());
           return error_response(id, util::format("ns eval failed: {}", msg), "compile");
         }
         catch(std::exception const &e)
@@ -838,8 +863,13 @@ namespace jank::compile_server
             int status = 0;
             char *demangled = abi::__cxa_demangle(ti->name(), nullptr, nullptr, &status);
             std::string type_name = (status == 0 && demangled) ? demangled : ti->name();
-            if(demangled) free(demangled);
-            return error_response(id, util::format("ns eval failed (type: {})", type_name), "compile");
+            if(demangled)
+            {
+              free(demangled);
+            }
+            return error_response(id,
+                                  util::format("ns eval failed (type: {})", type_name),
+                                  "compile");
           }
           return error_response(id, "ns eval failed: unknown error", "compile");
         }
@@ -913,7 +943,8 @@ namespace jank::compile_server
           modules_to_compile.push_back(jtl::immutable_string(ns_str));
         }
 
-        std::cout << "[compile-server] Modules to compile for iOS: " << modules_to_compile.size() << std::endl;
+        std::cout << "[compile-server] Modules to compile for iOS: " << modules_to_compile.size()
+                  << std::endl;
 
         // Step 4: Collect all modules to compile
         // Start with transitive dependencies (in load order), then add the main module last
@@ -932,12 +963,15 @@ namespace jank::compile_server
           std::string dep_module_str(dep_module.data(), dep_module.size());
 
           // Find and read the module source
-          std::cout << "[compile-server] Compiling transitive dependency: " << dep_module << std::endl;
+          std::cout << "[compile-server] Compiling transitive dependency: " << dep_module
+                    << std::endl;
 
-          auto const find_result = runtime::__rt_ctx->module_loader.find(dep_module, runtime::module::origin::latest);
+          auto const find_result
+            = runtime::__rt_ctx->module_loader.find(dep_module, runtime::module::origin::latest);
           if(find_result.is_err())
           {
-            std::cerr << "[compile-server] Warning: Could not find source for: " << dep_module << std::endl;
+            std::cerr << "[compile-server] Warning: Could not find source for: " << dep_module
+                      << std::endl;
             continue;
           }
 
@@ -956,15 +990,18 @@ namespace jank::compile_server
 
           if(source_entry.is_none())
           {
-            std::cerr << "[compile-server] Warning: No jank/cljc source for: " << dep_module << std::endl;
+            std::cerr << "[compile-server] Warning: No jank/cljc source for: " << dep_module
+                      << std::endl;
             continue;
           }
 
           // Read the source file
-          auto const file_view_result = runtime::module::loader::read_file(source_entry.unwrap().path);
+          auto const file_view_result
+            = runtime::module::loader::read_file(source_entry.unwrap().path);
           if(file_view_result.is_err())
           {
-            std::cerr << "[compile-server] Warning: Could not read source for: " << dep_module << std::endl;
+            std::cerr << "[compile-server] Warning: Could not read source for: " << dep_module
+                      << std::endl;
             continue;
           }
 
@@ -972,7 +1009,8 @@ namespace jank::compile_server
           std::string dep_source(file_view.data(), file_view.size());
 
           // Compile the dependency
-          auto compiled = compile_namespace_source(id, dep_module_str, dep_source, compilation_errors);
+          auto compiled
+            = compile_namespace_source(id, dep_module_str, dep_source, compilation_errors);
           if(compiled.is_some())
           {
             loaded_namespaces_.insert(dep_module_str);
@@ -991,12 +1029,15 @@ namespace jank::compile_server
         {
           return error_response(id, "Invalid ns form: expected (ns name ...)", "compile");
         }
-        auto const ns_name_sym = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
+        auto const ns_name_sym
+          = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
         auto const target_ns = runtime::__rt_ctx->find_ns(ns_name_sym);
         if(target_ns.is_nil())
         {
-          return error_response(id, util::format("Namespace {} not found after ns form evaluation",
-                                                  ns_name_sym->to_string()), "compile");
+          return error_response(id,
+                                util::format("Namespace {} not found after ns form evaluation",
+                                             ns_name_sym->to_string()),
+                                "compile");
         }
 
         // Analyze ALL forms with *ns* bound to the target namespace
@@ -1008,7 +1049,8 @@ namespace jank::compile_server
 
           for(auto const &parsed_form : all_forms)
           {
-            auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+            auto expr
+              = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
             expr = analyze::pass::optimize(expr);
             exprs.push_back(expr);
           }
@@ -1018,8 +1060,10 @@ namespace jank::compile_server
         auto const module_name = jtl::immutable_string(ns_name) + "$loading__";
 
         // Wrap expressions in a function for codegen
-        auto const fn_expr = evaluate::wrap_expressions(exprs, an_prc,
-                                                        runtime::__rt_ctx->unique_munged_string("ns_load"));
+        auto const fn_expr
+          = evaluate::wrap_expressions(exprs,
+                                       an_prc,
+                                       runtime::__rt_ctx->unique_munged_string("ns_load"));
 
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
@@ -1028,8 +1072,8 @@ namespace jank::compile_server
         auto const entry_symbol = "_" + munged_struct_name + "_0";
 
         auto const module_ns = runtime::module::module_to_native_ns(module_name);
-        auto const qualified_struct = std::string(module_ns.data(), module_ns.size()) +
-                                      "::" + munged_struct_name;
+        auto const qualified_struct
+          = std::string(module_ns.data(), module_ns.size()) + "::" + munged_struct_name;
 
         std::string cpp_code;
         cpp_code += "#include <jank/prelude.hpp>\n";
@@ -1062,22 +1106,26 @@ namespace jank::compile_server
         loaded_namespaces_.insert(ns_name);
 
         // Add main module to compiled list
-        compiled_modules.push_back(compiled_module_info{
-          std::string(module_name.data(), module_name.size()),
-          entry_symbol,
-          base64_encode(object_result.object_data)
-        });
+        compiled_modules.push_back(
+          compiled_module_info{ std::string(module_name.data(), module_name.size()),
+                                entry_symbol,
+                                base64_encode(object_result.object_data) });
 
-        std::cout << "[compile-server] Namespace " << ns_name << " compiled successfully, object size: "
-                  << object_result.object_data.size() << " bytes" << std::endl;
-        std::cout << "[compile-server] Total modules compiled: " << compiled_modules.size() << std::endl;
+        std::cout << "[compile-server] Namespace " << ns_name
+                  << " compiled successfully, object size: " << object_result.object_data.size()
+                  << " bytes" << std::endl;
+        std::cout << "[compile-server] Total modules compiled: " << compiled_modules.size()
+                  << std::endl;
 
         // Step 7: Build response with all compiled modules
         std::string response = R"({"op":"required","id":)" + std::to_string(id) + R"(,"modules":[)";
         bool first = true;
         for(auto const &mod : compiled_modules)
         {
-          if(!first) response += ",";
+          if(!first)
+          {
+            response += ",";
+          }
           first = false;
           response += R"({"name":")" + escape_json(mod.name);
           response += R"(","symbol":")" + escape_json(mod.symbol);
@@ -1090,7 +1138,7 @@ namespace jank::compile_server
       catch(jtl::ref<error::base> const &e)
       {
         std::string msg = std::string(error::kind_str(e->kind)) + ": "
-                        + std::string(e->message.data(), e->message.size());
+          + std::string(e->message.data(), e->message.size());
         return error_response(id, msg, "compile");
       }
       catch(std::exception const &e)
@@ -1152,7 +1200,7 @@ namespace jank::compile_server
       args.push_back(config_.ios_sdk_path);
       args.push_back("-std=gnu++20");
       args.push_back("-fPIC");
-      args.push_back("-w");  // Suppress warnings
+      args.push_back("-w"); // Suppress warnings
       // Must match PCH flags
       args.push_back("-Xclang");
       args.push_back("-fincremental-extensions");
@@ -1189,7 +1237,10 @@ namespace jank::compile_server
       std::string cmd;
       for(auto const &arg : args)
       {
-        if(!cmd.empty()) cmd += " ";
+        if(!cmd.empty())
+        {
+          cmd += " ";
+        }
         // Quote args with spaces
         if(arg.find(' ') != std::string::npos)
         {
@@ -1200,7 +1251,7 @@ namespace jank::compile_server
           cmd += arg;
         }
       }
-      cmd += " 2>&1";  // Capture stderr
+      cmd += " 2>&1"; // Capture stderr
 
       std::cout << "[compile-server] Cross-compiling: " << cmd << std::endl;
 
@@ -1229,7 +1280,8 @@ namespace jank::compile_server
       // Keep source file for debugging if compilation fails
       if(status != 0)
       {
-        std::cerr << "[compile-server] Compilation FAILED. Source kept at: " << cpp_path << std::endl;
+        std::cerr << "[compile-server] Compilation FAILED. Source kept at: " << cpp_path
+                  << std::endl;
         std::filesystem::remove(obj_path);
         return { false, {}, "Clang error: " + output };
       }
@@ -1244,25 +1296,23 @@ namespace jank::compile_server
         return { false, {}, "Failed to read object file" };
       }
 
-      std::vector<uint8_t> obj_data(
-        (std::istreambuf_iterator<char>(obj_file)),
-        std::istreambuf_iterator<char>()
-      );
+      std::vector<uint8_t> obj_data((std::istreambuf_iterator<char>(obj_file)),
+                                    std::istreambuf_iterator<char>());
 
       // Clean up object file
       std::filesystem::remove(obj_path);
 
-      std::cout << "[compile-server] Compiled successfully, object size: "
-                << obj_data.size() << " bytes" << std::endl;
+      std::cout << "[compile-server] Compiled successfully, object size: " << obj_data.size()
+                << " bytes" << std::endl;
 
       return { true, std::move(obj_data), "" };
     }
 
     std::string error_response(int64_t id, std::string const &error, std::string const &type)
     {
-      std::cerr << "[compile-server] Error (id=" << id << ", type=" << type << "): " << error << std::endl;
-      return R"({"op":"error","id":)" + std::to_string(id)
-        + R"(,"error":")" + escape_json(error)
+      std::cerr << "[compile-server] Error (id=" << id << ", type=" << type << "): " << error
+                << std::endl;
+      return R"({"op":"error","id":)" + std::to_string(id) + R"(,"error":")" + escape_json(error)
         + R"(","type":")" + type + R"("})";
     }
 
@@ -1270,16 +1320,27 @@ namespace jank::compile_server
     static std::string get_json_string(std::string const &json, std::string const &key)
     {
       auto key_pos = json.find("\"" + key + "\"");
-      if(key_pos == std::string::npos) return "";
+      if(key_pos == std::string::npos)
+      {
+        return "";
+      }
       auto colon_pos = json.find(':', key_pos);
-      if(colon_pos == std::string::npos) return "";
+      if(colon_pos == std::string::npos)
+      {
+        return "";
+      }
       auto quote_start = json.find('"', colon_pos);
-      if(quote_start == std::string::npos) return "";
+      if(quote_start == std::string::npos)
+      {
+        return "";
+      }
       auto quote_end = quote_start + 1;
       while(quote_end < json.size())
       {
         if(json[quote_end] == '"' && (quote_end == 0 || json[quote_end - 1] != '\\'))
+        {
           break;
+        }
         quote_end++;
       }
       std::string result;
@@ -1289,12 +1350,28 @@ namespace jank::compile_server
         {
           switch(json[i + 1])
           {
-            case 'n': result += '\n'; i++; break;
-            case 'r': result += '\r'; i++; break;
-            case 't': result += '\t'; i++; break;
-            case '"': result += '"'; i++; break;
-            case '\\': result += '\\'; i++; break;
-            default: result += json[i];
+            case 'n':
+              result += '\n';
+              i++;
+              break;
+            case 'r':
+              result += '\r';
+              i++;
+              break;
+            case 't':
+              result += '\t';
+              i++;
+              break;
+            case '"':
+              result += '"';
+              i++;
+              break;
+            case '\\':
+              result += '\\';
+              i++;
+              break;
+            default:
+              result += json[i];
           }
         }
         else
@@ -1308,14 +1385,28 @@ namespace jank::compile_server
     static int64_t get_json_int(std::string const &json, std::string const &key)
     {
       auto key_pos = json.find("\"" + key + "\"");
-      if(key_pos == std::string::npos) return 0;
+      if(key_pos == std::string::npos)
+      {
+        return 0;
+      }
       auto colon_pos = json.find(':', key_pos);
-      if(colon_pos == std::string::npos) return 0;
+      if(colon_pos == std::string::npos)
+      {
+        return 0;
+      }
       auto num_start = colon_pos + 1;
       while(num_start < json.size() && (json[num_start] == ' ' || json[num_start] == '\t'))
+      {
         num_start++;
-      try { return std::stoll(json.substr(num_start)); }
-      catch(...) { return 0; }
+      }
+      try
+      {
+        return std::stoll(json.substr(num_start));
+      }
+      catch(...)
+      {
+        return 0;
+      }
     }
 
     static std::string escape_json(std::string const &s)
@@ -1326,12 +1417,23 @@ namespace jank::compile_server
       {
         switch(c)
         {
-          case '"': result += "\\\""; break;
-          case '\\': result += "\\\\"; break;
-          case '\n': result += "\\n"; break;
-          case '\r': result += "\\r"; break;
-          case '\t': result += "\\t"; break;
-          default: result += c;
+          case '"':
+            result += "\\\"";
+            break;
+          case '\\':
+            result += "\\\\";
+            break;
+          case '\n':
+            result += "\\n";
+            break;
+          case '\r':
+            result += "\\r";
+            break;
+          case '\t':
+            result += "\\t";
+            break;
+          default:
+            result += c;
         }
       }
       return result;
@@ -1340,8 +1442,8 @@ namespace jank::compile_server
     // Base64 encoding for object file
     static std::string base64_encode(std::vector<uint8_t> const &data)
     {
-      static constexpr char table[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+      static constexpr char table[]
+        = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
       std::string result;
       result.reserve(((data.size() + 2) / 3) * 4);
@@ -1349,8 +1451,14 @@ namespace jank::compile_server
       for(size_t i = 0; i < data.size(); i += 3)
       {
         uint32_t n = static_cast<uint32_t>(data[i]) << 16;
-        if(i + 1 < data.size()) n |= static_cast<uint32_t>(data[i + 1]) << 8;
-        if(i + 2 < data.size()) n |= static_cast<uint32_t>(data[i + 2]);
+        if(i + 1 < data.size())
+        {
+          n |= static_cast<uint32_t>(data[i + 1]) << 8;
+        }
+        if(i + 2 < data.size())
+        {
+          n |= static_cast<uint32_t>(data[i + 2]);
+        }
 
         result.push_back(table[(n >> 18) & 0x3F]);
         result.push_back(table[(n >> 12) & 0x3F]);
@@ -1367,10 +1475,10 @@ namespace jank::compile_server
     tcp::acceptor acceptor_;
     std::atomic<bool> running_;
     pthread_t server_thread_;
-    std::unordered_set<std::string> loaded_namespaces_;  // Track loaded namespaces
+    std::unordered_set<std::string> loaded_namespaces_; // Track loaded namespaces
 #ifdef JANK_COMPILE_SERVER_BINARY
-    incremental_compiler incremental_compiler_;  // Fast incremental compiler (headers parsed once)
-    persistent_compiler persistent_compiler_;    // Fallback persistent compiler
+    incremental_compiler incremental_compiler_; // Fast incremental compiler (headers parsed once)
+    persistent_compiler persistent_compiler_; // Fallback persistent compiler
 #endif
 
     // Helper struct for compiled module info
@@ -1383,11 +1491,10 @@ namespace jank::compile_server
 
     // Compile a single namespace from source (helper for require_ns)
     // Returns empty option on failure (error already logged)
-    jtl::option<compiled_module_info> compile_namespace_source(
-      int64_t id,
-      std::string const &ns_name,
-      std::string const &source,
-      native_vector<std::string> &errors)
+    jtl::option<compiled_module_info> compile_namespace_source(int64_t id,
+                                                               std::string const &ns_name,
+                                                               std::string const &source,
+                                                               native_vector<std::string> &errors)
     {
       try
       {
@@ -1417,7 +1524,8 @@ namespace jank::compile_server
           errors.push_back("Invalid ns form for: " + ns_name);
           return jtl::none;
         }
-        auto const ns_name_sym = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
+        auto const ns_name_sym
+          = runtime::try_object<runtime::obj::symbol>(ns_list->data.rest().first().unwrap());
         auto const target_ns = runtime::__rt_ctx->find_ns(ns_name_sym);
         if(target_ns.is_nil())
         {
@@ -1437,7 +1545,8 @@ namespace jank::compile_server
 
           for(auto const &parsed_form : all_forms)
           {
-            auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+            auto expr
+              = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
             expr = analyze::pass::optimize(expr);
             exprs.push_back(expr);
           }
@@ -1447,8 +1556,10 @@ namespace jank::compile_server
         auto const module_name = jtl::immutable_string(ns_name) + "$loading__";
 
         // Wrap expressions in a function for codegen
-        auto const fn_expr = evaluate::wrap_expressions(exprs, an_prc,
-                                                        runtime::__rt_ctx->unique_munged_string("ns_load"));
+        auto const fn_expr
+          = evaluate::wrap_expressions(exprs,
+                                       an_prc,
+                                       runtime::__rt_ctx->unique_munged_string("ns_load"));
 
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
@@ -1457,8 +1568,8 @@ namespace jank::compile_server
         auto const entry_symbol = "_" + munged_struct_name + "_0";
 
         auto const module_ns = runtime::module::module_to_native_ns(module_name);
-        auto const qualified_struct = std::string(module_ns.data(), module_ns.size()) +
-                                      "::" + munged_struct_name;
+        auto const qualified_struct
+          = std::string(module_ns.data(), module_ns.size()) + "::" + munged_struct_name;
 
         std::string cpp_code;
         cpp_code += "#include <jank/prelude.hpp>\n";
@@ -1488,14 +1599,12 @@ namespace jank::compile_server
           return jtl::none;
         }
 
-        std::cout << "[compile-server] Compiled dependency: " << ns_name
-                  << " (" << object_result.object_data.size() << " bytes)" << std::endl;
+        std::cout << "[compile-server] Compiled dependency: " << ns_name << " ("
+                  << object_result.object_data.size() << " bytes)" << std::endl;
 
-        return compiled_module_info{
-          std::string(module_name.data(), module_name.size()),
-          entry_symbol,
-          base64_encode(object_result.object_data)
-        };
+        return compiled_module_info{ std::string(module_name.data(), module_name.size()),
+                                     entry_symbol,
+                                     base64_encode(object_result.object_data) };
       }
       catch(std::exception const &e)
       {
@@ -1511,9 +1620,8 @@ namespace jank::compile_server
   };
 
   // Helper to create default config for iOS Simulator
-  inline ios_compile_config make_ios_simulator_config(
-    std::string const &jank_resource_dir,
-    std::string const &clang_path = "")
+  inline ios_compile_config make_ios_simulator_config(std::string const &jank_resource_dir,
+                                                      std::string const &clang_path = "")
   {
     ios_compile_config config;
 
@@ -1522,7 +1630,8 @@ namespace jank::compile_server
     {
       // Try jank's bundled clang first - check multiple locations
       auto bundled_in_resource = jank_resource_dir + "/bin/clang++";
-      std::string bundled_in_jank = std::string(util::process_dir().c_str()) + "/llvm-install/usr/local/bin/clang++";
+      std::string bundled_in_jank
+        = std::string(util::process_dir().c_str()) + "/llvm-install/usr/local/bin/clang++";
 
       if(std::filesystem::exists(bundled_in_resource))
       {
@@ -1534,7 +1643,7 @@ namespace jank::compile_server
       }
       else
       {
-        config.clang_path = "clang++";  // System clang
+        config.clang_path = "clang++"; // System clang
       }
     }
     else
@@ -1568,7 +1677,8 @@ namespace jank::compile_server
       if(std::filesystem::exists(dev_build_include))
       {
         config.include_paths.push_back(dev_build_include.string());
-        std::cout << "[compile-server] Using dev build include path: " << dev_build_include << std::endl;
+        std::cout << "[compile-server] Using dev build include path: " << dev_build_include
+                  << std::endl;
 
         // Add third-party include paths for dev build
         auto const third_party = compiler_runtime_dir / "third-party";
@@ -1587,7 +1697,8 @@ namespace jank::compile_server
       {
         // Fall back to configured path anyway
         config.include_paths.push_back(configured_include);
-        std::cerr << "[compile-server] Warning: Include path does not exist: " << configured_include << std::endl;
+        std::cerr << "[compile-server] Warning: Include path does not exist: " << configured_include
+                  << std::endl;
       }
     }
 
