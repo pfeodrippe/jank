@@ -275,7 +275,7 @@ namespace jank::runtime
     void *jank_box_integer(int64_t value)
     {
       auto boxed = make_box<obj::integer>(static_cast<jank::i64>(value));
-      return boxed.erase();
+      return boxed.erase().data;
     }
 
 #ifdef __EMSCRIPTEN__
@@ -318,7 +318,7 @@ namespace jank::runtime
       if(var.is_nil())
       {
         util::println("[hot-reload] ERROR: Var not found: {}/{}", ns, name);
-        return jank_nil.erase();
+        return jank_nil().erase().data;
       }
 
       /* Deref the var to get the function. */
@@ -328,27 +328,27 @@ namespace jank::runtime
       switch(argc)
       {
         case 0:
-          return dynamic_call(fn).erase();
+          return dynamic_call(fn).erase().data;
         case 1:
-          return dynamic_call(fn, object_ref{ reinterpret_cast<object *>(args[0]) }).erase();
+          return dynamic_call(fn, object_ref{ reinterpret_cast<object *>(args[0]) }).erase().data;
         case 2:
           return dynamic_call(fn,
                               object_ref{ reinterpret_cast<object *>(args[0]) },
                               object_ref{ reinterpret_cast<object *>(args[1]) })
-            .erase();
+            .erase().data;
         case 3:
           return dynamic_call(fn,
                               object_ref{ reinterpret_cast<object *>(args[0]) },
                               object_ref{ reinterpret_cast<object *>(args[1]) },
                               object_ref{ reinterpret_cast<object *>(args[2]) })
-            .erase();
+            .erase().data;
         case 4:
           return dynamic_call(fn,
                               object_ref{ reinterpret_cast<object *>(args[0]) },
                               object_ref{ reinterpret_cast<object *>(args[1]) },
                               object_ref{ reinterpret_cast<object *>(args[2]) },
                               object_ref{ reinterpret_cast<object *>(args[3]) })
-            .erase();
+            .erase().data;
         case 5:
           return dynamic_call(fn,
                               object_ref{ reinterpret_cast<object *>(args[0]) },
@@ -356,11 +356,11 @@ namespace jank::runtime
                               object_ref{ reinterpret_cast<object *>(args[2]) },
                               object_ref{ reinterpret_cast<object *>(args[3]) },
                               object_ref{ reinterpret_cast<object *>(args[4]) })
-            .erase();
+            .erase().data;
         default:
           util::println("[hot-reload] ERROR: jank_call_var only supports up to 5 args, got {}",
                         argc);
-          return jank_nil.erase();
+          return jank_nil().erase().data;
       }
     }
 
@@ -372,9 +372,9 @@ namespace jank::runtime
       auto var = __rt_ctx->find_var(ns, name);
       if(var.is_nil())
       {
-        return jank_nil.erase();
+        return jank_nil().erase().data;
       }
-      return var->deref().erase();
+      return var->deref().erase().data;
     }
 
 #ifdef __EMSCRIPTEN__
@@ -384,7 +384,7 @@ namespace jank::runtime
     {
       std::string const ns_str = (ns && ns[0]) ? ns : "";
       auto kw = __rt_ctx->intern_keyword(ns_str, name, true).expect_ok();
-      return kw.erase();
+      return kw.erase().data;
     }
 
 #ifdef __EMSCRIPTEN__
@@ -394,7 +394,7 @@ namespace jank::runtime
     {
       if(argc == 0)
       {
-        return make_box<obj::persistent_vector>().erase();
+        return make_box<obj::persistent_vector>().erase().data;
       }
 
       /* Build vector by conj'ing elements one at a time. */
@@ -403,7 +403,7 @@ namespace jank::runtime
       {
         vec = vec->conj(object_ref{ reinterpret_cast<object *>(elements[i]) });
       }
-      return vec.erase();
+      return vec.erase().data;
     }
 
 #ifdef __EMSCRIPTEN__
@@ -413,7 +413,7 @@ namespace jank::runtime
     {
       if(argc == 0)
       {
-        return make_box<obj::persistent_hash_set>().erase();
+        return make_box<obj::persistent_hash_set>().erase().data;
       }
 
       /* Build set from elements. */
@@ -422,7 +422,7 @@ namespace jank::runtime
       {
         set = set->conj(object_ref{ reinterpret_cast<object *>(elements[i]) });
       }
-      return set.erase();
+      return set.erase().data;
     }
 
 #ifdef __EMSCRIPTEN__
@@ -431,7 +431,7 @@ namespace jank::runtime
     void *jank_box_double(double value)
     {
       auto boxed = make_box<obj::real>(value);
-      return boxed.erase();
+      return boxed.erase().data;
     }
 
 #ifdef __EMSCRIPTEN__
@@ -467,7 +467,7 @@ namespace jank::runtime
 #endif
     void *jank_make_string(char const *str)
     {
-      return make_box<obj::persistent_string>(str).erase();
+      return make_box<obj::persistent_string>(str).erase().data;
     }
 
 #ifdef __EMSCRIPTEN__
@@ -486,7 +486,7 @@ namespace jank::runtime
 #endif
     void *jank_nil_value()
     {
-      return jank_nil.erase();
+      return jank_nil().erase().data;
     }
 
 #ifdef __EMSCRIPTEN__
@@ -496,9 +496,9 @@ namespace jank::runtime
     {
       if(ns && ns[0])
       {
-        return make_box<obj::symbol>(ns, name).erase();
+        return make_box<obj::symbol>(ns, name).erase().data;
       }
-      return make_box<obj::symbol>(name).erase();
+      return make_box<obj::symbol>(name).erase().data;
     }
 
     /* Create a callable wrapper from a function pointer.
@@ -549,10 +549,10 @@ namespace jank::runtime
         default:
           util::println("[hot-reload] ERROR: jank_make_fn_wrapper only supports arity 0-3, got {}",
                         arity);
-          return jank_nil.erase();
+          return jank_nil().erase().data;
       }
 
-      return wrapper.erase();
+      return wrapper.erase().data;
     }
   }
 } // namespace jank::runtime

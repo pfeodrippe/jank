@@ -9,6 +9,8 @@
             [leiningen.core.main :as lmain])
   (:import [java.io File]))
 
+(defonce verbose? (atom false))
+
 (defn build-declarative-flag [flag value]
   (case flag
     :direct-call
@@ -49,6 +51,7 @@
                      (sequential? result) result
                      :else [result]))))))
 
+<<<<<<< HEAD
 
 (defn- absolutize-if-file [path]
   (when path
@@ -99,9 +102,12 @@
                             repo-local-paths)]
     (some absolutize-if-file candidates)))
 
+=======
+>>>>>>> origin/main
 (defn shell-out! [project classpath command compiler-args runtime-args]
   (let [jank (discover-jank-executable project)
         ; TODO: Better error handling.
+<<<<<<< HEAD
         _ (when-not jank
             (lmain/warn "Unable to locate the `jank` executable. Did you run ./bin/compile under compiler+runtime, or add build/jank to your PATH?")
             (lmain/warn "Set JANK_BIN or :jank-bin in project.clj if you need a custom location.")
@@ -125,6 +131,11 @@
           args (->> raw-args
                      (map str)
                      vec)
+=======
+        _ (assert (some? jank))
+        _ (when @verbose?
+            (println ">" (clojure.string/join " " args)))
+>>>>>>> origin/main
         proc (apply ps/shell
                     {:continue true
                      :dir (:root project)
@@ -198,12 +209,25 @@
             :help (-> fn-ref meta :doc)})
          subtask-kw->var)))
 
+(defn process-args [args]
+  (loop [args args
+         ret []]
+    (if (empty? args)
+      ret
+      (let [arg (first args)
+            ret (case arg
+                  "-v" (do
+                         (reset! verbose? true)
+                         ret)
+                  (conj ret arg))]
+        (recur (rest args) ret)))))
+
 (defn jank
   "Compile, run and repl into jank."
   [project subcmd & args]
   ;(clojure.pprint/pprint (:jank project))
   (if-some [handler (subtask-kw->var (keyword subcmd))]
-    (apply handler project args)
+    (apply handler project (process-args args))
     (do
       (lmain/warn "Invalid subcommand!")
       (print-help!)

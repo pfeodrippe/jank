@@ -29,6 +29,7 @@
 #include <jank/util/string.hpp>
 #include <jank/util/fmt/print.hpp>
 #include <jank/util/try.hpp>
+#include <jank/error/report.hpp>
 #include <jank/environment/check_health.hpp>
 #include <jank/runtime/convert/builtin.hpp>
 
@@ -42,7 +43,7 @@
 #endif
 
 #ifdef JANK_PHASE_2
-extern "C" jank_object_ref jank_load_clojure_core();
+extern "C" void jank_load_clojure_core();
 #endif
 extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
 extern "C" jank_object_ref jank_load_jank_arena_native();
@@ -64,7 +65,7 @@ namespace jank
 
     {
       profile::timer const timer{ "eval user code" };
-      /* For WASM AOT or LLVM IR codegen, set compile_files_var to true so that eval_string 
+      /* For WASM AOT or LLVM IR codegen, set compile_files_var to true so that eval_string
        * generates proper module loader functions (jank_load_*).
        * This makes the generated code compatible with the WASM runtime. */
       if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot
@@ -77,7 +78,7 @@ namespace jank
         context::binding_scope const compile_scope{ obj::persistent_hash_map::create_unique(
           std::make_pair(__rt_ctx->compile_files_var, jank_true),
           std::make_pair(__rt_ctx->current_module_var, make_box(module_name))) };
-        util::println("{}", to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file)));
+        util::println("{}", to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file).unwrap()));
 
         /* For WASM AOT, generate export wrappers for vars with ^:export metadata */
         if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot
@@ -160,7 +161,7 @@ namespace jank
       }
       else
       {
-        util::println("{}", to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file)));
+        __rt_ctx->eval_file(util::cli::opts.target_file);
       }
     }
 
@@ -263,6 +264,63 @@ namespace jank
     using namespace jank;
     using namespace jank::runtime;
 
+    if(opts.output_target == util::cli::compilation_target::unspecified)
+    {
+      if(opts.output_module_filename.empty())
+      {
+        opts.output_target = util::cli::compilation_target::object;
+      }
+      else
+      {
+        auto const ext{ std::filesystem::path{ opts.output_module_filename }.extension() };
+        if(ext == ".ll")
+        {
+          opts.output_target = util::cli::compilation_target::llvm_ir;
+        }
+        else if(ext == ".cpp")
+        {
+          opts.output_target = util::cli::compilation_target::cpp;
+        }
+        else if(ext == ".o")
+        {
+          opts.output_target = util::cli::compilation_target::object;
+        }
+        else
+        {
+          /* TODO: Dedicated error. */
+          throw error::internal_failure(
+            util::format("Unable to determine the output target type, given output file name '{}'. "
+                         "If you provide a '.ll', '.cpp', or '.o' extension, this can be inferred. "
+                         "Otherwise, please provide the --output-type flag to specify.",
+                         opts.output_module_filename));
+        }
+      }
+    }
+    else if(!opts.output_module_filename.empty())
+    {
+      auto const ext{ std::filesystem::path{ opts.output_module_filename }.extension() };
+      if((ext == ".ll" && opts.output_target != util::cli::compilation_target::llvm_ir)
+         || (ext == ".cpp" && opts.output_target != util::cli::compilation_target::cpp)
+         || (ext == ".o" && opts.output_target != util::cli::compilation_target::object))
+      {
+        error::warn(util::format("The output file name '{}' has the extension '{}', but the output "
+                                 "target is '{}'. These appear to be mismatched.",
+                                 opts.output_module_filename,
+                                 ext,
+                                 util::cli::compilation_target_str(opts.output_target)));
+      }
+    }
+
+    if(opts.output_target == util::cli::compilation_target::cpp
+       && opts.codegen != util::cli::codegen_type::cpp)
+    {
+      /* TODO: Dedicated error. */
+      throw error::internal_failure(
+        util::format("Unable to output C++ when the codegen flag is set to '{}'. Please either "
+                     "output a different target or change the codegen to C++.",
+                     util::cli::codegen_type_str(opts.codegen)));
+    }
+
     if(opts.target_module != "clojure.core")
     {
       __rt_ctx->load_module("/clojure.core", module::origin::latest).expect_ok();
@@ -339,6 +397,17 @@ namespace jank
     std::string path_tmp{ tmp / "jank-repl-XXXXXX" };
     mkstemp(path_tmp.data());
 
+    auto const first_res_var{ __rt_ctx->find_var("clojure.core", "*1") };
+    auto const second_res_var{ __rt_ctx->find_var("clojure.core", "*2") };
+    auto const third_res_var{ __rt_ctx->find_var("clojure.core", "*3") };
+    auto const error_var{ __rt_ctx->find_var("clojure.core", "*e") };
+
+    context::binding_scope const scope{ obj::persistent_hash_map::create_unique(
+      std::make_pair(first_res_var, jank_nil()),
+      std::make_pair(second_res_var, jank_nil()),
+      std::make_pair(third_res_var, jank_nil()),
+      std::make_pair(error_var, jank_nil())) };
+
     /* TODO: Completion. */
     /* TODO: Syntax highlighting. */
     while(auto buf = le.readLine())
@@ -371,7 +440,15 @@ namespace jank
         }
 
         auto const res(__rt_ctx->eval_file(path_tmp));
-        util::println("{}", runtime::to_code_string(res));
+
+        if(res.is_some())
+        {
+          third_res_var->set(second_res_var->deref()).expect_ok();
+          second_res_var->set(first_res_var->deref()).expect_ok();
+          first_res_var->set(res.unwrap()).expect_ok();
+
+          util::println("{}", runtime::to_code_string(res.unwrap()));
+        }
       }
       JANK_CATCH(jank::util::print_exception)
 
@@ -444,7 +521,7 @@ namespace jank
     __rt_ctx->compile_module(opts.target_module).expect_ok();
 
     jank::aot::processor const aot_prc{};
-    aot_prc.compile(opts.target_module).expect_ok();
+    aot_prc.build_executable(opts.target_module).expect_ok();
   }
 }
 
@@ -458,7 +535,7 @@ int main(int const argc, char const **argv)
   using namespace jank::runtime;
 
   return jank_init(argc, argv, /*init_default_ctx=*/false, [](int const argc, char const **argv) {
-    auto const parse_result(util::cli::parse(argc, argv));
+    auto const parse_result(util::cli::parse_opts(argc, argv));
     if(parse_result.is_err())
     {
       return parse_result.expect_err();

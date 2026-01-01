@@ -149,9 +149,9 @@ namespace jank::nrepl_server::asio
         auto const test_vars(__rt_ctx->eval_string(
           jtl::immutable_string_view{ find_tests_code.data(), find_tests_code.size() }));
 
-        if(!test_vars.is_nil())
+        if(test_vars.is_some())
         {
-          for(auto it = runtime::fresh_seq(test_vars); !it.is_nil();
+          for(auto it = runtime::fresh_seq(test_vars.unwrap()); !it.is_nil();
               it = runtime::next_in_place(it))
           {
             auto const test_name_obj(runtime::first(it));
@@ -185,7 +185,7 @@ namespace jank::nrepl_server::asio
         auto const var_obj(__rt_ctx->eval_string(
           jtl::immutable_string_view{ resolve_code.data(), resolve_code.size() }));
 
-        if(var_obj.is_nil())
+        if(var_obj.is_none() || var_obj.unwrap().is_nil())
         {
           /* Var not found - create an error result */
           bencode::value::dict result;
@@ -215,8 +215,9 @@ namespace jank::nrepl_server::asio
                 {:results @results
                  :counters @clojure.test/*report-counters*})))";
 
-          auto const test_result(
+          auto const test_result_opt(
             __rt_ctx->eval_string(jtl::immutable_string_view{ run_code.data(), run_code.size() }));
+          auto const test_result(test_result_opt.unwrap());
 
           /* Extract results from the returned map */
           auto const results_kw(__rt_ctx->intern_keyword("results").expect_ok());

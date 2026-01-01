@@ -1,269 +1,463 @@
-#include <CLI/CLI.hpp>
-
 #include <jank/util/cli.hpp>
-#include <jank/util/fmt.hpp>
+#include <jank/util/fmt/print.hpp>
 #include <jank/runtime/module/loader.hpp>
+#include <jank/error/report.hpp>
 
 namespace jank::util::cli
 {
   /* NOLINTNEXTLINE */
   options opts;
 
-  static std::string make_default(std::string const &input)
+  using flag_it = native_vector<jtl::immutable_string>::const_iterator;
+
+  static bool check_flag(flag_it &it,
+                         flag_it const end,
+                         jtl::immutable_string &out,
+                         jtl::immutable_string const &short_flag,
+                         jtl::immutable_string const &long_flag,
+                         bool const needs_value)
   {
-    return "default: " + input;
+    if(*it == long_flag)
+    {
+      ++it;
+      if(needs_value)
+      {
+        if(it == end)
+        {
+          throw util::format("The '{}' flag requires an argument, but one was not provided.",
+                             long_flag);
+        }
+        out = *it;
+      }
+      return true;
+    }
+    else if(!short_flag.empty() && (*it).starts_with(short_flag))
+    {
+      if(needs_value)
+      {
+        out = (*it).substr(short_flag.size());
+        if(out.empty())
+        {
+          ++it;
+          if(it == end)
+          {
+            throw util::format("The '{}' flag requires an argument, but one was not provided.",
+                               short_flag);
+          }
+          out = *it;
+        }
+      }
+      return true;
+    }
+    return false;
   }
 
-  jtl::result<void, int> parse(int const argc, char const **argv)
+  static bool check_flag(flag_it &it,
+                         flag_it const end,
+                         jtl::immutable_string &out,
+                         jtl::immutable_string const &long_flag,
+                         bool const needs_value)
   {
-    CLI::App cli{ "jank compiler" };
+    return check_flag(it, end, out, "", long_flag, needs_value);
+  }
 
-    cli.set_help_flag("-h,--help", "Print this help message and exit.");
+  static jtl::immutable_string
+  get_positional_arg(jtl::immutable_string const &command,
+                     jtl::immutable_string const &name,
+                     native_deque<jtl::immutable_string> &pending_positional_args)
+  {
+    if(pending_positional_args.empty())
+    {
+      throw util::format("Please provide the {} command a {}.", command, name);
+    }
 
-    /* Runtime. */
-    cli.add_option(
-      "--module-path",
-      opts.module_path,
-      util::format(
-        "A {} separated list of directories, JAR files, and ZIP files to search for modules.",
-        runtime::module::loader::module_separator_name));
-    cli.add_flag("--profile", opts.profiler_enabled, "Enable compiler and runtime profiling.");
-    cli.add_flag("--profile-fns",
-                 opts.profiler_fns_enabled,
-                 "Automatically profile all function calls (implies --profile).");
-    cli.add_flag("--profile-core",
-                 opts.profiler_core_enabled,
-                 "Also profile clojure.core functions (implies --profile-fns).");
-    cli.add_flag("--profile-interop",
-                 opts.profiler_interop_enabled,
-                 "Profile cpp/ interop operations like box/unbox (implies --profile).");
-    cli
-      .add_option("--profile-sample",
-                  opts.profiler_sample_rate,
-                  "Sample 1 in N events (e.g., 10=10%, 100=1%). 0 or omit for all events.")
-      ->default_str("0");
-    cli
-      .add_option("--profile-output",
-                  opts.profiler_file,
-                  "The file to write profile entries (will be overwritten).")
-      ->default_str(make_default(opts.profiler_file));
-    cli.add_flag("--perf", opts.perf_profiling_enabled, "Enable Linux perf event sampling.");
-    cli.add_flag("--gc-incremental", opts.gc_incremental, "Enable incremental GC collection.");
-    cli.add_flag(
-      "!--no-jit-cache",
-      opts.jit_cache_enabled,
-      "Disable JIT cache (cache is enabled by default to skip redundant recompilation).");
-    cli.add_flag("--debug", opts.debug, "Enable debug symbol generation for generated code.");
-    cli.add_flag("--direct-call",
-                 opts.direct_call,
-                 "Elides the dereferencing of vars for improved performance.");
-    cli
-      .add_option("-O,--optimization",
-                  opts.optimization_level,
-                  "The optimization level to use for AOT compilation.")
-      /* TODO: This does not validate. */
-      ->check(CLI::Range(0, 3));
+    jtl::immutable_string ret{ pending_positional_args.front() };
+    pending_positional_args.pop_front();
+    return ret;
+  }
 
-    std::map<std::string, codegen_type> const codegen_types{
-      {    "llvm-ir",    codegen_type::llvm_ir },
-      {        "cpp",        codegen_type::cpp },
-      {   "wasm-aot",   codegen_type::wasm_aot },
-      { "wasm-patch", codegen_type::wasm_patch }
+  static bool check_pending_flag(
+    jtl::immutable_string const &long_flag,
+    jtl::immutable_string &out,
+    native_unordered_map<jtl::immutable_string, jtl::immutable_string> &pending_flags)
+  {
+    auto const found{ pending_flags.find(long_flag) };
+    if(found == pending_flags.end())
+    {
+      return false;
+    }
+    out = found->second;
+    pending_flags.erase(found);
+    return true;
+  }
+
+  static void show_help()
+  {
+    /* TODO: Support command help. */
+    /* TODO: Provide examples. */
+    /* TODO: Improve layout and required arg indicators. */
+    /* TODO: Colorize output. */
+    util::println(R"(
+jank compiler {}
+
+The jank compiler is used to evaluate and compile jank, Clojure, and C++ sources.
+
+COMMANDS
+  run                         Load and run a file.
+  compile-module              Compile a module (given its namespace) and its dependencies.
+  repl                        Start up a terminal REPL and optional server.
+  cpp-repl                    Start up a terminal C++ REPL.
+  run-main                    Load and execute -main.
+  compile                     Ahead of time compile project with entrypoint module containing
+                              -main.
+  check-health                Provide a status report on the jank installation.
+
+OPTIONS
+  -h,     --help              Print this help message and exit.
+          --module-path <path>
+                              A colon separated list of directories, JAR files, and ZIP files
+                              to search for modules.
+          --profile           Enable compiler and runtime profiling.
+          --profile-output <path> [default: jank.profile]
+                              The file to write profile entries (will be overwritten).
+          --perf              Enable Linux perf event sampling.
+          --gc-incremental    Enable incremental GC collection.
+          --debug             Enable debug symbol generation for generated code.
+          --direct-call       Elides the dereferencing of vars for improved performance.
+  -O,     --optimization <0 - 3>
+                              The optimization level to use for AOT compilation.
+          --codegen <llvm-ir, cpp, wasm-aot, wasm-patch> [default: cpp]
+                              The type of code generation to use.
+          --save-cpp          Save generated C++ code to a file (useful for AOT/WASM compilation).
+          --save-cpp-path <path>
+                              Path to save generated C++ code.
+          --save-llvm-ir      Save generated LLVM IR to a file (useful for WASM/cross-compilation).
+          --save-llvm-ir-path <path>
+                              Path to save generated LLVM IR code.
+  -I,     --include-dir <path>
+                              Absolute or relative path to the directory for includes
+                              resolution. Can be specified multiple times.
+  -D,     --define-macro <name>
+                              Defines a macro. The value will be 1, if omitted. Can be specified
+                              multiple times.
+  -L,     --library-dir <path>
+                              Absolute or relative path to the directory to search dynamic
+                              libraries in. Can be specified multiple times.
+  -l <lib>                    Library identifiers, absolute or relative paths eg. -lfoo for
+                              libfoo.so or foo.dylib. Can be specified multiple times.
+
+RUN-MAIN SPECIFIC OPTIONS
+          --ios-compile-server <port>
+                              Start iOS compile server on specified port (for remote JIT).
+          --ios-resource-dir <path>
+                              Path to iOS resources (PCH, headers) for compile server.)",
+                  JANK_VERSION);
+    std::exit(1);
+  }
+
+  jtl::result<void, int> parse_opts(int const argc, char const **argv)
+  {
+    auto const flags{ parse_into_vector(argc, argv) };
+
+    static native_unordered_map<jtl::immutable_string, command> valid_commands{
+      {            "run",            command::run },
+      {       "run-main",       command::run_main },
+      {           "repl",           command::repl },
+      {       "cpp-repl",       command::cpp_repl },
+      { "compile-module", command::compile_module },
+      {        "compile",        command::compile },
+      {   "check-health",   command::check_health }
     };
-    cli.add_option("--codegen", opts.codegen, "The type of code generation to use.")
-      ->transform(
-        CLI::CheckedTransformer(codegen_types).description("{llvm-ir,cpp,wasm-aot,wasm-patch}"))
-      ->default_str(make_default(codegen_type_str(opts.codegen)));
-    cli.add_flag("--save-cpp",
-                 opts.save_cpp,
-                 "Save generated C++ code to a file (useful for AOT/WASM compilation).");
-    cli.add_option("--save-cpp-path",
-                   opts.save_cpp_path,
-                   "Path to save generated C++ code (requires --save-cpp or --codegen wasm-aot).");
-    cli.add_flag("--save-llvm-ir",
-                 opts.save_llvm_ir,
-                 "Save generated LLVM IR to a file (useful for WASM/cross-compilation).");
-    cli.add_option("--save-llvm-ir-path",
-                   opts.save_llvm_ir_path,
-                   "Path to save generated LLVM IR code.");
 
-    /* Native dependencies. */
-    cli.add_option("-I,--include-dir",
-                   opts.include_dirs,
-                   "Absolute or relative path to the directory for includes resolution. Can be "
-                   "specified multiple times.");
-    cli.add_option("-L,--library-dir",
-                   opts.library_dirs,
-                   "Absolute or relative path to the directory to search dynamic libraries in. "
-                   "Can be specified multiple times.");
-    cli.add_option("-D,--define-macro",
-                   opts.define_macros,
-                   "Defines macro value, sets to 1 if omitted. Can be specified multiple times.");
-    cli.add_option("-l,--lib",
-                   opts.libs,
-                   "Library identifiers, absolute or relative paths eg. -lfoo for libfoo.so or "
-                   "foo.dylib. Can be specified multiple times.");
-    cli.add_option(
-      "--jit-lib",
-      opts.jit_libs,
-      "Libraries to load into JIT only (not passed to AOT linker). "
-      "Use for symbol resolution during compilation without creating runtime dependency. "
-      "Can be specified multiple times.");
-    cli.add_option("--link-lib",
-                   opts.link_libs,
-                   "Libraries to pass to AOT linker only (not loaded into JIT). "
-                   "Use for static libraries (.a) or libraries only needed at link time. "
-                   "Can be specified multiple times.");
-    cli.add_option("--obj",
-                   opts.object_files,
-                   "Absolute or relative path to object files (.o) to load into JIT. "
-                   "Can be specified multiple times.");
-    cli.add_option("--framework",
-                   opts.frameworks,
-                   "macOS framework to link (e.g., --framework Cocoa). "
-                   "Can be specified multiple times.");
-
-    /* Run subcommand. */
-    auto &cli_run(*cli.add_subcommand("run", "Load and run a file."));
-    cli_run.fallthrough();
-    cli_run.add_option("file", opts.target_file, "The entrypoint file.")
-      ->check(CLI::ExistingFile)
-      ->required();
-
-    /* Compile module subcommand. */
-    auto &cli_compile_module(
-      *cli.add_subcommand("compile-module",
-                          "Compile a module (given its namespace) and its dependencies."));
-    cli_compile_module.fallthrough();
-    cli_compile_module
-      .add_option("--runtime", opts.target_runtime, "The runtime of the compiled program.")
-      ->check(CLI::IsMember({ "dynamic", "static" }))
-      ->default_str(make_default("dynamic"));
-    cli_compile_module
-      .add_option("module", opts.target_module, "Module to compile (must be on the module path).")
-      ->required();
-    cli_compile_module.add_option("-o", opts.output_object_filename, "Output object file name.");
-    cli_compile_module.add_flag(
-      "--list-modules",
-      opts.list_modules,
-      "Print loaded modules in dependency order (for AOT build scripts).");
-
-    /* REPL subcommand. */
-    auto &cli_repl(*cli.add_subcommand("repl", "Start up a terminal REPL and optional server."));
-    cli_repl.fallthrough();
-    cli_repl.add_option("module", opts.target_module, "The entrypoint module.");
-    cli_repl.add_flag("--server", opts.repl_server, "Start an nREPL server.");
-
-    /* C++ REPL subcommand. */
-    auto &cli_cpp_repl(*cli.add_subcommand("cpp-repl", "Start up a terminal C++ REPL."));
-
-    /* Run-main subcommand. */
-    auto &cli_run_main(*cli.add_subcommand("run-main", "Load and execute -main."));
-    cli_run_main.fallthrough();
-    cli_run_main
-      .add_option("module",
-                  opts.target_module,
-                  "The entrypoint module (must be on the module path.")
-      ->required();
-    cli_run_main.add_option("--ios-compile-server",
-                            opts.ios_compile_server_port,
-                            "Start iOS compile server on specified port (for remote JIT).");
-    cli_run_main.add_option("--ios-resource-dir",
-                            opts.ios_resource_dir,
-                            "Path to iOS resources (PCH, headers) for compile server.");
-
-    /* Compile subcommand. */
-    auto &cli_compile(*cli.add_subcommand(
-      "compile",
-      "Ahead of time compile project with entrypoint module containing -main."));
-    cli_compile.fallthrough();
-    cli_compile
-      .add_option("--runtime", opts.target_runtime, "The runtime of the compiled program.")
-      ->check(CLI::IsMember({ "dynamic", "static" }))
-      ->default_str(make_default(opts.target_runtime));
-    cli_compile.add_option("-o", opts.output_filename, "Output executable name.")
-      ->default_str(make_default(opts.output_filename));
-    cli_compile.add_option("module", opts.target_module, "The entrypoint module.")->required();
-
-    /* Health check subcommand. */
-    auto &cli_check_health(
-      *cli.add_subcommand("check-health", "Provide a status report on the jank installation."));
-    cli_check_health.fallthrough();
-
-    cli.require_subcommand(1);
-    cli.failure_message(CLI::FailureMessage::help);
-    cli.allow_extras();
-
+    /* The flow of this is broken into the following steps.
+     *
+     * 1. Parse known flags into changes to the `opts` global
+     * 2. Determine the first positional arg to be the command
+     * 3. Store other positional args to be handled later (pending)
+     * 4. Store unhandled flags to be handled later (pending)
+     * 5. Once we've gone through everything, use the command we have
+     *    to pick apart the pending flags and positional args
+     * 6. Complain about anything left over */
     try
     {
-      cli.parse(argc, argv);
-    }
-    catch(CLI::ParseError const &e)
-    {
-      return err(cli.exit(e));
-    }
+      native_unordered_map<jtl::immutable_string, jtl::immutable_string> pending_flags;
+      native_deque<jtl::immutable_string> pending_positional_args;
+      auto const end{ flags.end() };
+      jtl::immutable_string command;
+      jtl::immutable_string value;
 
-    if(cli.remaining_size() >= 0)
-    {
-      opts.extra_opts = cli.remaining();
-    }
+      for(auto it{ flags.begin() }; it != end; ++it)
+      {
+        /**** These are all of the global flags which can apply to any command. ****/
+        if(check_flag(it, end, value, "--", false))
+        {
+          /* This implies that everything coming after is meant for the running program. */
+          std::copy(it, end, std::back_inserter(opts.extra_opts));
+          break;
+        }
+        else if(check_flag(it, end, value, "-h", "--help", false))
+        {
+          show_help();
+        }
+        else if(check_flag(it, end, value, "--module-path", true))
+        {
+          opts.module_path = value;
+        }
+        else if(check_flag(it, end, value, "--profile", false))
+        {
+          opts.profiler_enabled = true;
+        }
+        else if(check_flag(it, end, value, "--profile-output", true))
+        {
+          opts.profiler_file = value;
+        }
+        else if(check_flag(it, end, value, "--perf", false))
+        {
+          opts.perf_profiling_enabled = true;
+        }
+        else if(check_flag(it, end, value, "--direct-call", false))
+        {
+          opts.direct_call = true;
+        }
+        else if(check_flag(it, end, value, "-O", "--optimization", true))
+        {
+          if(value == "0")
+          {
+            opts.optimization_level = 0;
+          }
+          else if(value == "1")
+          {
+            opts.optimization_level = 1;
+          }
+          else if(value == "2")
+          {
+            opts.optimization_level = 2;
+          }
+          else if(value == "3")
+          {
+            opts.optimization_level = 3;
+          }
+          else
+          {
+            throw util::format("Invalid optimization level '{}'.", value);
+          }
+        }
+        else if(check_flag(it, end, value, "--codegen", true))
+        {
+          if(value == "cpp")
+          {
+            opts.codegen = codegen_type::cpp;
+          }
+          else if(value == "llvm-ir")
+          {
+            opts.codegen = codegen_type::llvm_ir;
+          }
+          else if(value == "wasm-aot")
+          {
+            opts.codegen = codegen_type::wasm_aot;
+          }
+          else if(value == "wasm-patch")
+          {
+            opts.codegen = codegen_type::wasm_patch;
+          }
+          else
+          {
+            throw util::format("Invalid codegen type '{}'.", value);
+          }
+        }
+        else if(check_flag(it, end, value, "--save-cpp", false))
+        {
+          opts.save_cpp = true;
+        }
+        else if(check_flag(it, end, value, "--save-cpp-path", true))
+        {
+          opts.save_cpp_path = value;
+        }
+        else if(check_flag(it, end, value, "--save-llvm-ir", false))
+        {
+          opts.save_llvm_ir = true;
+        }
+        else if(check_flag(it, end, value, "--save-llvm-ir-path", true))
+        {
+          opts.save_llvm_ir_path = value;
+        }
+        else if(check_flag(it, end, value, "-I", "--include-dir", true))
+        {
+          opts.include_dirs.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "-D", "--define-macro", true))
+        {
+          opts.define_macros.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "-L", "--library-dir", true))
+        {
+          opts.library_dirs.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "-l", "--link", true))
+        {
+          opts.libs.emplace_back(value);
+        }
 
-    if(cli.got_subcommand(&cli_run))
-    {
-      opts.command = command::run;
-    }
-    else if(cli.got_subcommand(&cli_compile_module))
-    {
-      opts.command = command::compile_module;
-    }
-    else if(cli.got_subcommand(&cli_repl))
-    {
-      opts.command = command::repl;
-    }
-    else if(cli.got_subcommand(&cli_cpp_repl))
-    {
-      opts.command = command::cpp_repl;
-    }
-    else if(cli.got_subcommand(&cli_run_main))
-    {
-      opts.command = command::run_main;
-    }
-    else if(cli.got_subcommand(&cli_compile))
-    {
-      opts.command = command::compile;
-    }
-    else if(cli.got_subcommand(&cli_check_health))
-    {
-      opts.command = command::check_health;
-    }
+        /**** These are command-specific flags which we will store until we know the command. ****/
+        else if(check_flag(it, end, value, "-o", "--output", true))
+        {
+          pending_flags["--output"] = value;
+        }
+        else if(check_flag(it, end, value, "--output-target", true))
+        {
+          pending_flags["--output-target"] = value;
+        }
+        else if(check_flag(it, end, value, "--runtime", true))
+        {
+          pending_flags["--runtime"] = value;
+        }
+        else if(check_flag(it, end, value, "--ios-compile-server", true))
+        {
+          pending_flags["--ios-compile-server"] = value;
+        }
+        else if(check_flag(it, end, value, "--ios-resource-dir", true))
+        {
+          pending_flags["--ios-resource-dir"] = value;
+        }
+        else if(command.empty())
+        {
+          command = *it;
+          auto const found_command{ valid_commands.find(command) };
+          if(found_command == valid_commands.end())
+          {
+            throw util::format("Invalid command '{}'.", command);
+          }
+          opts.command = found_command->second;
+        }
+        else
+        {
+          pending_positional_args.emplace_back(*it);
+        }
+      }
 
-    /* --profile-core implies --profile-fns */
-    if(opts.profiler_core_enabled)
-    {
-      opts.profiler_fns_enabled = true;
-    }
+      if(command.empty())
+      {
+        show_help();
+      }
 
-    /* --profile-fns implies --profile */
-    if(opts.profiler_fns_enabled)
-    {
-      opts.profiler_enabled = true;
-    }
+      /* Now process all pending flags, depending on our command. */
+      if(command == "run")
+      {
+        opts.target_file = get_positional_arg(command, "file", pending_positional_args);
+      }
+      else if(command == "run-main")
+      {
+        opts.target_module = get_positional_arg(command, "module", pending_positional_args);
+        if(check_pending_flag("--ios-compile-server", value, pending_flags))
+        {
+          try
+          {
+            opts.ios_compile_server_port = static_cast<uint16_t>(std::stoi(value.c_str()));
+          }
+          catch(...)
+          {
+            throw util::format("Invalid port number for --ios-compile-server: '{}'", value);
+          }
+        }
+        if(check_pending_flag("--ios-resource-dir", value, pending_flags))
+        {
+          opts.ios_resource_dir = value;
+        }
+      }
+      else if(command == "repl")
+      {
+        if(!pending_positional_args.empty())
+        {
+          opts.target_module = get_positional_arg(command, "module", pending_positional_args);
+        }
+      }
+      else if(command == "compile-module" || command == "compile")
+      {
+        opts.target_module = get_positional_arg(command, "module", pending_positional_args);
+        if(check_pending_flag("--output", value, pending_flags))
+        {
+          if(command == "compile-module")
+          {
+            opts.output_module_filename = value;
+          }
+          else
+          {
+            opts.output_filename = value;
+          }
+        }
+        if(check_pending_flag("--output-target", value, pending_flags))
+        {
+          if(value == "llvm-ir")
+          {
+            opts.output_target = compilation_target::llvm_ir;
+          }
+          else if(value == "cpp")
+          {
+            opts.output_target = compilation_target::cpp;
+          }
+          else if(value == "object")
+          {
+            opts.output_target = compilation_target::object;
+          }
+          else
+          {
+            throw util::format("Invalid output type '{}'.", value);
+          }
+        }
+        if(check_pending_flag("--runtime", value, pending_flags))
+        {
+          opts.target_file = value;
+        }
 
-    /* --profile-interop implies --profile */
-    if(opts.profiler_interop_enabled)
+        if(command == "compile" && opts.output_target == compilation_target::unspecified)
+        {
+          opts.output_target = compilation_target::object;
+        }
+      }
+
+      /* If we have any more pending flags at this point, they don't belong. */
+      if(!pending_flags.empty())
+      {
+        jtl::string_builder sb;
+        util::format_to(sb, "These flags were not used:");
+        for(auto const &flag : pending_flags)
+        {
+          util::format_to(sb, " {}", flag.first);
+          if(!flag.second.empty())
+          {
+            util::format_to(sb, " {}", flag.second);
+          }
+        }
+        error::warn(sb.release());
+      }
+      else if(!pending_positional_args.empty())
+      {
+        jtl::string_builder sb;
+        util::format_to(sb, "Extra positional args:");
+        for(auto const &arg : pending_positional_args)
+        {
+          util::format_to(sb, " {}", arg);
+        }
+        throw sb.release();
+      }
+    }
+    catch(jtl::immutable_string const &msg)
     {
-      opts.profiler_enabled = true;
+      util::println(stderr, "error: {}", msg);
+      return err(1);
     }
 
     return ok();
   }
 
-  std::vector<std::string> parse_empty(int const argc, char const **argv)
+  native_vector<jtl::immutable_string> parse_into_vector(int const argc, char const **argv)
   {
-    CLI::App cli{ "jank default cli" };
-    cli.allow_extras();
-    cli.parse(argc, argv);
-
-    return cli.remaining();
+    native_vector<jtl::immutable_string> ret;
+    ret.reserve(argc - 1);
+    for(int i{ 1 }; i < argc; ++i)
+    {
+      ret.emplace_back(argv[i]);
+    }
+    return ret;
   }
 }

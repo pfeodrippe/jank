@@ -52,18 +52,18 @@ extern "C"
   jank_object_ref jank_eval(jank_object_ref const s)
   {
     auto const s_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(s)));
-    return __rt_ctx->eval_string(s_obj->data).erase();
+    return __rt_ctx->eval_string(s_obj->data).erase().data;
   }
 
   jank_object_ref jank_read_string(jank_object_ref const s)
   {
     auto const s_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(s)));
-    return __rt_ctx->read_string(s_obj->data).erase();
+    return __rt_ctx->read_string(s_obj->data).erase().data;
   }
 
   jank_object_ref jank_read_string_c(char const * const s)
   {
-    return __rt_ctx->read_string(s).erase();
+    return __rt_ctx->read_string(s).erase().data;
   }
 
   /* Evaluate a string and return the result as a code string.
@@ -88,20 +88,20 @@ extern "C"
     __rt_ctx->intern_ns(ns_obj->data);
 
     auto const name_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(name)));
-    return __rt_ctx->intern_var(ns_obj->data, name_obj->data).expect_ok().erase();
+    return __rt_ctx->intern_var(ns_obj->data, name_obj->data).expect_ok().erase().data;
   }
 
   jank_object_ref jank_var_intern_c(char const * const ns, char const * const name)
   {
     __rt_ctx->intern_ns(ns);
-    return __rt_ctx->intern_var(ns, name).expect_ok().erase();
+    return __rt_ctx->intern_var(ns, name).expect_ok().erase().data;
   }
 
   jank_object_ref jank_var_bind_root(jank_object_ref const var, jank_object_ref const val)
   {
     auto const var_obj(try_object<runtime::var>(reinterpret_cast<object *>(var)));
     auto const val_obj(reinterpret_cast<object *>(val));
-    return var_obj->bind_root(val_obj).erase();
+    return var_obj->bind_root(val_obj).erase().data;
   }
 
   jank_object_ref jank_keyword_intern(jank_object_ref const ns, jank_object_ref const name)
@@ -109,27 +109,27 @@ extern "C"
     if(!ns)
     {
       auto const name_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(name)));
-      return __rt_ctx->intern_keyword(name_obj->data).expect_ok().erase();
+      return __rt_ctx->intern_keyword(name_obj->data).expect_ok().erase().data;
     }
     auto const ns_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(ns)));
     auto const name_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(name)));
-    return __rt_ctx->intern_keyword(ns_obj->data, name_obj->data).expect_ok().erase();
+    return __rt_ctx->intern_keyword(ns_obj->data, name_obj->data).expect_ok().erase().data;
   }
 
   jank_object_ref jank_deref(jank_object_ref const o)
   {
-    return runtime::deref(reinterpret_cast<object *>(o)).erase();
+    return runtime::deref(reinterpret_cast<object *>(o)).erase().data;
   }
 
   jank_object_ref jank_call0(jank_object_ref const f)
   {
-    return runtime::dynamic_call(reinterpret_cast<object *>(f)).erase();
+    return runtime::dynamic_call(reinterpret_cast<object *>(f)).erase().data;
   }
 
   jank_object_ref jank_call1(jank_object_ref const f, jank_object_ref const a1)
   {
     return runtime::dynamic_call(reinterpret_cast<object *>(f), reinterpret_cast<object *>(a1))
-      .erase();
+      .erase().data;
   }
 
   jank_object_ref
@@ -138,7 +138,7 @@ extern "C"
     return runtime::dynamic_call(reinterpret_cast<object *>(f),
                                  reinterpret_cast<object *>(a1),
                                  reinterpret_cast<object *>(a2))
-      .erase();
+      .erase().data;
   }
 
   jank_object_ref jank_call3(jank_object_ref const f,
@@ -150,7 +150,7 @@ extern "C"
                                  reinterpret_cast<object *>(a1),
                                  reinterpret_cast<object *>(a2),
                                  reinterpret_cast<object *>(a3))
-      .erase();
+      .erase().data;
   }
 
   jank_object_ref jank_call4(jank_object_ref const f,
@@ -164,7 +164,7 @@ extern "C"
                                  reinterpret_cast<object *>(a2),
                                  reinterpret_cast<object *>(a3),
                                  reinterpret_cast<object *>(a4))
-      .erase();
+      .erase().data;
   }
 
   jank_object_ref jank_call5(jank_object_ref const f,
@@ -180,7 +180,7 @@ extern "C"
                                  reinterpret_cast<object *>(a3),
                                  reinterpret_cast<object *>(a4),
                                  reinterpret_cast<object *>(a5))
-      .erase();
+      .erase().data;
   }
 
   jank_object_ref jank_call6(jank_object_ref const f,
@@ -198,12 +198,12 @@ extern "C"
                                  reinterpret_cast<object *>(a4),
                                  reinterpret_cast<object *>(a5),
                                  reinterpret_cast<object *>(a6))
-      .erase();
+      .erase().data;
   }
 
   jank_object_ref jank_integer_create(jank_i64 const i)
   {
-    return make_box(i).erase();
+    return make_box(i).erase().data;
   }
 
   jank_i64 jank_to_integer(jank_object_ref const o)
@@ -213,7 +213,7 @@ extern "C"
 
   jank_object_ref jank_real_create(jank_f64 const d)
   {
-    return make_box(d).erase();
+    return make_box(d).erase().data;
   }
 
   jank_f64 jank_to_real(jank_object_ref const o)
@@ -249,7 +249,7 @@ extern "C"
 
   jank_object_ref jank_string_create(char const * const s)
   {
-    return make_box(s).erase();
+    return make_box(s).erase().data;
   }
 
   char const *jank_to_string(jank_object_ref const o)
@@ -261,7 +261,7 @@ extern "C"
   {
     auto const ns_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(ns)));
     auto const name_obj(try_object<obj::persistent_string>(reinterpret_cast<object *>(name)));
-    return make_box<obj::symbol>(ns_obj->data, name_obj->data).erase();
+    return make_box<obj::symbol>(ns_obj->data, name_obj->data).erase().data;
   }
 
   jank_object_ref jank_var_set_dynamic(jank_object_ref const var, jank_object_ref const dynamic)
@@ -284,7 +284,7 @@ extern "C"
     auto const pv = v.persistent();
     return make_box<obj::persistent_list>(
              runtime::detail::native_persistent_list{ pv.begin(), pv.end() })
-      .erase();
+      .erase().data;
   }
 
   jank_object_ref jank_vector_create(jank_u64 const size, ...)
@@ -297,7 +297,7 @@ extern "C"
       v.push_back(reinterpret_cast<object *>(va_arg(args, jank_object_ref)));
     }
     va_end(args);
-    return make_box<obj::persistent_vector>(v.persistent()).erase();
+    return make_box<obj::persistent_vector>(v.persistent()).erase().data;
   }
 
   jank_object_ref jank_map_create(jank_u64 const pairs, ...)
@@ -312,7 +312,7 @@ extern "C"
       m.set(key, val);
     }
     va_end(args);
-    return make_box<obj::persistent_hash_map>(m.persistent()).erase();
+    return make_box<obj::persistent_hash_map>(m.persistent()).erase().data;
   }
 
   jank_object_ref jank_set_create(jank_u64 const size, ...)
@@ -325,7 +325,7 @@ extern "C"
       s.insert(reinterpret_cast<object *>(va_arg(args, jank_object_ref)));
     }
     va_end(args);
-    return make_box<obj::persistent_hash_set>(s.persistent()).erase();
+    return make_box<obj::persistent_hash_set>(s.persistent()).erase().data;
   }
 
   jank_arity_flags jank_function_build_arity_flags(jank_u8 const highest_fixed_arity,
@@ -339,7 +339,7 @@ extern "C"
 
   jank_object_ref jank_function_create(jank_arity_flags const arity_flags)
   {
-    return make_box<obj::jit_function>(arity_flags).erase();
+    return make_box<obj::jit_function>(arity_flags).erase().data;
   }
 
   void
@@ -478,7 +478,7 @@ extern "C"
 
   jank_object_ref jank_pointer_create(void * const p)
   {
-    return make_box<obj::native_pointer_wrapper>(p).erase();
+    return make_box<obj::native_pointer_wrapper>(p).erase().data;
   }
 
   void *jank_to_pointer(jank_object_ref const o)
@@ -488,17 +488,17 @@ extern "C"
 
   jank_object_ref jank_const_nil()
   {
-    return jank_nil.erase();
+    return jank_nil().erase().data;
   }
 
   jank_object_ref jank_const_true()
   {
-    return jank_true.erase();
+    return jank_true().erase().data;
   }
 
   jank_object_ref jank_const_false()
   {
-    return jank_false.erase();
+    return jank_false().erase().data;
   }
 
   jank_bool jank_truthy(jank_object_ref const o)
@@ -519,7 +519,7 @@ extern "C"
         invoke(callback, context, reinterpret_cast<jank_object_ref const *>(args), size));
     };
     return make_box<obj::native_function_wrapper>(obj::detail::function_type{ std::move(fn) })
-      .erase();
+      .erase().data;
   }
 
   void *jank_native_function_wrapper_get_pointer(jank_object_ref const /* o */)

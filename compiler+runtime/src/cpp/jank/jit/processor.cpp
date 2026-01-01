@@ -30,6 +30,7 @@
 #include <jank/runtime/context.hpp>
 #include <jank/profile/time.hpp>
 #include <jank/error/system.hpp>
+#include <jank/error/codegen.hpp>
 
 namespace jank::jit
 {
@@ -60,7 +61,7 @@ namespace jank::jit
   static jtl::immutable_string default_shared_lib_name(jtl::immutable_string const &lib)
 #if defined(__APPLE__)
   {
-    return util::format("{}.dylib", lib);
+    return util::format("lib{}.dylib", lib);
   }
 #elif defined(__linux__)
   {
@@ -153,6 +154,19 @@ namespace jank::jit
       throw error::system_clang_executable_not_found();
     }
     auto const clang_dir{ std::filesystem::path{ clang_path_str.unwrap().c_str() }.parent_path() };
+
+    /* On macOS, we've seen some nasty issues with FP_NAN, FLT_MAX, and other C stdlib defines
+     * not getting picked up since Clang is defaulting to the system libc++ instead of our
+     * preferred libc++. We get around that by telling Clang to not add stdandard include paths
+     * and we instead add our own. Outside of macOS, we don't use libc++, so this doesn't make
+     * sense to have. */
+    if constexpr(jtl::current_platform == jtl::platform::macos_like)
+    {
+      args.emplace_back("-nostdinc++");
+      args.emplace_back("-I");
+      args.emplace_back(strdup((clang_dir / "../include/c++/v1").c_str()));
+    }
+
     args.emplace_back("-I");
     args.emplace_back(strdup((clang_dir / "../include").c_str()));
 
@@ -200,6 +214,9 @@ namespace jank::jit
       args.emplace_back(strdup(pch_path_str.c_str()));
     }
 #endif
+
+    args.emplace_back("-w");
+    args.emplace_back("-Wno-c++11-narrowing");
 
     args.emplace_back("-w");
     args.emplace_back("-Wno-c++11-narrowing");
@@ -317,14 +334,19 @@ namespace jank::jit
 
   void processor::eval_string(jtl::immutable_string const &s) const
   {
+    eval_string(s, nullptr);
+  }
+
+  void processor::eval_string(jtl::immutable_string const &s, clang::Value * const ret) const
+  {
     profile::timer const timer{ "jit eval_string" };
     auto const &formatted{ s };
     //auto const &formatted{ util::format_cpp_source(s).expect_ok() };
     //util::println("// eval_string:\n{}\n", formatted);
-    auto err(interpreter->ParseAndExecute({ formatted.data(), formatted.size() }));
+    auto err(interpreter->ParseAndExecute({ formatted.data(), formatted.size() }, ret));
     if(err)
     {
-      llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");
+      llvm::logAllUnhandledErrors(jtl::move(err), llvm::errs(), "error: ");
       llvm::errs().flush();
       /* Include the code in the error message for better debugging */
       auto const preview_len{ std::min<size_t>(formatted.size(), 500) };

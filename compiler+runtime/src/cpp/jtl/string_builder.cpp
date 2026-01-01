@@ -15,9 +15,11 @@ namespace jtl
   static void realloc(string_builder &sb, usize const required)
   {
     auto const new_capacity{ std::bit_ceil(required) };
-    auto const new_data{ reinterpret_cast<char *>(GC_malloc_atomic(new_capacity)) };
+    /* NOLINTNEXTLINE(cppcoreguidelines-no-malloc) */
+    auto const new_data{ reinterpret_cast<char *>(malloc(new_capacity)) };
     string_builder::traits_type::copy(new_data, sb.buffer, sb.pos);
-    GC_free(sb.buffer);
+    /* NOLINTNEXTLINE(cppcoreguidelines-no-malloc) */
+    free(sb.buffer);
     sb.buffer = new_data;
     sb.capacity = new_capacity;
   }
@@ -99,7 +101,8 @@ namespace jtl
 
   string_builder::~string_builder()
   {
-    GC_free(buffer);
+    /* NOLINTNEXTLINE(cppcoreguidelines-no-malloc) */
+    free(buffer);
   }
 
   string_builder &string_builder::operator()(bool const d) &
@@ -395,6 +398,11 @@ namespace jtl
   usize string_builder::size() const
   {
     return pos;
+  }
+
+  bool string_builder::empty() const
+  {
+    return pos == 0;
   }
 
   jtl::immutable_string string_builder::release()

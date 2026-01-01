@@ -157,22 +157,48 @@ namespace jank::codegen
     jtl::immutable_string module_init_str(jtl::immutable_string const &module);
     void emit_native_header_includes();
 
+    void format_elided_var(jtl::immutable_string const &start,
+                           jtl::immutable_string const &end,
+                           jtl::immutable_string const &ret_tmp,
+                           native_vector<analyze::expression_ref> const &arg_exprs,
+                           analyze::expr::function_arity const &fn_arity,
+                           bool ret_box_needed);
     void format_dynamic_call(jtl::immutable_string const &source_tmp,
                              jtl::immutable_string const &ret_tmp,
                              native_vector<analyze::expression_ref> const &arg_exprs,
                              analyze::expr::function_arity const &fn_arity);
+    void format_direct_call(jtl::immutable_string const &source_tmp,
+                            jtl::immutable_string const &ret_tmp,
+                            native_vector<analyze::expression_ref> const &arg_exprs,
+                            analyze::expr::function_arity const &fn_arity);
 
     analyze::expr::function_ref root_fn;
     jtl::immutable_string module;
 
     compilation_target target{};
-    runtime::obj::symbol struct_name;
+    jtl::immutable_string struct_name;
+    jtl::string_builder cpp_raw_buffer;
+    jtl::string_builder module_header_buffer;
+    jtl::string_builder module_footer_buffer;
     jtl::string_builder deps_buffer;
     jtl::string_builder header_buffer;
     jtl::string_builder body_buffer;
     jtl::string_builder footer_buffer;
     jtl::string_builder expression_buffer;
     jtl::immutable_string expression_fn_name;
+
+    struct lifted_var
+    {
+      jtl::immutable_string native_name;
+      bool owned{};
+    };
+
+    native_unordered_map<jtl::immutable_string, lifted_var> lifted_vars;
+    native_unordered_map<runtime::object_ref,
+                         jtl::immutable_string,
+                         std::hash<runtime::object_ref>,
+                         runtime::very_equal_to>
+      lifted_constants;
     bool generated_declaration{};
     bool generated_expression{};
     native_set<jtl::immutable_string> emitted_function_codes;

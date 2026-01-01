@@ -55,6 +55,8 @@ option(jank_target_wasm "Experimental wasm32-unknown-emscripten build" OFF)
 option(jank_target_ios "Build for iOS (arm64-apple-ios)" OFF)
 option(jank_ios_jit "Enable JIT on iOS (requires iOS LLVM build, dev only)" OFF)
 option(jank_debug_gc "Enable GC debug assertions" OFF)
+option(jank_profile_gc "Enable GC profiling (via massif or heaptrack)" OFF)
+option(jank_force_phase_2 "Force the linking of core libs into the jank binary" OFF)
 set(jank_sanitize "none" CACHE STRING "The type of Clang sanitization to use (or none)")
 set(jank_resource_dir
   "../lib/jank/${CMAKE_PROJECT_VERSION}"
@@ -163,7 +165,7 @@ else()
     jank_aot_compiler_flags
     -Wall -Wextra -Wpedantic
     -Wfloat-equal -Wuninitialized -Wswitch-enum -Wnon-virtual-dtor
-    -Wold-style-cast -Wno-gnu-case-range -Wno-c99-designator
+    -Wold-style-cast -Wno-gnu-case-range -Wno-c99-designator -Wno-c2y-extensions
     -Wno-gnu-conditional-omitted-operand
     -Wno-implicit-fallthrough
     -Wno-covered-switch-default
@@ -216,6 +218,8 @@ else()
   set(
     jank_common_compiler_flags
     -std=gnu++20
+    # https://groups.google.com/g/llvm-dev/c/W-OweiAjDcU?pli=1
+    -femulated-tls
     -DIMMER_HAS_LIBGC=1 -DIMMER_TAGGED_NODE=0 -DHAVE_CXX14=1
     -DCPPINTEROP_USE_REPL
     -DFOLLY_HAVE_JEMALLOC=0 -DFOLLY_HAVE_TCMALLOC=0 -DFOLLY_ASSUME_NO_JEMALLOC=1 -DFOLLY_ASSUME_NO_TCMALLOC=1
@@ -230,6 +234,8 @@ set(
   )
 
 if (NOT jank_local_clang)
+  # On macOS, we need to link to LLVM's custom libunwind, instead of the system's. Otherwise,
+  # we're unable to catch exceptions thrown across JIT compiled frames.
   list(APPEND jank_linker_flags -L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/c++ -L/opt/homebrew/opt/llvm/lib/unwind)
 endif ()
 
@@ -255,8 +261,18 @@ if(jank_target_ios)
   list(APPEND jank_common_compiler_flags -Wno-mismatched-tags -Wno-invalid-offsetof)
 endif()
 
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR jank_force_phase_2)
   set(jank_enable_phase_2 ON)
+else()
+  set(jank_enable_phase_2 OFF)
+endif()
+
+if(jank_enable_phase_2)
+  set(jank_clojure_core_output "${CMAKE_BINARY_DIR}/core-libs/clojure/core.cpp")
+  set(jank_clojure_core_output_artifact "${CMAKE_BINARY_DIR}/CMakeFiles/jank_exe_phase_2.dir/core-libs/clojure/core.cpp.o")
+else()
+  set(jank_clojure_core_output "${CMAKE_BINARY_DIR}/core-libs/clojure/core.o")
+  set(jank_clojure_core_output_artifact "${jank_clojure_core_output}")
 endif()
 
 if(jank_target_wasm OR jank_target_ios)
@@ -471,6 +487,41 @@ if(NOT jank_target_wasm AND NOT jank_target_ios)
   # ---- libnanobench.a ----
 endif()
 
+list(APPEND jank_common_compiler_flags
+  -DJANK_RESOURCE_DIR="${jank_resource_dir}"
+  -DJANK_CLANG_PATH="${CMAKE_CXX_COMPILER}"
+  -DJANK_CLANG_MAJOR_VERSION="${CLANG_VERSION_MAJOR}"
+  -DJANK_CLANG_RESOURCE_DIR="${clang_resource_dir}"
+)
+
+# Platform-specific filtering of system include paths for JIT flags
+# On macOS, filter out SDK paths that should come from -isysroot at JIT time
+# This prevents baking absolute SDK paths into the binary's JIT flags
+set(clang_jit_include_flags "${clang_system_include_flags}")
+if(APPLE)
+  set(_filtered_jit_flags "")
+  foreach(flag ${clang_system_include_flags})
+    if(NOT flag MATCHES "/SDKs/")
+      list(APPEND _filtered_jit_flags "${flag}")
+    endif()
+  endforeach()
+  set(clang_jit_include_flags "${_filtered_jit_flags}")
+endif()
+
+set(
+  jank_jit_compiler_flags
+  # We don't actually want to see any warnings for JIT compiled code.
+  -w
+  -fwrapv
+  -fno-stack-protector
+  -fPIC
+  -Xclang -fno-validate-pch
+  -Xclang -fno-pch-timestamp
+  ${LLVM_DEFINITIONS_LIST}
+  ${clang_jit_include_flags}
+)
+# ---- Clang JIT environment ----
+
 # ---- libjankzip.a ----
 
 set(
@@ -530,6 +581,7 @@ set(jank_lib_standalone_deps
   jankzip_lib
   bdwgc::gc
 )
+
 if(NOT jank_target_wasm AND NOT jank_target_ios)
   list(APPEND jank_lib_standalone_deps Boost::multiprecision folly_lib bdwgc::gctba)
 endif()
@@ -543,6 +595,16 @@ if(NOT jank_no_jit)
   endif()
 endif()
 
+# jank compiles in two phases. The first phase builds the compiler+runtime into a binary
+# called jank-phase-1. We then we this compiler to build the core libs (like clojure.core)
+# into cpp files. We then compile those and link them into a new binary which is just
+# called jank. This bakes in the core libraries so they're very fast to load, but of
+# course it means that updating a core library means updating the whole jank binary.
+#
+# For debug builds, we don't bother building the second phase and we just create a symlink
+# called jank which points at jank-phase-1. This makes iteration a little faster, at the
+# cost of jank's startup being a little slower, since it's loading the core libs via their
+# object files, rather than having them baked in.
 if(NOT jank_target_wasm AND NOT jank_target_ios)
   add_custom_command(
     DEPENDS ${jank_lib_standalone_deps}
@@ -558,8 +620,7 @@ if(NOT jank_target_wasm AND NOT jank_target_ios)
   )
 
   add_custom_command(
-    DEPENDS ${jank_lib_standalone_deps}
-            jank_core_libraries
+    DEPENDS ${jank_lib_standalone_deps} jank_exe_phase_2
     OUTPUT ${CMAKE_BINARY_DIR}/libjank-standalone.a
     COMMAND_EXPAND_LISTS
     VERBATIM
@@ -1387,10 +1448,15 @@ if(jank_enable_phase_2)
   add_executable(
     jank_exe_phase_2
     "$<TARGET_PROPERTY:jank_exe_phase_1,SOURCES>"
+    ${jank_clojure_core_output}
   )
   add_executable(jank::exe ALIAS jank_exe_phase_2)
-
   set_property(TARGET jank_exe_phase_2 PROPERTY OUTPUT_NAME jank)
+
+  # Our generated code is not as precisely written as hand-written C++, so we ignore various
+  # warnings and skip linting.
+  set_source_files_properties(${jank_clojure_core_output} PROPERTIES COMPILE_FLAGS "-w -Wno-c++11-narrowing")
+  set_source_files_properties(${jank_clojure_core_output} PROPERTIES SKIP_LINTING ON)
 
   # Symbol exporting for JIT.
   set_target_properties(jank_exe_phase_2 PROPERTIES ENABLE_EXPORTS 1)
@@ -1409,7 +1475,7 @@ if(jank_enable_phase_2)
 
   jank_hook_llvm(jank_exe_phase_2)
 
-  add_dependencies(jank_exe_phase_2 jank_lib_standalone_phase_2 jank_core_libraries)
+  add_dependencies(jank_exe_phase_2 jank_core_libraries)
 
   #set_target_properties(jank_exe_phase_2 PROPERTIES LINK_FLAGS_RELEASE "-s")
 else()
@@ -1455,6 +1521,8 @@ if(jank_test)
     test/cpp/jank/runtime/obj/persistent_list.cpp
     test/cpp/jank/runtime/obj/persistent_string.cpp
     test/cpp/jank/runtime/obj/persistent_vector.cpp
+    test/cpp/jank/runtime/obj/persistent_array_map.cpp
+    test/cpp/jank/runtime/obj/transient_array_map.cpp
     test/cpp/jank/runtime/obj/range.cpp
     test/cpp/jank/runtime/obj/integer_range.cpp
     test/cpp/jank/runtime/obj/repeat.cpp
@@ -1472,6 +1540,11 @@ if(jank_test)
   )
   add_executable(jank::test_exe ALIAS jank_test_exe)
   add_dependencies(jank_test_exe jank_exe_phase_1 jank_core_libraries)
+
+  if(jank_enable_phase_2)
+    target_sources(jank_test_exe PUBLIC ${jank_clojure_core_output})
+    target_compile_options(jank_test_exe PUBLIC -DJANK_PHASE_2)
+  endif()
 
   set_property(TARGET jank_test_exe PROPERTY OUTPUT_NAME jank-test)
 

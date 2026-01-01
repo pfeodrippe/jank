@@ -123,11 +123,12 @@ namespace jank::nrepl_server::asio
       std::vector<std::string> test_names;
       try
       {
-        auto const test_vars(__rt_ctx->eval_string(
+        auto const test_vars_opt(__rt_ctx->eval_string(
           jtl::immutable_string_view{ find_tests_code.data(), find_tests_code.size() }));
 
-        if(!test_vars.is_nil())
+        if(test_vars_opt.is_some() && !test_vars_opt.unwrap().is_nil())
         {
+          auto const test_vars(test_vars_opt.unwrap());
           for(auto it = runtime::fresh_seq(test_vars); !it.is_nil();
               it = runtime::next_in_place(it))
           {
@@ -177,8 +178,9 @@ namespace jank::nrepl_server::asio
                 {:results @results
                  :counters @clojure.test/*report-counters*})))";
 
-          auto const test_result(
+          auto const test_result_opt(
             __rt_ctx->eval_string(jtl::immutable_string_view{ run_code.data(), run_code.size() }));
+          auto const test_result(test_result_opt.unwrap());
 
           /* Extract results from the returned map */
           auto const results_kw(__rt_ctx->intern_keyword("results").expect_ok());

@@ -80,15 +80,15 @@ namespace jank::runtime
 
     return visit_object(
       [](auto const typed_m) -> object_ref {
-        using T = typename decltype(typed_m)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_m)>::value_type;
 
         if constexpr(behavior::metadatable<T>)
         {
-          return typed_m->meta.unwrap_or(jank_nil);
+          return typed_m->meta.unwrap_or(jank_nil());
         }
         else
         {
-          return jank_nil;
+          return jank_nil();
         }
       },
       m);
@@ -98,7 +98,7 @@ namespace jank::runtime
   {
     return visit_object(
       [&o](auto const typed_o, object_ref const m) -> object_ref {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         if constexpr(behavior::metadatable<T>)
         {
@@ -124,7 +124,7 @@ namespace jank::runtime
   {
     return visit_object(
       [](auto const typed_o, object_ref const m) -> object_ref {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         if constexpr(behavior::metadatable<T>)
         {
@@ -143,7 +143,7 @@ namespace jank::runtime
   {
     return visit_object(
       [](auto const typed_o, object_ref const m) -> object_ref {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         if constexpr(behavior::metadatable<T>)
         {
@@ -166,23 +166,23 @@ namespace jank::runtime
   {
     using namespace jank::runtime;
 
-    auto const meta(o.unwrap_or(jank_nil));
+    auto const meta(o.unwrap_or(jank_nil()));
     auto const source(get(meta, __rt_ctx->intern_keyword("jank/source").expect_ok()));
-    if(source == jank_nil)
+    if(source == jank_nil())
     {
-      return read::source::unknown;
+      return read::source::unknown();
     }
 
     auto const file(get(source, __rt_ctx->intern_keyword("file").expect_ok()));
-    jtl::immutable_string file_str{ read::no_source_path };
-    if(file != jank_nil)
+    if(file == jank_nil())
     {
-      file_str = runtime::to_string(file);
+      return read::source::unknown();
     }
+    jtl::immutable_string const file_str{ runtime::to_string(file) };
 
     auto const module(get(source, __rt_ctx->intern_keyword("module").expect_ok()));
     jtl::immutable_string module_str{ read::no_source_path };
-    if(module != jank_nil)
+    if(module != jank_nil())
     {
       module_str = runtime::to_string(module);
     }
@@ -217,15 +217,15 @@ namespace jank::runtime
   read::source object_source(object_ref const o)
   {
     auto const meta(runtime::meta(o));
-    if(meta == jank_nil)
+    if(meta == jank_nil())
     {
-      return read::source::unknown;
+      return read::source::unknown();
     }
     auto source(meta_source(meta));
-    if(source == read::source::unknown || source.file == read::no_source_path)
+    if(source == read::source::unknown() || source.file == read::no_source_path)
     {
       auto const hint(meta_source_hint(meta));
-      if(hint != read::source::unknown)
+      if(hint != read::source::unknown())
       {
         return hint;
       }
@@ -235,15 +235,15 @@ namespace jank::runtime
 
   read::source meta_source_hint(object_ref const meta)
   {
-    if(meta == jank_nil)
+    if(meta == jank_nil())
     {
-      return read::source::unknown;
+      return read::source::unknown();
     }
 
     auto const hint(get(meta, __rt_ctx->intern_keyword("jank/source-hint").expect_ok()));
-    if(hint == jank_nil)
+    if(hint == jank_nil())
     {
-      return read::source::unknown;
+      return read::source::unknown();
     }
 
     return meta_source(hint);
@@ -312,7 +312,7 @@ namespace jank::runtime
       return meta;
     }
 
-    auto const stripped{ strip_source_from_meta(meta.unwrap()) };
+    auto stripped{ strip_source_from_meta(meta.unwrap()) };
     if(is_empty(stripped))
     {
       return none;

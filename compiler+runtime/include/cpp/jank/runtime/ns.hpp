@@ -17,7 +17,7 @@ namespace jank::runtime
 
   using ns_ref = oref<struct ns>;
 
-  struct ns : gc
+  struct ns
   {
     static constexpr object_type obj_type{ object_type::ns };
     static constexpr bool pointer_free{ false };
@@ -26,15 +26,15 @@ namespace jank::runtime
     ns(obj::symbol_ref const name);
 
     var_ref intern_var(jtl::immutable_string_view const &);
-    var_ref intern_var(obj::symbol_ref);
+    var_ref intern_var(obj::symbol_ref const);
     var_ref intern_owned_var(jtl::immutable_string_view const &);
-    var_ref intern_owned_var(obj::symbol_ref);
-    var_ref find_var(obj::symbol_ref);
-    jtl::result<void, jtl::immutable_string> unmap(obj::symbol_ref sym);
+    var_ref intern_owned_var(obj::symbol_ref const);
+    var_ref find_var(obj::symbol_ref const);
+    jtl::result<void, jtl::immutable_string> unmap(obj::symbol_ref const sym);
 
-    jtl::result<void, jtl::immutable_string> add_alias(obj::symbol_ref sym, ns_ref ns);
-    void remove_alias(obj::symbol_ref sym);
-    ns_ref find_alias(obj::symbol_ref sym) const;
+    jtl::result<void, jtl::immutable_string> add_alias(obj::symbol_ref const sym, ns_ref const ns);
+    void remove_alias(obj::symbol_ref const sym);
+    ns_ref find_alias(obj::symbol_ref const sym) const;
 
     struct native_alias
     {
@@ -62,7 +62,7 @@ namespace jank::runtime
     jtl::option<native_refer> find_native_refer(obj::symbol_ref sym) const;
     native_unordered_map<obj::symbol_ref, native_refer> native_refers_snapshot() const;
 
-    jtl::result<void, jtl::immutable_string> refer(obj::symbol_ref sym, var_ref var);
+    jtl::result<void, jtl::immutable_string> refer(obj::symbol_ref const sym, var_ref const var);
 
     obj::persistent_hash_map_ref get_mappings() const;
 
@@ -73,10 +73,14 @@ namespace jank::runtime
     void to_string(jtl::string_builder &buff) const;
     uhash to_hash() const;
 
+    /* behavior::metadatable */
+    object_ref with_meta(object_ref m);
+
     bool operator==(ns const &rhs) const;
 
     object base{ obj_type };
     obj::symbol_ref name{};
+    jtl::option<object_ref> meta;
     /* TODO: Benchmark the use of atomics here. That's what Clojure uses. */
     folly::Synchronized<obj::persistent_hash_map_ref> vars;
     folly::Synchronized<obj::persistent_hash_map_ref> aliases;

@@ -319,6 +319,11 @@ namespace jank::analyze::cpp_util
 
     /* TODO: We probably want a recursive approach to this, for types and scopes. */
     auto const qual_type{ clang::QualType::getFromOpaquePtr(type) };
+    if(qual_type->isNullPtrType())
+    {
+      return "std::nullptr_t";
+    }
+
     if(auto const *alias{
          llvm::dyn_cast_or_null<clang::TypedefType>(qual_type.getTypePtrOrNull()) };
        alias)
@@ -346,6 +351,7 @@ namespace jank::analyze::cpp_util
       }
       return name;
     }
+
     return Cpp::GetTypeAsString(type);
   }
 

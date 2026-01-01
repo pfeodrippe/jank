@@ -130,7 +130,7 @@ namespace jank::runtime::obj
       auto const val{ get(key) };
       if(val.is_nil())
       {
-        return jank_nil;
+        return jank_nil();
       }
       return make_box<persistent_vector>(std::in_place, key, val);
     }
@@ -422,7 +422,7 @@ namespace jank::runtime::obj
       vt->flags |= behavior_flag::callable;
     }
 
-    return make_box<user_type>(vt.data, jank_nil);
+    return make_box<user_type>(vt.data, jank_nil());
   }
 
   /* Returns a factory function that creates user_type instances.

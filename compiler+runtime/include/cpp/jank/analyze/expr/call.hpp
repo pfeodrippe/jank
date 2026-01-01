@@ -20,7 +20,7 @@ namespace jank::analyze::expr
          bool needs_box,
          expression_ref source,
          native_vector<expression_ref> &&arg_exprs,
-         runtime::obj::persistent_list_ref form,
+         runtime::obj::persistent_list_ref const form,
          jtl::ptr<void> return_tag_type = nullptr);
 
     runtime::object_ref to_runtime_data() const override;

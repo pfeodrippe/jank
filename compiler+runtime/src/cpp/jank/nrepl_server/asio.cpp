@@ -494,7 +494,7 @@ namespace jank::nrepl_server::asio
 
       (*accept_loop)();
       io_context.run();
-      return runtime::jank_nil;
+      return runtime::jank_nil();
     }
 
     object_ref start_server(object_ref const port_obj, object_ref const bind_obj)
@@ -523,37 +523,37 @@ namespace jank::nrepl_server::asio
       catch(std::exception const &e)
       {
         std::cerr << "Failed to start nREPL server: " << e.what() << '\n';
-        return runtime::jank_nil;
+        return runtime::jank_nil();
       }
     }
 
     object_ref stop_server(object_ref const server_obj)
     {
-      if(server_obj == runtime::jank_nil)
+      if(server_obj == runtime::jank_nil())
       {
-        return runtime::jank_nil;
+        return runtime::jank_nil();
       }
 
       auto const server_map(expect_object<obj::persistent_hash_map>(server_obj));
       auto const srv_ptr_kw(__rt_ctx->intern_keyword("server-ptr").expect_ok());
       auto const ptr_obj(runtime::get(server_map, srv_ptr_kw));
 
-      if(ptr_obj == runtime::jank_nil)
+      if(ptr_obj == runtime::jank_nil())
       {
-        return runtime::jank_nil;
+        return runtime::jank_nil();
       }
 
       auto const ptr_val(static_cast<std::uintptr_t>(to_int(ptr_obj)));
       server_registry().erase(ptr_val);
 
-      return runtime::jank_nil;
+      return runtime::jank_nil();
     }
 
     object_ref get_server_port(object_ref const server_obj)
     {
-      if(server_obj == runtime::jank_nil)
+      if(server_obj == runtime::jank_nil())
       {
-        return runtime::jank_nil;
+        return runtime::jank_nil();
       }
 
       auto const server_map(expect_object<obj::persistent_hash_map>(server_obj));
@@ -582,12 +582,12 @@ namespace jank::nrepl_server::asio
         auto const locked_modules{ __rt_ctx->loaded_modules_in_order.wlock() };
         locked_modules->emplace_back(module_name);
       }
-      return runtime::jank_nil;
+      return runtime::jank_nil();
     }
 
     object_ref this_object_ref() override
     {
-      return runtime::jank_nil;
+      return runtime::jank_nil();
     }
   };
 }
@@ -599,7 +599,7 @@ extern "C" __attribute__((used, visibility("default"))) jank_object_ref
 jank_load_jank_nrepl_server_asio()
 {
   jank::nrepl_server::asio::__ns loader;
-  return loader.call().erase();
+  return loader.call().erase().data;
 }
 
 /* Start the nREPL server on the given port and bind address.
@@ -631,14 +631,14 @@ jank_nrepl_start_server(int port, char const *bind_address)
 
     auto result = jank::nrepl_server::asio::start_server(port_obj, bind_obj);
 
-    if(result == jank_nil)
+    if(result == jank_nil())
     {
       std::cerr << "[nrepl] start_server returned nil" << std::endl;
       return nullptr;
     }
 
     std::cout << "[nrepl] Server started successfully!" << std::endl;
-    return result.erase();
+    return result.erase().data;
   }
   catch(jtl::ref<error::base> const &e)
   {

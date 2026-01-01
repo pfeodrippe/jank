@@ -25,6 +25,7 @@
 #include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/core/make_box.hpp>
 #include <jank/runtime/core/seq.hpp>
+#include <jank/runtime/core/munge.hpp>
 #include <jank/analyze/processor.hpp>
 #include <jank/analyze/step/force_boxed.hpp>
 #include <jank/jit/interpreter.hpp>
@@ -88,7 +89,7 @@ namespace jank::analyze
     auto const expansion(
       runtime::get(meta, __rt_ctx->intern_keyword("jank/macro-expansion").expect_ok()));
 
-    if(expansion == jank_nil)
+    if(expansion == jank_nil())
     {
       return nullptr;
     }
@@ -102,18 +103,18 @@ namespace jank::analyze
   {
     if(expansions.empty())
     {
-      return jank_nil;
+      return jank_nil();
     }
 
     /* Try to find an expansion which specifically has the `jank/macro-expansion` key
      * set in the meta. This is the root of our most recent expansion. */
-    for(auto const latest : std::ranges::reverse_view(expansions))
+    for(auto const &latest : std::ranges::reverse_view(expansions))
     {
       auto const latest_meta{ meta(latest) };
       auto const expansion(
         runtime::get(latest_meta, __rt_ctx->intern_keyword("jank/macro-expansion").expect_ok()));
 
-      if(expansion != jank_nil)
+      if(expansion != jank_nil())
       {
         return expansion;
       }
@@ -1064,7 +1065,9 @@ namespace jank::analyze
         latest_expansion(macro_expansions));
     }
     if(is_ctor
-       && Cpp::IsAggregateConstructible(val->type, arg_types, __rt_ctx->unique_munged_string()))
+       && Cpp::IsAggregateConstructible(val->type,
+                                        arg_types,
+                                        runtime::munge(__rt_ctx->unique_namespaced_string())))
     {
       //util::println("using aggregate initializaation");
       return jtl::make_ref<expr::cpp_constructor_call>(position,
@@ -1403,9 +1406,9 @@ namespace jank::analyze
         util::println(
           "JANK_DEBUG_DEF list_source_unknown={} usage_unknown={} sym_source_unknown={} "
           "list_file={} usage_file={} sym_file={} sym_line={} sym_col={}",
-          list_source == read::source::unknown,
-          usage_source == read::source::unknown,
-          sym_source_debug == read::source::unknown,
+          list_source == read::source::unknown(),
+          usage_source == read::source::unknown(),
+          sym_source_debug == read::source::unknown(),
           list_source.file,
           usage_source.file,
           sym_source_debug.file,
@@ -1413,7 +1416,7 @@ namespace jank::analyze
           sym_source_debug.start.col);
       }
       auto sym_source(object_source(sym_obj));
-      if(sym_source == read::source::unknown || sym_source.file == read::no_source_path)
+      if(sym_source == read::source::unknown() || sym_source.file == read::no_source_path)
       {
         sym_source = usage_source;
       }
@@ -1421,7 +1424,7 @@ namespace jank::analyze
                                           sym_source,
                                           "A symbol is needed for the name here.",
                                           latest_expansion(macro_expansions)));
-      if(usage_source != read::source::unknown && usage_source != sym_source)
+      if(usage_source != read::source::unknown() && usage_source != sym_source)
       {
         err = err->add_usage(usage_source);
       }
@@ -1437,13 +1440,13 @@ namespace jank::analyze
         ->add_usage(read::parse::reparse_nth(l, 1));
     }
 
-    auto qualified_sym(current_frame->lift_var(sym));
+    auto qualified_sym(runtime::__rt_ctx->qualify_symbol(sym));
     qualified_sym->meta = sym->meta;
     /* We always def in the current ns, so we want an owned var. */
-    auto const var(__rt_ctx->intern_owned_var(qualified_sym));
-    if(var.is_err())
+    auto const var_res(__rt_ctx->intern_owned_var(qualified_sym));
+    if(var_res.is_err())
     {
-      return error::internal_analyze_failure(var.expect_err(),
+      return error::internal_analyze_failure(var_res.expect_err(),
                                              meta_source(sym),
                                              latest_expansion(macro_expansions));
     }
@@ -1467,7 +1470,7 @@ namespace jank::analyze
        * This allows us to look up the underlying type (e.g., cpp_box's boxed_type)
        * when the var is later referenced. */
       auto const original_value_expr{ value_result.expect_ok() };
-      vars.insert_or_assign(var.expect_ok(), original_value_expr);
+      vars.insert_or_assign(var_res.expect_ok(), original_value_expr);
 
       /* For cpp_box expressions, store the boxed_type directly on the var object.
        * This persists across processor instances, allowing type inference when
@@ -1475,7 +1478,7 @@ namespace jank::analyze
       if(original_value_expr->kind == expression_kind::cpp_box)
       {
         auto const box_expr{ llvm::cast<expr::cpp_box>(original_value_expr.data) };
-        var.expect_ok()->boxed_type = box_expr->boxed_type;
+        var_res.expect_ok()->boxed_type = box_expr->boxed_type;
       }
 
       value_result = apply_implicit_conversion(original_value_expr,
@@ -1498,7 +1501,7 @@ namespace jank::analyze
                                           latest_expansion(macro_expansions))
           ->add_usage(read::parse::reparse_nth(l, 2));
       }
-      auto const meta_with_doc(runtime::assoc(qualified_sym->meta.unwrap_or(runtime::jank_nil),
+      auto const meta_with_doc(runtime::assoc(qualified_sym->meta.unwrap_or(runtime::jank_nil()),
                                               __rt_ctx->intern_keyword("doc").expect_ok(),
                                               docstring_obj));
       qualified_sym = qualified_sym->with_meta(meta_with_doc);
@@ -1507,19 +1510,19 @@ namespace jank::analyze
     /* Add source location (file, line, column) to var metadata.
      * If this def came from a macro expansion (like defn), use the original source location.
      * Otherwise, use the def form's source location. */
-    auto def_source(read::source::unknown);
+    auto def_source(read::source::unknown());
     auto const expansion(latest_expansion(macro_expansions));
-    if(expansion != runtime::jank_nil)
+    if(expansion != runtime::jank_nil())
     {
       def_source = object_source(expansion);
     }
-    if(def_source == read::source::unknown || def_source.file == read::no_source_path)
+    if(def_source == read::source::unknown() || def_source.file == read::no_source_path)
     {
       def_source = meta_source(l->meta);
     }
-    if(def_source != read::source::unknown && def_source.file != read::no_source_path)
+    if(def_source != read::source::unknown() && def_source.file != read::no_source_path)
     {
-      auto meta(qualified_sym->meta.unwrap_or(runtime::jank_nil));
+      auto meta(qualified_sym->meta.unwrap_or(runtime::jank_nil()));
       meta = runtime::assoc(meta,
                             __rt_ctx->intern_keyword("file").expect_ok(),
                             runtime::make_box<runtime::obj::persistent_string>(def_source.file));
@@ -1532,13 +1535,6 @@ namespace jank::analyze
         __rt_ctx->intern_keyword("column").expect_ok(),
         runtime::make_box<runtime::obj::integer>(static_cast<i64>(def_source.start.col)));
       qualified_sym = qualified_sym->with_meta(meta);
-    }
-
-    /* Lift this so it can be used during codegen. */
-    /* TODO: I don't think lifting meta is actually needed anymore. Verify. */
-    if(qualified_sym->meta.is_some())
-    {
-      current_frame->lift_constant(qualified_sym->meta.unwrap());
     }
 
     return jtl::make_ref<expr::def>(position, current_frame, true, qualified_sym, value_expr);
@@ -1849,6 +1845,8 @@ namespace jank::analyze
       auto &unwrapped_named_recursion(found_named_recursion.unwrap());
       local_frame::register_captures(current_frame, unwrapped_named_recursion);
 
+      unwrapped_named_recursion.fn_frame->fn_ctx->is_named_recursive = true;
+
       return jtl::make_ref<expr::recursion_reference>(
         position,
         current_frame,
@@ -1881,13 +1879,6 @@ namespace jank::analyze
      * to generate code that looks up clojure.core/reduce, not clojure.set/reduce. */
     auto const var_qualified_sym(
       make_box<runtime::obj::symbol>(var->n->name->name, var->name->name));
-
-    /* Macros aren't lifted, since they're not used during runtime. */
-    auto const macro_kw(__rt_ctx->intern_keyword("", "macro", true).expect_ok());
-    if(var->meta.is_none() || get(var->meta.unwrap(), macro_kw).is_nil())
-    {
-      current_frame->lift_var(var_qualified_sym);
-    }
 
     /* Infer type from var's boxed_type (stored on the var itself, persists
      * across processor instances). Fall back to vars map for same-processor lookups. */
@@ -1948,7 +1939,7 @@ namespace jank::analyze
                                                   "The missing [] was expected here.",
                                                   latest_expansion(macro_expansions));
     }
-    auto const params_obj(first_form.unwrap());
+    auto const &params_obj(first_form.unwrap());
     if(params_obj->type != runtime::object_type::persistent_vector)
     {
       return error::analyze_invalid_fn_parameters("A function parameter vector must be a vector.",
@@ -1968,7 +1959,7 @@ namespace jank::analyze
     bool is_variadic{};
     for(auto it(params->data.begin()); it != params->data.end(); ++it)
     {
-      auto const p(*it);
+      auto const &p(*it);
       if(p->type != runtime::object_type::symbol)
       {
         auto const param_idx{ std::distance(params->data.begin(), it) };
@@ -2065,7 +2056,7 @@ namespace jank::analyze
     /* If it turns out this function uses recur, we need to ensure that its tail expression
      * is boxed. This is because unboxed values may use IIFE for initialization, which will
      * not work with the generated while/continue we use for recursion. */
-    if(fn_ctx->is_tail_recursive)
+    if(fn_ctx->is_recur_recursive)
     {
       step::force_boxed(body_do);
     }
@@ -2131,7 +2122,7 @@ namespace jank::analyze
     {
       auto const s(runtime::expect_object<runtime::obj::symbol>(first_elem));
       name = s->name;
-      unique_name = __rt_ctx->unique_namespaced_string(name);
+      unique_name = __rt_ctx->unique_string(name);
       if(length < 3)
       {
         return error::analyze_invalid_fn("This function is missing its parameter vector.",
@@ -2143,7 +2134,7 @@ namespace jank::analyze
     }
     else
     {
-      name = __rt_ctx->unique_namespaced_string("fn");
+      name = __rt_ctx->unique_string("fn");
       unique_name = name;
     }
 
@@ -2369,7 +2360,7 @@ namespace jank::analyze
     }
     else
     {
-      fn_ctx.unwrap()->is_tail_recursive = true;
+      fn_ctx.unwrap()->is_recur_recursive = true;
     }
 
     return jtl::make_ref<expr::recur>(position,
@@ -2417,7 +2408,7 @@ namespace jank::analyze
     if(ret.values.empty())
     {
       auto const nil{
-        analyze_primitive_literal(jank_nil, current_frame, position, fn_ctx, needs_box)
+        analyze_primitive_literal(jank_nil(), current_frame, position, fn_ctx, needs_box)
       };
       if(nil.is_err())
       {
@@ -2536,7 +2527,7 @@ namespace jank::analyze
 
     if(ret->body->values.empty())
     {
-      auto const nil{ analyze_primitive_literal(jank_nil,
+      auto const nil{ analyze_primitive_literal(jank_nil(),
                                                 ret->frame,
                                                 expression_position::tail,
                                                 fn_ctx,
@@ -2669,7 +2660,7 @@ namespace jank::analyze
 
     if(ret->body->values.empty())
     {
-      auto const nil{ analyze_primitive_literal(jank_nil,
+      auto const nil{ analyze_primitive_literal(jank_nil(),
                                                 ret->frame,
                                                 expression_position::tail,
                                                 fn_ctx,
@@ -2883,7 +2874,7 @@ namespace jank::analyze
 
     auto const arg_sym(runtime::expect_object<runtime::obj::symbol>(arg));
 
-    auto const qualified_sym(current_frame->lift_var(arg_sym));
+    auto const qualified_sym{ __rt_ctx->qualify_symbol(arg_sym) };
     auto const found_var(__rt_ctx->find_var(qualified_sym));
     if(found_var.is_nil())
     {
@@ -2893,7 +2884,11 @@ namespace jank::analyze
         latest_expansion(macro_expansions));
     }
 
-    return jtl::make_ref<expr::var_ref>(position, current_frame, true, qualified_sym, found_var);
+    return jtl::make_ref<expr::var_ref>(position,
+                                        current_frame,
+                                        true,
+                                        found_var->to_qualified_symbol(),
+                                        found_var);
   }
 
   processor::expression_result
@@ -2905,8 +2900,7 @@ namespace jank::analyze
   {
     auto const pop_macro_expansions{ push_macro_expansions(*this, o) };
 
-    auto const qualified_sym(
-      current_frame->lift_var(make_box<runtime::obj::symbol>(o->n->name->name, o->name->name)));
+    auto const qualified_sym(__rt_ctx->qualify_symbol(o->to_qualified_symbol()));
     return jtl::make_ref<expr::var_ref>(position, current_frame, true, qualified_sym, o);
   }
 
@@ -2973,7 +2967,8 @@ namespace jank::analyze
       finally_
     };
 
-    static runtime::obj::symbol catch_{ "catch" }, finally_{ "finally" };
+    static runtime::obj::symbol_ref catch_{ make_box<obj::symbol>("catch") },
+      finally_{ make_box<obj::symbol>("finally") };
     bool has_catch{}, has_finally{};
 
     for(auto it(list->fresh_seq()->next_in_place()); it.is_some(); it = it->next_in_place())
@@ -2981,7 +2976,7 @@ namespace jank::analyze
       auto const item(it->first());
       auto const type(runtime::visit_seqable(
         [](auto const typed_item) {
-          using T = typename decltype(typed_item)::value_type;
+          using T = typename jtl::decay_t<decltype(typed_item)>::value_type;
 
           if constexpr(std::same_as<T, obj::nil>)
           {
@@ -2990,11 +2985,11 @@ namespace jank::analyze
           else
           {
             auto const first(runtime::first(typed_item->seq()));
-            if(runtime::equal(first, &catch_))
+            if(runtime::equal(first, catch_))
             {
               return try_expression_type::catch_;
             }
-            else if(runtime::equal(first, &finally_))
+            else if(runtime::equal(first, finally_))
             {
               return try_expression_type::finally_;
             }
@@ -3156,8 +3151,6 @@ namespace jank::analyze
                                        bool const needs_box)
   {
     auto const pop_macro_expansions{ push_macro_expansions(*this, o) };
-
-    current_frame->lift_constant(o);
     return jtl::make_ref<expr::primitive_literal>(position, current_frame, needs_box, o);
   }
 
@@ -3201,9 +3194,6 @@ namespace jank::analyze
       auto const pre_eval_expr(
         jtl::make_ref<expr::vector>(position, current_frame, true, std::move(exprs), o->meta));
       auto const o(evaluate::eval(pre_eval_expr));
-
-      /* TODO: Order lifted constants. Use sub constants during codegen. */
-      current_frame->lift_constant(o);
 
       return jtl::make_ref<expr::primitive_literal>(position, current_frame, true, o);
     }
@@ -3312,9 +3302,6 @@ namespace jank::analyze
                                                             std::move(exprs),
                                                             typed_o->meta));
           auto const constant(evaluate::eval(pre_eval_expr));
-
-          /* TODO: Order lifted constants. Use sub constants during codegen. */
-          current_frame->lift_constant(constant);
 
           return jtl::make_ref<expr::primitive_literal>(position, current_frame, true, constant);
         }
@@ -3569,7 +3556,7 @@ namespace jank::analyze
                */
 
               /* Generate unique wrapper function name */
-              auto const wrapper_name{ __rt_ctx->unique_munged_string("__jank_macro_wrapper") };
+              auto const wrapper_name{ __rt_ctx->unique_string("__jank_macro_wrapper") };
 
               /* Build mapping: which args need parameters vs embedded C++ code */
               native_vector<size_t>
@@ -4919,7 +4906,7 @@ namespace jank::analyze
       /* Since we're reusing analyze_cpp_call, we need to rebuild our list a bit. We
        * want to remove the cpp/cast and the type and then add back in a new head. Since
        * cpp_call takes in a cpp_value, it doesn't look at the head, but it needs to be there. */
-      auto const call_l{ make_box(l->data.rest().rest().conj(jank_nil)) };
+      auto const call_l{ make_box(l->data.rest().rest().conj(jank_nil())) };
       return analyze_cpp_call(call_l, cpp_value, current_frame, position, fn_ctx, needs_box);
     }
     if(cpp_util::is_any_object(type_expr->type) && cpp_util::is_trait_convertible(value_type))
@@ -5032,15 +5019,23 @@ namespace jank::analyze
     auto const count(l->count());
     if(count < 2)
     {
-      return error::analyze_invalid_cpp_cast(
-               "This call to 'cpp/unbox' is missing a value as argument.",
+      return error::analyze_invalid_cpp_unbox(
+               "This call to 'cpp/unbox' is missing a C++ type and a value as arguments.",
+               object_source(l->first()),
+               latest_expansion(macro_expansions))
+        ->add_usage(read::parse::reparse_nth(l, 0));
+    }
+    else if(count < 3)
+    {
+      return error::analyze_invalid_cpp_unbox(
+               "This call to 'cpp/unbox' is missing a value to unbox as an argument.",
                object_source(l->first()),
                latest_expansion(macro_expansions))
         ->add_usage(read::parse::reparse_nth(l, 0));
     }
     else if(3 < count)
     {
-      return error::analyze_invalid_cpp_cast(
+      return error::analyze_invalid_cpp_unbox(
                "A call to 'cpp/unbox' must only have a C++ type and a "
                "value as arguments and nothing else.",
                object_source(l->next()->next()->next()->first()),

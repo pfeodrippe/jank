@@ -144,7 +144,7 @@ namespace
   {
     auto const a{ try_object<obj::arena_obj>(arena) };
     a->reset();
-    return jank_nil;
+    return jank_nil();
   }
 
   /* Get arena statistics */
@@ -170,14 +170,14 @@ namespace
   {
     auto const a{ try_object<obj::arena_obj>(arena) };
     current_allocator = &a->cpp_arena;
-    return jank_nil;
+    return jank_nil();
   }
 
   /* Exit arena scope - restores previous allocator */
   object_ref exit_arena()
   {
     current_allocator = nullptr;
-    return jank_nil;
+    return jank_nil();
   }
 
   /* Generic allocator functions that work with any allocator (arena or debug-allocator) */
@@ -198,7 +198,7 @@ namespace
     auto const ptr_val = static_cast<uintptr_t>(to_int(ptr_obj));
     void *ptr = reinterpret_cast<void *>(ptr_val);
     alloc->free(ptr, 0, 16);
-    return jank_nil;
+    return jank_nil();
   }
 
   /* Free a jank object through the allocator.
@@ -209,7 +209,7 @@ namespace
     auto *alloc = get_allocator(alloc_obj);
     void *ptr = obj_to_free.data;
     alloc->free(ptr, 0, 16);
-    return jank_nil;
+    return jank_nil();
   }
 
   /* Reset any allocator */
@@ -217,7 +217,7 @@ namespace
   {
     auto *alloc = get_allocator(alloc_obj);
     alloc->reset();
-    return jank_nil;
+    return jank_nil();
   }
 
   /* Get stats from any allocator */
@@ -273,14 +273,14 @@ namespace
   object_ref enter_allocator(object_ref const alloc_obj)
   {
     current_allocator = get_allocator(alloc_obj);
-    return jank_nil;
+    return jank_nil();
   }
 
   /* Exit allocator scope */
   object_ref exit_allocator()
   {
     current_allocator = nullptr;
-    return jank_nil;
+    return jank_nil();
   }
 }
 
@@ -320,5 +320,5 @@ jank_object_ref jank_load_jank_arena_native()
   /* Create custom allocator from jank functions */
   intern_fn("create-jank-allocator", &create_jank_allocator);
 
-  return jank_nil.erase();
+  return jank_nil().erase().data;
 }

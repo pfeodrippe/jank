@@ -163,12 +163,7 @@ namespace jank::evaluate
   }
 
   /* Some expressions don't make sense to eval outright and aren't fns that can be JIT compiled.
-   * For those, we wrap them in a fn expression and then JIT compile and call them.
-   *
-   * There's an oddity here, since that expr wouldn't've been analyzed within a fn frame, so
-   * its lifted vars/constants, for example, aren't in a fn frame. Instead, they're put in the
-   * root frame. So, when wrapping this expr, we give the fn the root frame, but change its
-   * type to a fn frame. */
+   * For those, we wrap them in a fn expression and then JIT compile and call them. */
   template <typename E>
   static expr::function_ref wrap_expression(jtl::ref<E> const orig_expr,
                                             jtl::immutable_string const &name,
@@ -181,8 +176,6 @@ namespace jank::evaluate
     ret->unique_name = __rt_ctx->unique_namespaced_string(ret->name);
     ret->meta = obj::persistent_hash_map::empty();
 
-    auto const &closest_fn_frame(local_frame::find_closest_fn_frame(*expr->frame));
-
     auto const frame{ jtl::make_ref<local_frame>(local_frame::frame_type::fn,
                                                  expr->frame->parent) };
     auto const fn_ctx{ jtl::make_ref<expr::function_context>() };
@@ -193,18 +186,14 @@ namespace jank::evaluate
                                 jtl::none };
     expr->frame->parent = arity.frame;
     ret->frame = arity.frame->parent.unwrap_or(arity.frame);
-    ret->frame->lift_constant(ret->meta);
     fn_ctx->name = ret->name;
     fn_ctx->unique_name = ret->unique_name;
     fn_ctx->fn = ret;
     arity.frame->fn_ctx = fn_ctx;
     arity.fn_ctx = fn_ctx;
 
-    arity.frame->lifted_vars = closest_fn_frame.lifted_vars;
-    arity.frame->lifted_constants = closest_fn_frame.lifted_constants;
-
     arity.fn_ctx->param_count = arity.params.size();
-    for(auto const sym : arity.params)
+    for(auto const &sym : arity.params)
     {
       arity.frame->locals.emplace(sym, local_binding{ sym, sym->name, none, arity.frame });
     }
@@ -260,7 +249,7 @@ namespace jank::evaluate
       return wrap_expression(jtl::make_ref<expr::primitive_literal>(expression_position::tail,
                                                                     an_prc.root_frame,
                                                                     true,
-                                                                    jank_nil),
+                                                                    jank_nil()),
                              name,
                              {});
     }
@@ -301,7 +290,8 @@ namespace jank::evaluate
 
   object_ref eval(expression_ref const ex)
   {
-    profile::timer const timer{ "eval ast node" };
+    profile::timer const timer{ util::format("eval ast node {}",
+                                             analyze::expression_kind_str(ex->kind)) };
     object_ref ret{};
     visit_expr([&ret](auto const typed_ex) { ret = eval(typed_ex); }, ex);
     return ret;
@@ -313,7 +303,7 @@ namespace jank::evaluate
     auto var(__rt_ctx->intern_var(expr->name).expect_ok());
     var->meta = expr->name->meta;
 
-    auto const meta(var->meta.unwrap_or(jank_nil));
+    auto const meta(var->meta.unwrap_or(jank_nil()));
     auto const dynamic(get(meta, __rt_ctx->intern_keyword("dynamic").expect_ok()));
     var->set_dynamic(truthy(dynamic));
 
@@ -645,7 +635,7 @@ namespace jank::evaluate
 
   object_ref eval(expr::function_ref const expr)
   {
-    profile::timer const timer{ "eval:function" };
+    profile::timer const timer{ util::format("eval jit function {}", expr->name) };
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     auto const &module(
       module::nest_module(expect_object<ns>(__rt_ctx->current_ns_var->deref())->to_string(),
@@ -741,7 +731,7 @@ namespace jank::evaluate
 
   object_ref eval(expr::do_ref const expr)
   {
-    object_ref ret{ jank_nil };
+    object_ref ret{ jank_nil() };
     for(auto const &form : expr->values)
     {
       ret = eval(form);
@@ -770,7 +760,7 @@ namespace jank::evaluate
     {
       return eval(expr->else_.unwrap());
     }
-    return jank_nil;
+    return jank_nil();
   }
 
   object_ref eval(expr::throw_ref const expr)
@@ -1150,7 +1140,7 @@ namespace jank::evaluate
       /* Parse failed or returned no result - fall back to eval_string */
       __rt_ctx->jit_prc.eval_string(expr->code);
     }
-    return runtime::jank_nil;
+    return runtime::jank_nil();
 #else
     (void)expr;
     throw make_box("eval not supported in WASM without CppInterOp").erase();

@@ -37,7 +37,12 @@
   - [x] defcomp
     - [x] could we use flecs (YES)
   - [x] would should be a map as well
-- [ ] arena
+- [x] arena
+- [ ] merge with origin/main
+  - [ ] compile
+  - [ ] tests
+  - [ ] ios sims
+  - [ ] fix ci
 - [ ] integrate raylib + flecs + imgui + jolt
   - [x] raylib + imgui + jolt
   - [x] + flecs

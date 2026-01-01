@@ -321,15 +321,15 @@ namespace jank::nrepl_server::asio
             std::string resolve_code = "(resolve '" + print_fn_name + ")";
             auto const print_fn(__rt_ctx->eval_string(
               jtl::immutable_string_view{ resolve_code.data(), resolve_code.size() }));
-            if(!print_fn.is_nil())
+            if(print_fn.is_some() && !print_fn.unwrap().is_nil())
             {
               /* Call (print-fn result nil) - nil for writer since we capture *out* */
-              runtime::dynamic_call(print_fn, result, jank_nil);
+              runtime::dynamic_call(print_fn.unwrap(), result.unwrap(), jank_nil());
             }
             else
             {
               /* Fall back to default if print function not found */
-              pprint_output = to_std_string(runtime::to_code_string(result));
+              pprint_output = to_std_string(runtime::to_code_string(result.unwrap()));
             }
           }
           /* Remove trailing newline if present (pprint adds one) */
@@ -342,12 +342,12 @@ namespace jank::nrepl_server::asio
         catch(...)
         {
           /* On any error, fall back to default formatting */
-          value_msg.emplace("value", to_std_string(runtime::to_code_string(result)));
+          value_msg.emplace("value", to_std_string(runtime::to_code_string(result.unwrap())));
         }
       }
       else
       {
-        value_msg.emplace("value", to_std_string(runtime::to_code_string(result)));
+        value_msg.emplace("value", to_std_string(runtime::to_code_string(result.unwrap())));
       }
       /* Emit any output captured during require/pprint before the value */
       emit_pending_output();

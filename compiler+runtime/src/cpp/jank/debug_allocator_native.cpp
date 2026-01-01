@@ -108,5 +108,5 @@ jank_object_ref jank_load_jank_debug_allocator_native()
   intern_fn("double-free-count", &debug_allocator_double_free_count);
   intern_fn("debug-stats", &debug_allocator_debug_stats);
 
-  return jank_nil.erase();
+  return jank_nil().erase().data;
 }

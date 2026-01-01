@@ -913,8 +913,8 @@ namespace jank::nrepl_server::asio
       }
       std::ranges::stable_sort(data.notes,
                                [](serialized_note const &lhs, serialized_note const &rhs) {
-                                 auto const lhs_unknown(lhs.source == read::source::unknown);
-                                 auto const rhs_unknown(rhs.source == read::source::unknown);
+                                 auto const lhs_unknown(lhs.source == read::source::unknown());
+                                 auto const rhs_unknown(rhs.source == read::source::unknown());
                                  if(lhs_unknown != rhs_unknown)
                                  {
                                    return !lhs_unknown;
@@ -1372,7 +1372,7 @@ namespace jank::nrepl_server::asio
       auto const meta_obj(var->meta.unwrap());
       auto const private_kw(__rt_ctx->intern_keyword("private").expect_ok());
       auto const private_flag(runtime::get(meta_obj, private_kw));
-      if(private_flag == jank_nil)
+      if(private_flag == jank_nil())
       {
         return false;
       }
@@ -2026,7 +2026,7 @@ namespace jank::nrepl_server::asio
       }
 
       auto current(runtime::seq(seq_obj));
-      while(current != jank_nil)
+      while(current != jank_nil())
       {
         auto const head(runtime::first(current));
         values.push_back(to_std_string(runtime::to_code_string(head)));
@@ -2078,7 +2078,7 @@ namespace jank::nrepl_server::asio
 
       object_ref const var_obj{ var };
       auto const meta(runtime::meta(var_obj));
-      if(meta != jank_nil)
+      if(meta != jank_nil())
       {
         auto const doc_kw(__rt_ctx->intern_keyword("doc").expect_ok());
         auto const arglists_kw(__rt_ctx->intern_keyword("arglists").expect_ok());
@@ -2087,11 +2087,11 @@ namespace jank::nrepl_server::asio
         auto const column_kw(__rt_ctx->intern_keyword("column").expect_ok());
         auto const macro_kw(__rt_ctx->intern_keyword("macro").expect_ok());
 
-        if(auto const doc(runtime::get(meta, doc_kw)); doc != jank_nil)
+        if(auto const doc(runtime::get(meta, doc_kw)); doc != jank_nil())
         {
           info.doc = to_std_string(runtime::to_string(doc));
         }
-        if(auto const arglists(runtime::get(meta, arglists_kw)); arglists != jank_nil)
+        if(auto const arglists(runtime::get(meta, arglists_kw)); arglists != jank_nil())
         {
           // Arglists are typically quoted: '([x] [x y])
           // We need to unwrap the quote if present
@@ -2099,14 +2099,14 @@ namespace jank::nrepl_server::asio
 
           // Try to get the first element to check if it's a quote
           auto first_elem(runtime::first(arglists_seq));
-          if(first_elem != jank_nil && first_elem->type == object_type::symbol)
+          if(first_elem != jank_nil() && first_elem->type == object_type::symbol)
           {
             auto const sym(expect_object<obj::symbol>(first_elem));
             if(sym->name == "quote")
             {
               // Get the second element (the actual arglists)
               auto const rest(runtime::next(arglists_seq));
-              if(rest != jank_nil)
+              if(rest != jank_nil())
               {
                 arglists_seq = runtime::first(rest);
               }
@@ -2120,15 +2120,15 @@ namespace jank::nrepl_server::asio
           }
         }
         // Try standard Clojure metadata keys first
-        if(auto const file(runtime::get(meta, file_kw)); file != jank_nil)
+        if(auto const file(runtime::get(meta, file_kw)); file != jank_nil())
         {
           info.file = to_std_string(runtime::to_string(file));
         }
-        if(auto const line(runtime::get(meta, line_kw)); line != jank_nil)
+        if(auto const line(runtime::get(meta, line_kw)); line != jank_nil())
         {
           info.line = runtime::to_int(line);
         }
-        if(auto const column(runtime::get(meta, column_kw)); column != jank_nil)
+        if(auto const column(runtime::get(meta, column_kw)); column != jank_nil())
         {
           info.column = runtime::to_int(column);
         }
@@ -2136,15 +2136,15 @@ namespace jank::nrepl_server::asio
         // Also check jank-specific :jank/source metadata
         // Format: {:jank/source {:start {:line 20, :col 7, :offset 260}, :end {...}}}
         auto const jank_source_kw(__rt_ctx->intern_keyword("jank", "source").expect_ok());
-        if(auto const jank_source(runtime::get(meta, jank_source_kw)); jank_source != jank_nil)
+        if(auto const jank_source(runtime::get(meta, jank_source_kw)); jank_source != jank_nil())
         {
           auto const start_kw(__rt_ctx->intern_keyword("start").expect_ok());
-          if(auto const start_map(runtime::get(jank_source, start_kw)); start_map != jank_nil)
+          if(auto const start_map(runtime::get(jank_source, start_kw)); start_map != jank_nil())
           {
             // Extract line from :start map
             if(!info.line.has_value())
             {
-              if(auto const start_line(runtime::get(start_map, line_kw)); start_line != jank_nil)
+              if(auto const start_line(runtime::get(start_map, line_kw)); start_line != jank_nil())
               {
                 info.line = runtime::to_int(start_line);
               }
@@ -2153,14 +2153,14 @@ namespace jank::nrepl_server::asio
             if(!info.column.has_value())
             {
               auto const col_kw(__rt_ctx->intern_keyword("col").expect_ok());
-              if(auto const start_col(runtime::get(start_map, col_kw)); start_col != jank_nil)
+              if(auto const start_col(runtime::get(start_map, col_kw)); start_col != jank_nil())
               {
                 info.column = runtime::to_int(start_col);
               }
             }
           }
         }
-        if(auto const macro_flag(runtime::get(meta, macro_kw)); macro_flag != jank_nil)
+        if(auto const macro_flag(runtime::get(meta, macro_kw)); macro_flag != jank_nil())
         {
           info.is_macro = runtime::truthy(macro_flag);
         }
@@ -2168,7 +2168,7 @@ namespace jank::nrepl_server::asio
 
       // Check if the var's value is actually a function by examining its type
       auto const var_value(runtime::deref(var_obj));
-      if(var_value != jank_nil)
+      if(var_value != jank_nil())
       {
         auto const val_type(var_value->type);
         info.is_function = (val_type == object_type::jit_function

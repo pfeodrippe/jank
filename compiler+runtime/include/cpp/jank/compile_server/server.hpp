@@ -637,7 +637,7 @@ namespace jank::compile_server
         {
           module_name = runtime::module::nest_module(
             ns,
-            runtime::munge(runtime::__rt_ctx->unique_munged_string("repl")));
+            runtime::munge(runtime::__rt_ctx->unique_string("repl")));
         }
         else
         {
@@ -647,12 +647,12 @@ namespace jank::compile_server
         auto const fn_expr
           = evaluate::wrap_expressions(exprs,
                                        an_prc,
-                                       runtime::__rt_ctx->unique_munged_string("repl_fn"));
+                                       runtime::__rt_ctx->unique_string("repl_fn"));
 
         // Step 6: Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::eval };
         auto const cpp_code_body = cg_prc.declaration_str();
-        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name.name).data());
+        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name).data());
         auto const entry_symbol = "_" + munged_struct_name + "_0";
 
         // Get the fully qualified struct name for the factory
@@ -1063,12 +1063,12 @@ namespace jank::compile_server
         auto const fn_expr
           = evaluate::wrap_expressions(exprs,
                                        an_prc,
-                                       runtime::__rt_ctx->unique_munged_string("ns_load"));
+                                       runtime::__rt_ctx->unique_string("ns_load"));
 
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
         auto const cpp_code_body = cg_prc.declaration_str();
-        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name.name).data());
+        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name).data());
         auto const entry_symbol = "_" + munged_struct_name + "_0";
 
         auto const module_ns = runtime::module::module_to_native_ns(module_name);
@@ -1559,12 +1559,12 @@ namespace jank::compile_server
         auto const fn_expr
           = evaluate::wrap_expressions(exprs,
                                        an_prc,
-                                       runtime::__rt_ctx->unique_munged_string("ns_load"));
+                                       runtime::__rt_ctx->unique_string("ns_load"));
 
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
         auto const cpp_code_body = cg_prc.declaration_str();
-        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name.name).data());
+        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name).data());
         auto const entry_symbol = "_" + munged_struct_name + "_0";
 
         auto const module_ns = runtime::module::module_to_native_ns(module_name);

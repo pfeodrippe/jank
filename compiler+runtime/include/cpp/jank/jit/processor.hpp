@@ -21,6 +21,11 @@ namespace llvm
   }
 }
 
+namespace clang
+{
+  class Value;
+}
+
 namespace Cpp
 {
   class Interpreter;
@@ -82,6 +87,7 @@ namespace jank::jit
     jtl::result<eval_result, jtl::immutable_string>
     eval_string_with_result(jtl::immutable_string const &s) const;
 
+    void eval_string(jtl::immutable_string const &s, clang::Value *) const;
     void load_object(jtl::immutable_string_view const &path) const;
     bool load_object(char const *data, size_t size, std::string const &name) const;
     jtl::string_result<void> load_dynamic_library(jtl::immutable_string const &path) const;

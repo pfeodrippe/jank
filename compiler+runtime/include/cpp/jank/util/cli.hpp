@@ -40,11 +40,38 @@ namespace jank::util::cli
     }
   }
 
+  enum class compilation_target : u8
+  {
+    /* The target will be determined based on the extension of the output.
+     * If that's not possible, we'll error out. */
+    unspecified,
+    llvm_ir,
+    cpp,
+    object
+  };
+
+  constexpr char const *compilation_target_str(compilation_target const target)
+  {
+    switch(target)
+    {
+      case compilation_target::unspecified:
+        return "unspecified";
+      case compilation_target::llvm_ir:
+        return "llvm-ir";
+      case compilation_target::cpp:
+        return "cpp";
+      case compilation_target::object:
+        return "object";
+      default:
+        return "unknown";
+    }
+  }
+
   struct options
   {
     /* Runtime. */
-    std::string module_path;
-    std::string profiler_file{ "jank.profile" };
+    jtl::immutable_string module_path;
+    jtl::immutable_string profiler_file{ "jank.profile" };
     bool profiler_enabled{};
     bool profiler_fns_enabled{};
     bool profiler_core_enabled{}; /* Profile clojure.core functions */
@@ -75,16 +102,18 @@ namespace jank::util::cli
     std::string save_llvm_ir_path;
 
     /* Run command. */
-    std::string target_file;
+    jtl::immutable_string target_file;
 
     /* Compile command. */
-    std::string target_module;
-    std::string target_runtime{ "dynamic" };
-    std::string output_filename{ "a.out" };
+    jtl::immutable_string target_module;
+    jtl::immutable_string target_runtime{ "dynamic" };
+    jtl::immutable_string output_filename{ "a.out" };
     std::string output_object_filename;
     bool output_shared_library{};
 
     /* Compile-module command. */
+    jtl::immutable_string output_module_filename;
+    compilation_target output_target{ compilation_target::unspecified };
     bool list_modules{}; /* Print loaded modules in dependency order (for AOT build scripts) */
 
     /* REPL command. */
@@ -94,10 +123,8 @@ namespace jank::util::cli
     uint16_t ios_compile_server_port{}; /* 0 = disabled, otherwise port number */
     std::string ios_resource_dir{}; /* Path to iOS resources (PCH, headers) */
 
-    /* Extras.
-     * TODO: Use a native_persistent_vector instead.
-     * */
-    std::vector<std::string> extra_opts;
+    /* Extra flags, which will be passed to main. */
+    native_vector<jtl::immutable_string> extra_opts;
 
     command command{ command::repl };
   };
@@ -105,6 +132,9 @@ namespace jank::util::cli
   /* NOLINTNEXTLINE */
   extern options opts;
 
-  jtl::result<void, int> parse(int const argc, char const **argv);
-  std::vector<std::string> parse_empty(int const argc, char const **argv);
+  /* Affects the global opts. */
+  jtl::result<void, int> parse_opts(int const argc, char const **argv);
+
+  /* Takes the CLI args and puts 'em in a vector. */
+  native_vector<jtl::immutable_string> parse_into_vector(int const argc, char const **argv);
 }
