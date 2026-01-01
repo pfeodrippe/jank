@@ -85,6 +85,7 @@ namespace jtl
     void reserve(usize capacity);
     value_type *data() const;
     usize size() const;
+    bool empty() const;
 
     jtl::immutable_string release();
     std::string str() const;

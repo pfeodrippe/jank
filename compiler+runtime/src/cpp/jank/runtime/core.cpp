@@ -93,7 +93,7 @@ namespace jank::runtime
 
   bool is_nil(object_ref const o)
   {
-    return o == jank_nil;
+    return o == jank_nil();
   }
 
   bool is_true(object_ref const o)
@@ -108,7 +108,7 @@ namespace jank::runtime
 
   bool is_some(object_ref const o)
   {
-    return o != jank_nil;
+    return o != jank_nil();
   }
 
   bool is_string(object_ref const o)
@@ -140,7 +140,7 @@ namespace jank::runtime
   {
     return runtime::visit_object(
       [&](auto const typed_o) -> object_ref {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         if constexpr(std::same_as<T, obj::symbol>)
         {
@@ -176,7 +176,7 @@ namespace jank::runtime
   {
     visit_object(
       [](auto const typed_args) {
-        using T = typename decltype(typed_args)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_args)>::value_type;
 
         if constexpr(behavior::sequenceable<T>)
         {
@@ -196,14 +196,14 @@ namespace jank::runtime
         }
       },
       args);
-    return jank_nil;
+    return jank_nil();
   }
 
   object_ref println(object_ref const args)
   {
     visit_object(
       [](auto const typed_more) {
-        using T = typename decltype(typed_more)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_more)>::value_type;
 
         if constexpr(std::same_as<T, obj::nil>)
         {
@@ -228,14 +228,14 @@ namespace jank::runtime
         }
       },
       args);
-    return jank_nil;
+    return jank_nil();
   }
 
   object_ref pr(object_ref const args)
   {
     visit_object(
       [](auto const typed_args) {
-        using T = typename decltype(typed_args)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_args)>::value_type;
 
         if constexpr(behavior::sequenceable<T>)
         {
@@ -255,14 +255,14 @@ namespace jank::runtime
         }
       },
       args);
-    return jank_nil;
+    return jank_nil();
   }
 
   object_ref prn(object_ref const args)
   {
     visit_object(
       [](auto const typed_args) {
-        using T = typename decltype(typed_args)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_args)>::value_type;
 
         if constexpr(std::same_as<T, obj::nil>)
         {
@@ -287,15 +287,7 @@ namespace jank::runtime
         }
       },
       args);
-    return jank_nil;
-  }
-
-  f64 to_real(object_ref const o)
-  {
-    return visit_number_like(
-      [](auto const typed_o) -> f64 { return typed_o->to_real(); },
-      [=]() -> f64 { throw std::runtime_error{ util::format("not a number: {}", to_string(o)) }; },
-      o);
+    return jank_nil();
   }
 
   object_ref to_float(object_ref const o)
@@ -345,7 +337,7 @@ namespace jank::runtime
   {
     return visit_object(
       [](auto const typed_o) {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         return behavior::nameable<T>;
       },
@@ -356,7 +348,7 @@ namespace jank::runtime
   {
     return visit_object(
       [](auto const typed_o) -> jtl::immutable_string {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         if constexpr(std::same_as<T, obj::persistent_string>)
         {
@@ -378,14 +370,14 @@ namespace jank::runtime
   {
     return visit_object(
       [](auto const typed_o) -> object_ref {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         if constexpr(behavior::nameable<T>)
         {
           auto const ns(typed_o->get_namespace());
           if(ns.empty())
           {
-            return jank_nil;
+            return jank_nil();
           }
           return make_box<obj::persistent_string>(ns);
         }
@@ -439,7 +431,7 @@ namespace jank::runtime
   {
     return visit_object(
       [=](auto const typed_o) -> bool {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         return std::is_base_of_v<behavior::callable, T>;
       },
@@ -463,7 +455,7 @@ namespace jank::runtime
 
   object_ref gensym(object_ref const o)
   {
-    return make_box<obj::symbol>(__rt_ctx->unique_symbol(to_string(o)));
+    return __rt_ctx->unique_symbol(to_string(o));
   }
 
   object_ref atom(object_ref const o)
@@ -541,7 +533,7 @@ namespace jank::runtime
   {
     return visit_object(
       [=](auto const typed_o) -> object_ref {
-        using T = typename decltype(typed_o)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
         if constexpr(behavior::derefable<T>)
         {
@@ -633,7 +625,7 @@ namespace jank::runtime
     switch(size)
     {
       case 0:
-        return jank_nil;
+        return jank_nil();
       case 1:
         {
           return make_box<obj::persistent_string>(match_results[0].str());
@@ -696,7 +688,7 @@ namespace jank::runtime
 
     if(!match_results.suffix().str().empty())
     {
-      return jank_nil;
+      return jank_nil();
     }
 
     return smatch_to_vector(match_results);
@@ -712,7 +704,7 @@ namespace jank::runtime
       }
       catch(...)
       {
-        return jank_nil;
+        return jank_nil();
       }
     }
     else
@@ -890,7 +882,7 @@ namespace jank::runtime
   {
     visit_object(
       [=](auto const typed_reference) -> void {
-        using T = typename decltype(typed_reference)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_reference)>::value_type;
 
         if constexpr(behavior::ref_like<T>)
         {
@@ -912,7 +904,7 @@ namespace jank::runtime
   {
     visit_object(
       [=](auto const typed_reference) -> void {
-        using T = typename decltype(typed_reference)::value_type;
+        using T = typename jtl::decay_t<decltype(typed_reference)>::value_type;
 
         if constexpr(behavior::ref_like<T>)
         {

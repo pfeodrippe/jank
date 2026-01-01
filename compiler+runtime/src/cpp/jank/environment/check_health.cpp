@@ -25,7 +25,7 @@
 #include <clojure/core_native.hpp>
 
 #ifdef JANK_PHASE_2
-extern "C" jank_object_ref jank_load_clojure_core();
+extern "C" void jank_load_clojure_core();
 #endif
 extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
 
@@ -323,6 +323,8 @@ namespace jank::environment
                         terminal_style::reset);
   }
 
+  /* This is disabled until IR gen supports ref counting OR we switch back to using a GC. */
+  [[maybe_unused]]
   static jtl::immutable_string check_ir_jit()
   {
     bool error{};
@@ -334,7 +336,7 @@ namespace jank::environment
 
     JANK_TRY
     {
-      auto const res{ runtime::__rt_ctx->eval_string("((fn* [] \"healthy\"))") };
+      auto const res{ runtime::__rt_ctx->eval_string("((fn* [] \"healthy\"))").unwrap() };
       if(!runtime::equal(res, runtime::make_box("healthy")))
       {
         error = true;
@@ -385,6 +387,7 @@ namespace jank::environment
 
       auto const saved_opts{ util::cli::opts };
       util::cli::opts.target_module = "health";
+      util::cli::opts.output_target = util::cli::compilation_target::object;
       util::cli::opts.output_filename = exe_output;
       util::cli::opts.module_path = path_tmp;
       util::scope_exit const finally{ /* NOLINTNEXTLINE(bugprone-exception-escape) */
@@ -402,7 +405,7 @@ namespace jank::environment
       runtime::__rt_ctx->compile_module(util::cli::opts.target_module).expect_ok();
 
       jank::aot::processor const aot_prc{};
-      aot_prc.compile(util::cli::opts.target_module).expect_ok();
+      aot_prc.build_executable(util::cli::opts.target_module).expect_ok();
 
       auto const stdout_file{ std::filesystem::path{ path_tmp } / "stdout" };
       auto const proc_code{ llvm::sys::ExecuteAndWait(
@@ -502,7 +505,7 @@ namespace jank::environment
                       terminal_style::reset);
         util::println("{}", pch_location());
         util::println("{}", check_cpp_jit());
-        util::println("{}", check_ir_jit());
+        //util::println("{}", check_ir_jit());
         util::println("{}", check_aot());
         util::println("");
 
