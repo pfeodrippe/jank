@@ -727,6 +727,7 @@ namespace jank::runtime
 
 #ifdef JANK_TARGET_EMSCRIPTEN
   jtl::string_result<void> context::write_module(jtl::immutable_string const &module_name,
+                                                 jtl::immutable_string const &,
                                                  jtl::ref<llvm::Module> const &) const
   {
     return err(
