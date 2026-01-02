@@ -89,6 +89,10 @@ namespace jank::codegen
     processor(analyze::expr::function_ref const expr,
               jtl::immutable_string const &module,
               compilation_target target);
+    processor(analyze::expr::function_ref const expr,
+              jtl::immutable_string const &module,
+              compilation_target target,
+              compilation_target owner_target);
     processor(processor const &) = delete;
     processor(processor &&) noexcept = delete;
 
@@ -176,6 +180,7 @@ namespace jank::codegen
     jtl::immutable_string module;
 
     compilation_target target{};
+    compilation_target owner_target{};
     jtl::immutable_string struct_name;
     jtl::string_builder cpp_raw_buffer;
     jtl::string_builder module_header_buffer;

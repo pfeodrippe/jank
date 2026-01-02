@@ -74,6 +74,7 @@ namespace jank::compile_server
     int64_t id{ 0 };
     std::string ns; // namespace to load (e.g., "vybe.sdf.ui")
     std::string source; // full source code of the namespace
+    std::string source_path; // original source path (best-effort; may be empty)
   };
 
   // A compiled module (part of require response)
@@ -82,6 +83,7 @@ namespace jank::compile_server
     std::string name; // module name (e.g., "vybe.sdf.ui$loading__")
     std::string entry_symbol; // symbol to call after loading
     std::vector<uint8_t> object_data; // ARM64 object file bytes
+    std::string source_path; // best-effort source path for this module (may be empty)
   };
 
   // Require response from macOS to iOS

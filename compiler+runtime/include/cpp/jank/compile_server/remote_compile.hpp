@@ -107,7 +107,9 @@ namespace jank::compile_server
 
   // Require (load) a namespace remotely
   // Sends namespace source to compile server, gets back compiled modules
-  inline require_response remote_require(std::string const &ns, std::string const &source)
+  inline require_response remote_require(std::string const &ns,
+                                         std::string const &source,
+                                         std::string const &source_path = "")
   {
     std::lock_guard<std::mutex> lock(remote_config_mutex);
     if(!remote_client)
@@ -118,7 +120,7 @@ namespace jank::compile_server
       resp.error_type = "connection";
       return resp;
     }
-    return remote_client->require_ns(ns, source);
+    return remote_client->require_ns(ns, source, source_path);
   }
 
   // Generate native C++ source remotely (for jank.compiler-native/native-source)

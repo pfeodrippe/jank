@@ -30,6 +30,33 @@
   #include <fstream>
   #include <sstream>
   #include <jank/compile_server/remote_compile.hpp>
+
+/* Symbol table file for decoding JIT stack traces.
+   * Format: START_ADDR END_ADDR SYMBOL_NAME */
+static std::ofstream jit_symbol_file;
+static bool jit_symbol_file_initialized = false;
+
+static void log_jit_symbol(std::string const &name, void *addr, size_t approx_size = 0x1000)
+{
+  if(!jit_symbol_file_initialized)
+  {
+    jit_symbol_file.open("/tmp/jank-jit-symbols.txt", std::ios::out | std::ios::trunc);
+    jit_symbol_file_initialized = true;
+    if(jit_symbol_file)
+    {
+      jit_symbol_file << "# JIT Symbol Table - use to decode stack traces\n";
+      jit_symbol_file << "# Format: START_ADDR END_ADDR SYMBOL_NAME\n";
+      jit_symbol_file.flush();
+    }
+  }
+  if(jit_symbol_file)
+  {
+    auto start = reinterpret_cast<uintptr_t>(addr);
+    auto end = start + approx_size;
+    jit_symbol_file << std::hex << "0x" << start << " 0x" << end << " " << name << std::dec << "\n";
+    jit_symbol_file.flush();
+  }
+}
 #endif
 
 namespace jank::runtime::module
@@ -1140,8 +1167,19 @@ namespace jank::runtime::module
        * incorrectly convert it to something like Users.pfeodrippe.Library... */
       auto const ns_name = std::string(module.data(), module.size());
 
-      /* Send to compile server */
-      auto const response = compile_server::remote_require(std::string(ns_name), source);
+      /* Send to compile server (include best-effort source path for better runtime errors) */
+      std::string request_source_path;
+      if(entry.archive_path.is_some())
+      {
+        request_source_path = util::format("{}:{}", entry.archive_path.unwrap(), entry.path);
+      }
+      else
+      {
+        request_source_path = entry.path.c_str();
+      }
+
+      auto const response
+        = compile_server::remote_require(std::string(ns_name), source, request_source_path);
 
       if(!response.success)
       {
@@ -1154,7 +1192,7 @@ namespace jank::runtime::module
        * before any entry function tries to resolve cross-module references. */
 
       /* Phase 1: Load all object files and collect entry functions */
-      std::vector<std::tuple<std::string, void *, std::string>> entry_functions;
+      std::vector<std::tuple<std::string, void *, std::string, std::string>> entry_functions;
 
       for(auto const &mod : response.modules)
       {
@@ -1200,8 +1238,19 @@ namespace jank::runtime::module
             util::format("Failed to find symbol {} for {}", mod.entry_symbol, mod.name));
         }
 
-        entry_functions.push_back(
-          std::make_tuple(clean_name, sym_result.expect_ok(), mod.entry_symbol));
+        /* Log the entry function symbol address for stack trace decoding */
+        log_jit_symbol(mod.entry_symbol, sym_result.expect_ok());
+
+        std::string module_source_path = mod.source_path;
+        if(module_source_path.empty())
+        {
+          module_source_path = util::format("<remote:{}>", clean_name);
+        }
+
+        entry_functions.push_back(std::make_tuple(clean_name,
+                                                  sym_result.expect_ok(),
+                                                  mod.entry_symbol,
+                                                  std::move(module_source_path)));
         std::cout << "[loader] Phase 1 - Loaded object for: " << clean_name << std::endl;
       }
 
@@ -1209,12 +1258,87 @@ namespace jank::runtime::module
       std::cout << "[loader] Phase 2 - Executing " << entry_functions.size()
                 << " entry functions..." << std::endl;
 
-      for(auto const &[name, fn_addr, entry_sym] : entry_functions)
+      for(auto const &[name, fn_addr, entry_sym, source_path] : entry_functions)
       {
         std::cout << "[loader] Phase 2 - Calling entry function for: " << name << std::endl;
         /* jank_load_XXX functions return void, not object_ref */
         auto fn_ptr = reinterpret_cast<void (*)()>(fn_addr);
-        fn_ptr();
+        try
+        {
+          context::binding_scope const preserve{ runtime::obj::persistent_hash_map::create_unique(
+            std::make_pair(__rt_ctx->current_file_var, make_box(source_path))) };
+          fn_ptr();
+        }
+        catch(jtl::ref<error::base> const &e)
+        {
+          std::cerr << "[loader] ERROR while executing entry function for: " << name << " ("
+                    << entry_sym << ")\n";
+          std::cerr << "[loader] jank error: " << e->message << "\n";
+          if(e->cause)
+          {
+            std::cerr << "[loader]   caused by: " << e->cause->message << "\n";
+          }
+          if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+          {
+            std::cerr << "[loader] current *ns*: "
+                      << runtime::to_code_string(__rt_ctx->current_ns_var->deref()) << "\n";
+            std::cerr << "[loader] current *file*: "
+                      << runtime::to_code_string(__rt_ctx->current_file_var->deref()) << "\n";
+          }
+          return e;
+        }
+        catch(object_ref const e)
+        {
+          std::cerr << "[loader] ERROR while executing entry function for: " << name << " ("
+                    << entry_sym << ")\n";
+          std::cerr << "[loader] thrown object: " << runtime::to_code_string(e) << "\n";
+          if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+          {
+            std::cerr << "[loader] current *ns*: "
+                      << runtime::to_code_string(__rt_ctx->current_ns_var->deref()) << "\n";
+            std::cerr << "[loader] current *file*: "
+                      << runtime::to_code_string(__rt_ctx->current_file_var->deref()) << "\n";
+          }
+          return error::runtime_unable_to_load_module(
+            util::format("Exception (object) while calling entry function for {} ({}): {}",
+                         name,
+                         entry_sym,
+                         runtime::to_code_string(e)));
+        }
+        catch(std::exception const &e)
+        {
+          std::cerr << "[loader] ERROR while executing entry function for: " << name << " ("
+                    << entry_sym << ")\n";
+          std::cerr << "[loader] what(): " << e.what() << "\n";
+          if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+          {
+            std::cerr << "[loader] current *ns*: "
+                      << runtime::to_code_string(__rt_ctx->current_ns_var->deref()) << "\n";
+            std::cerr << "[loader] current *file*: "
+                      << runtime::to_code_string(__rt_ctx->current_file_var->deref()) << "\n";
+          }
+          return error::runtime_unable_to_load_module(
+            util::format("Exception while calling entry function for {} ({}): {}",
+                         name,
+                         entry_sym,
+                         e.what()));
+        }
+        catch(...)
+        {
+          std::cerr << "[loader] ERROR while executing entry function for: " << name << " ("
+                    << entry_sym << ")\n";
+          if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+          {
+            std::cerr << "[loader] current *ns*: "
+                      << runtime::to_code_string(__rt_ctx->current_ns_var->deref()) << "\n";
+            std::cerr << "[loader] current *file*: "
+                      << runtime::to_code_string(__rt_ctx->current_file_var->deref()) << "\n";
+          }
+          return error::runtime_unable_to_load_module(
+            util::format("Unknown exception while calling entry function for {} ({})",
+                         name,
+                         entry_sym));
+        }
         std::cout << "[loader] Loaded remote module: " << name << std::endl;
       }
 

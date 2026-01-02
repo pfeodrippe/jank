@@ -17,6 +17,34 @@
 ### Useful pointers
 - Throw site masking: `compiler+runtime/src/cpp/jank/runtime/context.cpp` (`binding_scope` destructor).
 - iOS loader calls `jank_load_*` as `void (*)()` in `compiler+runtime/src/cpp/jank/runtime/module/loader.cpp`.
+
+### Output (this instruction)
+- Added richer diagnostics around iOS remote entry execution and loader phase-2 entry invocation so logs now include the failing module/entry symbol plus current `*ns*` and `*file*` at the point the exception is thrown.
+
+## 2026-01-02 - iOS JIT: validate_meta sees corrupted meta (type=128)
+
+### Symptom
+- During `vybe.util` module load, `behavior::detail::validate_meta()` reports `meta type=128` (unknown) and throws `corrupted meta object type: 128`.
+- This originally manifested as a panic in `jank::runtime::to_string()` from `validate_meta()` (when the error path tried to stringify the meta).
+
+### Discovery
+- The meta pointer was garbage/uninitialized `object_ref` (first byte `0x80` == 128), not a valid runtime object.
+- Root cause is in C++ codegen lifting: when compiling a module, lifted vars/constants are *supposed* to live as module-scope globals and be initialized in the module load function via placement-new.
+- Nested function structs (generated with `compilation_target::function` during module compilation) were also emitting lifted vars/constants as **struct members**, which shadow the module-scope globals.
+- Those shadowing members were never initialized (only `compilation_target::eval` initializes lifted members), so any use (including var metadata maps) read garbage.
+
+### Fix
+- Introduced an `owner_target` concept in `codegen::processor` so nested processors know they are being generated under a module/wasm-aot compilation.
+- For nested `compilation_target::function` under `owner_target == module/wasm_aot`, codegen no longer emits lifted var/constant members; unqualified references resolve to the module-scope globals which are correctly initialized in the module load function.
+
+### Follow-up
+- Even after eliminating member shadowing, iOS JIT could still hit corrupted meta values (e.g. type=160) during `var::with_meta()`.
+- To remove the remaining dependency on lifted-constant storage for *var metadata* in module-like builds, `def` codegen now **inlines** the metadata constant expression directly in the generated `->with_meta(...)` call when `owner_target` is `module`/`wasm_aot`.
+- This keeps eval builds unchanged while making module-loading more robust (metadata is only needed once per `def`, so inlining is acceptable).
+
+### Files changed
+- compiler+runtime/include/cpp/jank/codegen/processor.hpp
+- compiler+runtime/src/cpp/jank/codegen/processor.cpp
 # WASM Development Context
 
 ## Session: November 25, 2025

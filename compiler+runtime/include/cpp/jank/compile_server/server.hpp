@@ -370,6 +370,7 @@ namespace jank::compile_server
       {
         auto ns = get_json_string(msg, "ns");
         auto source = get_json_string(msg, "source");
+        auto path = get_json_string(msg, "path");
 
         if(ns.empty())
         {
@@ -380,7 +381,7 @@ namespace jank::compile_server
           return error_response(id, "Missing 'source' field", "protocol");
         }
 
-        return require_ns(id, ns, source);
+        return require_ns(id, ns, source, path);
       }
       else if(op == "native-source")
       {
@@ -784,7 +785,10 @@ namespace jank::compile_server
     }
 
     // Require (load) a namespace - compile full namespace source AND transitive dependencies
-    std::string require_ns(int64_t id, std::string const &ns_name, std::string const &source)
+    std::string require_ns(int64_t id,
+                           std::string const &ns_name,
+                           std::string const &source,
+                           std::string const &source_path)
     {
       try
       {
@@ -1010,10 +1014,14 @@ namespace jank::compile_server
 
           auto const &file_view = file_view_result.expect_ok();
           std::string dep_source(file_view.data(), file_view.size());
+          std::string dep_source_path(file_view.file_path().data(), file_view.file_path().size());
 
           // Compile the dependency
-          auto compiled
-            = compile_namespace_source(id, dep_module_str, dep_source, compilation_errors);
+          auto compiled = compile_namespace_source(id,
+                                                   dep_module_str,
+                                                   dep_source,
+                                                   dep_source_path,
+                                                   compilation_errors);
           if(compiled.is_some())
           {
             loaded_namespaces_.insert(dep_module_str);
@@ -1122,7 +1130,8 @@ namespace jank::compile_server
         compiled_modules.push_back(
           compiled_module_info{ std::string(module_name.data(), module_name.size()),
                                 entry_symbol,
-                                base64_encode(object_result.object_data) });
+                                base64_encode(object_result.object_data),
+                                source_path });
 
         std::cout << "[compile-server] Namespace " << ns_name
                   << " compiled successfully, object size: " << object_result.object_data.size()
@@ -1142,6 +1151,7 @@ namespace jank::compile_server
           first = false;
           response += R"({"name":")" + escape_json(mod.name);
           response += R"(","symbol":")" + escape_json(mod.symbol);
+          response += R"(","path":")" + escape_json(mod.source_path);
           response += R"(","object":")" + mod.encoded_object + R"("})";
         }
         response += "]}";
@@ -1218,10 +1228,17 @@ namespace jank::compile_server
       args.push_back("-Xclang");
       args.push_back("-fincremental-extensions");
 
-      // Define JANK_IOS_JIT to signal we're cross-compiling for iOS
-      // This prevents header-only libraries like tinygltf from defining their
-      // implementation in each module (which would cause duplicate symbol errors)
+      // CRITICAL: All defines must match iOS app for ABI compatibility
+      // These affect memory layout of data structures (immer hash maps, folly, etc.)
       args.push_back("-DJANK_IOS_JIT=1");
+      args.push_back("-DJANK_TARGET_IOS=1");
+      args.push_back("-DIMMER_HAS_LIBGC=1");
+      args.push_back("-DIMMER_TAGGED_NODE=0");
+      args.push_back("-DHAVE_CXX14=1");
+      args.push_back("-DFOLLY_HAVE_JEMALLOC=0");
+      args.push_back("-DFOLLY_HAVE_TCMALLOC=0");
+      args.push_back("-DFOLLY_ASSUME_NO_JEMALLOC=1");
+      args.push_back("-DFOLLY_ASSUME_NO_TCMALLOC=1");
 
       // Add PCH if available
       if(!config_.pch_path.empty() && std::filesystem::exists(config_.pch_path))
@@ -1500,6 +1517,7 @@ namespace jank::compile_server
       std::string name;
       std::string symbol;
       std::string encoded_object;
+      std::string source_path;
     };
 
     // Compile a single namespace from source (helper for require_ns)
@@ -1507,6 +1525,7 @@ namespace jank::compile_server
     jtl::option<compiled_module_info> compile_namespace_source(int64_t id,
                                                                std::string const &ns_name,
                                                                std::string const &source,
+                                                               std::string const &source_path,
                                                                native_vector<std::string> &errors)
     {
       try
@@ -1624,7 +1643,8 @@ namespace jank::compile_server
 
         return compiled_module_info{ std::string(module_name.data(), module_name.size()),
                                      entry_symbol,
-                                     base64_encode(object_result.object_data) };
+                                     base64_encode(object_result.object_data),
+                                     source_path };
       }
       catch(std::exception const &e)
       {

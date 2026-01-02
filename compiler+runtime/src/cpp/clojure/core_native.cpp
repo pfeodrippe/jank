@@ -310,9 +310,18 @@ namespace clojure::core_native
 
   object_ref refer(object_ref const current_ns, object_ref const sym, object_ref const var)
   {
-    expect_object<runtime::ns>(current_ns)
-      ->refer(try_object<obj::symbol>(sym), expect_object<runtime::var>(var))
-      .expect_ok();
+    auto const ns_obj = expect_object<runtime::ns>(current_ns);
+    auto const var_obj = expect_object<runtime::var>(var);
+
+    /* Defensive check with better error message for debugging nil symbol issues */
+    if(sym.is_nil())
+    {
+      throw std::runtime_error("refer: sym is nil for var " + var_obj->n->name->to_code_string()
+                               + "/" + var_obj->name->to_code_string() + " in namespace "
+                               + ns_obj->name->to_code_string());
+    }
+
+    ns_obj->refer(try_object<obj::symbol>(sym), var_obj).expect_ok();
     return jank_nil();
   }
 

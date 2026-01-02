@@ -296,7 +296,9 @@ namespace jank::compile_server
     }
 
     // Require (load) a namespace - send source to compile server
-    require_response require_ns(std::string const &ns, std::string const &source)
+    require_response require_ns(std::string const &ns,
+                                std::string const &source,
+                                std::string const &source_path = "")
     {
       require_response response;
 
@@ -311,7 +313,8 @@ namespace jank::compile_server
       // Build request
       int64_t const id = next_id_++;
       std::string request = R"({"op":"require","id":)" + std::to_string(id) + R"(,"ns":")"
-        + escape_json(ns) + R"(","source":")" + escape_json(source) + R"("})" + "\n";
+        + escape_json(ns) + R"(","source":")" + escape_json(source) + R"(","path":")"
+        + escape_json(source_path) + R"("})" + "\n";
 
       // Send request
       if(send_all(request) < 0)
@@ -385,6 +388,7 @@ namespace jank::compile_server
               compiled_module mod;
               mod.name = get_json_string(obj_str, "name");
               mod.entry_symbol = get_json_string(obj_str, "symbol");
+              mod.source_path = get_json_string(obj_str, "path");
               auto encoded = get_json_string(obj_str, "object");
               mod.object_data = base64_decode(encoded);
 

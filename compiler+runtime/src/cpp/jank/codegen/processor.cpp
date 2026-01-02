@@ -496,9 +496,18 @@ namespace jank::codegen
   processor::processor(analyze::expr::function_ref const expr,
                        jtl::immutable_string const &module,
                        compilation_target const target)
+    : processor{ expr, module, target, target }
+  {
+  }
+
+  processor::processor(analyze::expr::function_ref const expr,
+                       jtl::immutable_string const &module,
+                       compilation_target const target,
+                       compilation_target const owner_target)
     : root_fn{ expr }
     , module{ module }
     , target{ target }
+    , owner_target{ owner_target }
     , struct_name{ runtime::munge(root_fn->unique_name) }
   {
     assert(root_fn->frame.data);
@@ -545,25 +554,45 @@ namespace jank::codegen
       var_tmp,
       expr->name->to_string());
 
-    jtl::option<jtl::immutable_string> meta;
+    jtl::option<runtime::object_ref> meta_obj;
+    jtl::option<jtl::immutable_string> meta_lifted;
     if(expr->name->meta.is_some())
     {
-      meta = detail::lift_constant(lifted_constants, expr->name->meta.unwrap());
+      /* In module/wasm-aot builds, lifted constants are initialized manually in the module load
+       * function. Historically this has been a footgun in iOS JIT, where any mismatch in lifting
+       * or initialization order can surface as garbage metadata (validate_meta sees unknown types).
+       *
+       * For var metadata, we only need the value once (during the def), so inline it in
+       * module-like builds to avoid reliance on lifted constant storage.
+       */
+      if(owner_target == compilation_target::module || owner_target == compilation_target::wasm_aot)
+      {
+        meta_obj = expr->name->meta.unwrap();
+      }
+      else
+      {
+        meta_lifted = detail::lift_constant(lifted_constants, expr->name->meta.unwrap());
+      }
     }
 
     /* Forward declarations just intern the var and evaluate to it. */
     if(expr->value.is_none())
     {
-      if(meta.is_some())
+      if(meta_lifted.is_some() || meta_obj.is_some())
       {
         auto const dynamic{ truthy(
           get(expr->name->meta.unwrap(), __rt_ctx->intern_keyword("dynamic").expect_ok())) };
 
-        util::format_to(body_buffer,
-                        "{}->with_meta({})->set_dynamic({});",
-                        var_tmp,
-                        meta.unwrap(),
-                        dynamic);
+        util::format_to(body_buffer, "{}->with_meta(", var_tmp);
+        if(meta_lifted.is_some())
+        {
+          util::format_to(body_buffer, "{}", meta_lifted.unwrap());
+        }
+        else
+        {
+          detail::gen_constant(meta_obj.unwrap(), body_buffer, true);
+        }
+        util::format_to(body_buffer, ")->set_dynamic({});", dynamic);
         if(expr->position == expression_position::tail)
         {
           util::format_to(body_buffer, "return {};", var_tmp);
@@ -586,16 +615,20 @@ namespace jank::codegen
     switch(expr->position)
     {
       case analyze::expression_position::value:
-        if(meta.is_some())
+        if(meta_lifted.is_some() || meta_obj.is_some())
         {
           auto const dynamic{ truthy(
             get(expr->name->meta.unwrap(), __rt_ctx->intern_keyword("dynamic").expect_ok())) };
-          util::format_to(body_buffer,
-                          "{}->bind_root({})->with_meta({})->set_dynamic({});",
-                          var_tmp,
-                          val.str(true),
-                          meta.unwrap(),
-                          dynamic);
+          util::format_to(body_buffer, "{}->bind_root({})->with_meta(", var_tmp, val.str(true));
+          if(meta_lifted.is_some())
+          {
+            util::format_to(body_buffer, "{}", meta_lifted.unwrap());
+          }
+          else
+          {
+            detail::gen_constant(meta_obj.unwrap(), body_buffer, true);
+          }
+          util::format_to(body_buffer, ")->set_dynamic({});", dynamic);
           return var_tmp;
         }
         else
@@ -611,16 +644,20 @@ namespace jank::codegen
 
         [[fallthrough]];
       case analyze::expression_position::statement:
-        if(meta.is_some())
+        if(meta_lifted.is_some() || meta_obj.is_some())
         {
           auto const dynamic{ truthy(
             get(expr->name->meta.unwrap(), __rt_ctx->intern_keyword("dynamic").expect_ok())) };
-          util::format_to(body_buffer,
-                          "{}->bind_root({})->with_meta({})->set_dynamic({});",
-                          var_tmp,
-                          val.str(true),
-                          meta.unwrap(),
-                          dynamic);
+          util::format_to(body_buffer, "{}->bind_root({})->with_meta(", var_tmp, val.str(true));
+          if(meta_lifted.is_some())
+          {
+            util::format_to(body_buffer, "{}", meta_lifted.unwrap());
+          }
+          else
+          {
+            detail::gen_constant(meta_obj.unwrap(), body_buffer, true);
+          }
+          util::format_to(body_buffer, ")->set_dynamic({});", dynamic);
         }
         else
         {
@@ -1306,23 +1343,38 @@ namespace jank::codegen
     auto const fn_target((target == compilation_target::eval) ? compilation_target::eval
                                                               : compilation_target::function);
     /* Since each codegen proc handles one callable struct, we create a new one for this fn. */
-    processor prc{ expr, module, fn_target };
+    processor prc{ expr, module, fn_target, owner_target };
 
+    /* Always share lifted_vars and lifted_constants with nested functions,
+     * regardless of compilation target. This ensures constants used in
+     * nested functions (like namespace loaders) are properly initialized
+     * in the entry function. */
+    prc.lifted_vars = lifted_vars;
+    prc.lifted_constants = lifted_constants;
+
+    /* Build body for function target. For eval target, declaration_str()
+     * will call build_body() internally, which is when lifted_constants
+     * get populated. */
     if(fn_target == compilation_target::function)
     {
-      /* TODO: Share a context instead. */
-      prc.lifted_vars = lifted_vars;
-      prc.lifted_constants = lifted_constants;
-
       prc.build_body();
-
-      lifted_vars = jtl::move(prc.lifted_vars);
-      lifted_constants = jtl::move(prc.lifted_constants);
-      prc.lifted_vars.clear();
-      prc.lifted_constants.clear();
     }
 
+    /* Generate declaration (this may call build_body() for eval target). */
     util::format_to(deps_buffer, "{}", prc.declaration_str());
+
+    /* Merge back lifted vars and constants from nested functions AFTER
+     * declaration_str(), since that's when build_body() runs for eval target. */
+    for(auto const &v : prc.lifted_vars)
+    {
+      lifted_vars.emplace(v);
+    }
+    for(auto const &c : prc.lifted_constants)
+    {
+      lifted_constants.emplace(c);
+    }
+    prc.lifted_vars.clear();
+    prc.lifted_constants.clear();
 
     switch(expr->position)
     {
@@ -2498,7 +2550,14 @@ namespace jank::codegen
 
   void processor::build_header()
   {
-    if(target != compilation_target::function)
+    /* Add namespace for non-function targets, EXCEPT for nested functions inside a module.
+     * Nested functions (eval target with module/wasm_aot owner) are placed inside the parent's
+     * namespace via deps_buffer, so they shouldn't add their own namespace blocks. */
+    auto const is_nested_in_module{
+      (owner_target == compilation_target::module || owner_target == compilation_target::wasm_aot)
+      && target != compilation_target::module && target != compilation_target::wasm_aot
+    };
+    if(target != compilation_target::function && !is_nested_in_module)
     {
       util::format_to(header_buffer,
                       "namespace {} {",
@@ -2533,28 +2592,39 @@ namespace jank::codegen
         }
       }
 
+      auto const lift_globals{ owner_target == compilation_target::module
+                               || owner_target == compilation_target::wasm_aot };
       auto const is_module_like{ target == compilation_target::module
-                                  || target == compilation_target::wasm_aot };
-      auto &lifted_buffer{ is_module_like ? module_header_buffer : header_buffer };
-      auto const lifted_const{ is_module_like ? "" : "const" };
+                                 || target == compilation_target::wasm_aot };
 
-      for(auto const &v : lifted_vars)
+      /* When compiling a module/wasm-aot, we lift vars/constants into module-scope globals and
+       * initialize them in the module load function (build_footer via placement-new). Nested
+       * function structs are emitted under the module namespace too, so they should reference
+       * those globals. Emitting lifted members in nested functions would shadow the globals and
+       * leave the members uninitialized, causing runtime corruption (e.g. meta type=128).
+       */
+      if(!lift_globals || is_module_like)
       {
-        util::format_to(lifted_buffer,
-                        "jank::runtime::var_ref {} {};",
-                        lifted_const,
-                        v.second.native_name);
-      }
+        auto &lifted_buffer{ is_module_like ? module_header_buffer : header_buffer };
+        auto const lifted_const{ is_module_like ? "" : "const" };
 
+        for(auto const &v : lifted_vars)
+        {
+          util::format_to(lifted_buffer,
+                          "jank::runtime::var_ref {} {};",
+                          lifted_const,
+                          v.second.native_name);
+        }
 
-      for(auto const &v : lifted_constants)
-      {
-        /* TODO: Typed lifted constants (in analysis). */
-        util::format_to(lifted_buffer,
-                        "{} {} {};",
-                        detail::gen_constant_type(v.first, true),
-                        lifted_const,
-                        v.second);
+        for(auto const &v : lifted_constants)
+        {
+          /* TODO: Typed lifted constants (in analysis). */
+          util::format_to(lifted_buffer,
+                          "{} {} {};",
+                          detail::gen_constant_type(v.first, true),
+                          lifted_const,
+                          v.second);
+        }
       }
     }
 
@@ -2750,13 +2820,20 @@ namespace jank::codegen
     /* Struct. */
     util::format_to(footer_buffer, "};");
 
-    /* Namespace. */
-    if(target != compilation_target::function)
+    /* Namespace - close for non-function targets, EXCEPT nested functions in modules
+     * (matching build_header). */
+    auto const is_nested_in_module{
+      (owner_target == compilation_target::module || owner_target == compilation_target::wasm_aot)
+      && target != compilation_target::module && target != compilation_target::wasm_aot
+    };
+    if(target != compilation_target::function && !is_nested_in_module)
     {
       util::format_to(footer_buffer, "}");
     }
 
-    if(target == compilation_target::module || target == compilation_target::wasm_aot)
+    auto const is_module_like{ target == compilation_target::module
+                               || target == compilation_target::wasm_aot };
+    if(is_module_like)
     {
       util::format_to(footer_buffer,
                       "extern \"C\" void {}(){",

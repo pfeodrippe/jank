@@ -270,18 +270,53 @@ namespace jank::runtime
 
         /* jank_load_XXX entry functions return void, while eval functions return object*.
          * Check the entry symbol prefix to determine which type we're calling. */
-        if(entry_sym.starts_with("jank_load_"))
+        try
         {
-          /* Namespace load - returns void */
-          auto fn_ptr = reinterpret_cast<void (*)()>(fn_result.expect_ok());
-          fn_ptr();
-          return jank_nil();
+          if(entry_sym.starts_with("jank_load_"))
+          {
+            /* Namespace load - returns void */
+            auto fn_ptr = reinterpret_cast<void (*)()>(fn_result.expect_ok());
+            fn_ptr();
+            return jank_nil();
+          }
+          else
+          {
+            /* Eval - returns object* */
+            auto fn_ptr = reinterpret_cast<object *(*)()>(fn_result.expect_ok());
+            return fn_ptr();
+          }
         }
-        else
+        catch(std::exception const &e)
         {
-          /* Eval - returns object* */
-          auto fn_ptr = reinterpret_cast<object *(*)()>(fn_result.expect_ok());
-          return fn_ptr();
+          util::println("[jank] Exception while executing remote entry symbol '{}'", entry_sym);
+          util::println("  current *ns*: {}", runtime::to_code_string(current_ns_var->deref()));
+          util::println("  current *file*: {}", runtime::to_code_string(current_file_var->deref()));
+          util::println("  what(): {}", e.what());
+          throw;
+        }
+        catch(jtl::immutable_string const &e)
+        {
+          util::println("[jank] Exception while executing remote entry symbol '{}'", entry_sym);
+          util::println("  current *ns*: {}", runtime::to_code_string(current_ns_var->deref()));
+          util::println("  current *file*: {}", runtime::to_code_string(current_file_var->deref()));
+          util::println("  error: {}", e);
+          throw;
+        }
+        catch(runtime::object_ref const e)
+        {
+          util::println("[jank] Exception while executing remote entry symbol '{}'", entry_sym);
+          util::println("  current *ns*: {}", runtime::to_code_string(current_ns_var->deref()));
+          util::println("  current *file*: {}", runtime::to_code_string(current_file_var->deref()));
+          util::println("  error: {}", runtime::to_code_string(e));
+          throw;
+        }
+        catch(...)
+        {
+          util::println("[jank] Unknown exception while executing remote entry symbol '{}'",
+                        entry_sym);
+          util::println("  current *ns*: {}", runtime::to_code_string(current_ns_var->deref()));
+          util::println("  current *file*: {}", runtime::to_code_string(current_file_var->deref()));
+          throw;
         }
       }
     }
@@ -1149,23 +1184,43 @@ namespace jank::runtime
 
   context::binding_scope::binding_scope()
   {
-    __rt_ctx->push_thread_bindings().expect_ok();
+    /* The no-arg push_thread_bindings() returns ok() without pushing if the stack is empty.
+     * We need to check if the stack was empty before calling to know if we'll need to pop. */
+    auto const &tbfs(__rt_ctx->thread_binding_frames[std::this_thread::get_id()]);
+    if(!tbfs.empty())
+    {
+      __rt_ctx->push_thread_bindings().expect_ok();
+      pushed = true;
+    }
+    /* If stack was empty, we don't push and don't need to pop later */
   }
 
   context::binding_scope::binding_scope(obj::persistent_hash_map_ref const bindings)
   {
     __rt_ctx->push_thread_bindings(bindings).expect_ok();
+    pushed = true;
   }
 
   context::binding_scope::~binding_scope()
   {
-    try
+    /* Only pop if we actually pushed */
+    if(!pushed)
     {
-      __rt_ctx->pop_thread_bindings().expect_ok();
+      return;
     }
-    catch(...)
+
+    auto const res{ __rt_ctx->pop_thread_bindings() };
+    if(res.is_err())
     {
-      util::println("Exception caught while destructing binding_scope");
+      util::println("[jank] binding_scope pop failed: {}", res.expect_err());
+
+      if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+      {
+        util::println("  current *ns*: {}",
+                      runtime::to_code_string(__rt_ctx->current_ns_var->deref()));
+        util::println("  current *file*: {}",
+                      runtime::to_code_string(__rt_ctx->current_file_var->deref()));
+      }
     }
   }
 

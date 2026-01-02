@@ -68,17 +68,6 @@ namespace std
   size_t
   hash<jank::runtime::object_ref>::operator()(jank::runtime::object_ref const o) const noexcept
   {
-    if(!o.data)
-    {
-      std::cerr << "[HASH DEBUG] null object!\n";
-      std::abort();
-    }
-    auto type_val = static_cast<int>(o->type);
-    if(type_val < 0 || type_val > 100)
-    {
-      std::cerr << "[HASH DEBUG] suspicious type=" << type_val
-                << " ptr=" << static_cast<void const *>(o.data) << "\n";
-    }
     return jank::hash::visit(o.data);
   }
 

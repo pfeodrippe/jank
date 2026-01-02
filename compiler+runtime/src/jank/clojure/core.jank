@@ -4202,9 +4202,9 @@
     (reduce (fn [acc kv]
               (let [k (first kv)
                     v (second kv)]
-                ; TODO: Check for visibility.
                 (if (var? v)
-                  (if (= ns (cpp/clojure.core_native.var_ns v))
+                  (if (and (= ns (cpp/clojure.core_native.var_ns v))
+                           (not (:private (meta v))))
                     (assoc acc k v)
                     acc)
                   acc)))
@@ -4558,18 +4558,23 @@
   [& args]
   (let [flags (filter keyword? args)
         opts (interleave flags (repeat true))
-        args (remove keyword? args)]
+        ;; Filter out nil values and non-libspec vectors that may appear in JIT mode
+        ;; due to codegen issues (e.g. refer bindings like [*compile-path* #'clojure.core/*compile-path*])
+        args (remove #(or (keyword? %)
+                          (nil? %)
+                          (and (vector? %) (not (libspec? %)) (not (native-header-libspec? %)))) args)]
     (let [supported #{:as :reload :reload-all :require :use :verbose :refer :as-alias}
           unsupported (seq (remove supported flags))]
       (throw-if unsupported
                 (str "Unsupported option(s) supplied: " unsupported)))
-    (throw-if (not (seq args)) "Nothing specified to load")
-    (doseq [arg args]
-      (if (native-header-libspec? arg)
-        (register-native-header! arg)
-        (do
-          (throw-if (not (libspec? arg)) (str "not a libspec: " arg))
-          (apply load-lib (prependss arg opts)))))))
+    ;; Don't throw if no args after filtering - might all be spurious in JIT mode
+    (when (seq args)
+      (doseq [arg args]
+        (if (native-header-libspec? arg)
+          (register-native-header! arg)
+          (do
+            (throw-if (not (libspec? arg)) (str "not a libspec: " arg))
+            (apply load-lib (prependss arg opts))))))))
 
 (defn compile
   "Compiles the namespace named by the symbol lib into a set of

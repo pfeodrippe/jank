@@ -195,6 +195,9 @@ namespace jank::runtime
       binding_scope();
       binding_scope(obj::persistent_hash_map_ref const bindings);
       ~binding_scope();
+
+      /* Track whether we actually pushed, to avoid asymmetric pop when stack was empty */
+      bool pushed{ false };
     };
 
     jtl::string_result<void> push_thread_bindings();

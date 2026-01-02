@@ -31,6 +31,11 @@
 #ifdef JANK_IOS_JIT
   #include <jank/ios/eval_server.hpp>
   #include <jank/compile_server/remote_compile.hpp>
+  #include <jank/runtime/ns.hpp>
+  #include <jank/runtime/obj/symbol.hpp>
+  #include <jank/runtime/obj/persistent_array_map.hpp>
+  #include <jank/runtime/var.hpp>
+  #include <jank/runtime/detail/type.hpp>
 
 extern "C" void jank_load_jank_nrepl_server_asio();
 extern "C" void jank_load_clojure_core_native();
@@ -51,6 +56,38 @@ __attribute__((visibility("default"))) extern "C" void jank_ios_register_native_
   /* Note: NO leading slash - context::load_module strips it before calling loader::load,
    * so is_loaded() checks for "jank.nrepl-server.asio" without the slash. */
   jank_module_set_loaded("jank.nrepl-server.asio");
+}
+
+/* Debug function to print sizeof for key types - helps diagnose ABI mismatches */
+__attribute__((visibility("default"))) extern "C" void jank_debug_print_sizeof()
+{
+  std::cerr << "[ABI CHECK - iOS JIT lib]\n";
+  std::cerr << "  sizeof(object): " << sizeof(jank::runtime::object) << "\n";
+  std::cerr << "  sizeof(object_ref): " << sizeof(jank::runtime::object_ref) << "\n";
+  std::cerr << "  sizeof(object_type): " << sizeof(jank::runtime::object_type) << "\n";
+  std::cerr << "  sizeof(native_persistent_hash_map): "
+            << sizeof(jank::runtime::detail::native_persistent_hash_map) << "\n";
+  std::cerr << "  sizeof(native_persistent_vector): "
+            << sizeof(jank::runtime::detail::native_persistent_vector) << "\n";
+  std::cerr << "  sizeof(native_persistent_hash_set): "
+            << sizeof(jank::runtime::detail::native_persistent_hash_set) << "\n";
+  std::cerr << "  sizeof(ns): " << sizeof(jank::runtime::ns) << "\n";
+  std::cerr << "  sizeof(var): " << sizeof(jank::runtime::var) << "\n";
+  std::cerr << "  sizeof(symbol): " << sizeof(jank::runtime::obj::symbol) << "\n";
+  std::cerr << "  sizeof(persistent_array_map): "
+            << sizeof(jank::runtime::obj::persistent_array_map) << "\n";
+  std::cerr << "  sizeof(std::atomic<i32>): " << sizeof(std::atomic<jank::i32>) << "\n";
+  std::cerr << "  IMMER_TAGGED_NODE: " << IMMER_TAGGED_NODE << "\n";
+  std::cerr << "  IMMER_HAS_LIBGC: "
+  #ifdef IMMER_HAS_LIBGC
+            << IMMER_HAS_LIBGC
+  #else
+            << "undefined"
+  #endif
+            << "\n";
+  std::cerr << "  JANK_IOS_JIT: 1\n";
+  std::cerr << "  JANK_TARGET_IOS: 1\n";
+  std::cerr << "[END ABI CHECK]\n";
 }
 #endif
 
