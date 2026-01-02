@@ -34,7 +34,7 @@ namespace jank::compile_server
   struct remote_eval_result
   {
     bool success{ false };
-    runtime::object_ref value{ runtime::jank_nil };
+    runtime::object_ref value{ runtime::jank_nil().erase() };
     std::string error;
     std::string error_type; // "connection", "compile", "load", "runtime"
   };

@@ -549,7 +549,7 @@ connection_end:
             // Note: Namespace switching is handled on the macOS side (ios_remote_eval.hpp)
             // by prepending (in-ns ...) to the code before sending to iOS.
             // This keeps the iOS eval server simple.
-            obj = runtime::__rt_ctx->eval_string(code);
+            obj = runtime::__rt_ctx->eval_string(code).unwrap_or(runtime::jank_nil().erase());
           }
           auto code_str = runtime::to_code_string(obj);
           std::string value_str(code_str.data(), code_str.size());

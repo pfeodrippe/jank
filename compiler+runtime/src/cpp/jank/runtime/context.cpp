@@ -710,7 +710,7 @@ namespace jank::runtime
       /* Convert the form to a string representation that can be sent to
        * the compile server. We use to_code_string for proper formatting. */
       auto const code = runtime::to_code_string(o);
-      return eval_string(code);
+      return eval_string(code).unwrap_or(jank_nil().erase());
     }
   #endif
 
