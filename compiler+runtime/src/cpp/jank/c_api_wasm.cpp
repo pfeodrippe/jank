@@ -66,6 +66,17 @@ extern "C"
     return __rt_ctx->read_string(s).erase().data;
   }
 
+  jank_object_ref jank_ns_intern(jank_object_ref const sym)
+  {
+    auto const sym_obj(try_object<obj::symbol>(reinterpret_cast<object *>(sym)));
+    return __rt_ctx->intern_ns(sym_obj).erase().data;
+  }
+
+  jank_object_ref jank_ns_intern_c(char const * const sym)
+  {
+    return __rt_ctx->intern_ns(sym).erase().data;
+  }
+
   /* Evaluate a string and return the result as a code string.
    * This is useful for WASM where we want to see the result printed. */
   char const *jank_eval_string_c(char const * const s)
@@ -578,6 +589,26 @@ extern "C"
                      op_box->canonical_type,
                      type),
         meta_source(source_obj.data),
+        object_source(op_box));
+    }
+
+    return op_box->data;
+  }
+
+  void *jank_unbox_with_source(char const * const type,
+                               jank_object_ref const o,
+                               jank_object_ref const source)
+  {
+    auto const box_obj(reinterpret_cast<object *>(o));
+    auto const source_obj(reinterpret_cast<object *>(source));
+    auto const op_box{ try_object<obj::opaque_box>(box_obj) };
+    if(!op_box->canonical_type.empty() && op_box->canonical_type != type)
+    {
+      throw error::runtime_invalid_unbox(
+        util::format("This opaque box holds a '{}', but it was unboxed as a '{}'.",
+                     op_box->canonical_type,
+                     type),
+        meta_source(source_obj),
         object_source(op_box));
     }
 

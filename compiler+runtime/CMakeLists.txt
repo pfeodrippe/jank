@@ -1175,6 +1175,8 @@ elseif(jank_target_ios)
     target_sources(jank_lib PRIVATE
       src/cpp/jtl/panic_wasm.cpp
       src/cpp/jtl/assert_wasm.cpp
+      # iOS error reporting (simple stderr, no FTXUI)
+      src/cpp/jank/error/report_ios.cpp
     )
 
     # Define JANK_TARGET_IOS, JANK_TARGET_WASM, and JANK_TARGET_EMSCRIPTEN for conditional compilation

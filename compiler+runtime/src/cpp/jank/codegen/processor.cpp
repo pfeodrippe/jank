@@ -2450,7 +2450,7 @@ namespace jank::codegen
        * Then every function within that module can share the same globals.
        * This also makes creating functions cheaper. However, it requires
        * some special tracking. */
-      if(target == compilation_target::module)
+      if(target == compilation_target::module || target == compilation_target::wasm_aot)
       {
         util::format_to(module_header_buffer,
                         "namespace {} {",
@@ -2464,7 +2464,7 @@ namespace jank::codegen
       build_header();
       build_footer();
 
-      if(target == compilation_target::module)
+      if(target == compilation_target::module || target == compilation_target::wasm_aot)
       {
         /* Namespace. */
         util::format_to(module_footer_buffer, "}");
@@ -2525,9 +2525,10 @@ namespace jank::codegen
         }
       }
 
-      auto &lifted_buffer{ (target == compilation_target::module) ? module_header_buffer
-                                                                  : header_buffer };
-      auto const lifted_const{ (target == compilation_target::module) ? "" : "const" };
+      auto const is_module_like{ target == compilation_target::module
+                                  || target == compilation_target::wasm_aot };
+      auto &lifted_buffer{ is_module_like ? module_header_buffer : header_buffer };
+      auto const lifted_const{ is_module_like ? "" : "const" };
 
       for(auto const &v : lifted_vars)
       {
@@ -2747,7 +2748,7 @@ namespace jank::codegen
       util::format_to(footer_buffer, "}");
     }
 
-    if(target == compilation_target::module)
+    if(target == compilation_target::module || target == compilation_target::wasm_aot)
     {
       util::format_to(footer_buffer,
                       "extern \"C\" void {}(){",

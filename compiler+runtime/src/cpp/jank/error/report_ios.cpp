@@ -2,6 +2,7 @@
 // FTXUI is not available on iOS, so we just print to stderr
 
 #include <jank/error.hpp>
+#include <jtl/immutable_string.hpp>
 #include <iostream>
 
 namespace jank::error
@@ -14,5 +15,11 @@ namespace jank::error
     {
       std::cerr << "  caused by: " << e->cause->message << std::endl;
     }
+  }
+
+  void warn(jtl::immutable_string const &msg)
+  {
+    // Simple stderr warning output for iOS
+    std::cerr << "\033[0;33mwarning:\033[0m " << msg << std::endl;
   }
 }

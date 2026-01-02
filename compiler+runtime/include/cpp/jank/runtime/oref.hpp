@@ -450,7 +450,10 @@ namespace jank::runtime
 
     oref<object> erase() const noexcept
     {
-      return { std::bit_cast<object *>(jank_const_nil()) };
+      /* Don't call jank_const_nil() here - it would cause infinite recursion
+       * since jank_const_nil() calls jank_nil().erase().
+       * Since nil::base is the only data member, we can reinterpret_cast directly. */
+      return { reinterpret_cast<object *>(data) };
     }
 
     bool is_some() const noexcept
