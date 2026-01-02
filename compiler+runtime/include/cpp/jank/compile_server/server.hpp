@@ -951,14 +951,19 @@ namespace jank::compile_server
 
         for(auto const &dep_module : modules_to_compile)
         {
+          // Skip the main module - it will be compiled separately after dependencies
+          std::string dep_module_str(dep_module.data(), dep_module.size());
+          if(dep_module_str == ns_name)
+          {
+            continue;
+          }
+
           // Skip core modules (clojure.core, clojure.string, etc.)
           if(runtime::module::is_core_module(dep_module))
           {
             std::cout << "[compile-server] Skipping core module: " << dep_module << std::endl;
             continue;
           }
-
-          std::string dep_module_str(dep_module.data(), dep_module.size());
 
           // Find and read the module source
           std::cout << "[compile-server] Compiling transitive dependency: " << dep_module
@@ -1064,12 +1069,12 @@ namespace jank::compile_server
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
         auto const cpp_code_body = cg_prc.declaration_str();
-        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name).data());
-        auto const entry_symbol = "_" + munged_struct_name + "_0";
 
-        auto const module_ns = runtime::module::module_to_native_ns(module_name);
-        auto const qualified_struct
-          = std::string(module_ns.data(), module_ns.size()) + "::" + munged_struct_name;
+        // Use the jank_load_XXX function as the entry symbol - this function is generated
+        // by the codegen processor and contains the critical var/constant initialization code.
+        // Previously we were generating a custom entry that bypassed this initialization!
+        auto const load_fn_name = runtime::module::module_to_load_function(module_name);
+        auto const entry_symbol = std::string(load_fn_name.data(), load_fn_name.size());
 
         std::string cpp_code;
         cpp_code += "#include <jank/prelude.hpp>\n";
@@ -1085,11 +1090,10 @@ namespace jank::compile_server
         }
         cpp_code += "\n";
 
+        // The codegen processor already generates the jank_load_XXX entry function
+        // which properly initializes lifted vars/constants before calling the main code.
+        // We just need to include its output.
         cpp_code += std::string(cpp_code_body);
-        cpp_code += "\n\n";
-        cpp_code += "extern \"C\" ::jank::runtime::object_ref " + entry_symbol + "() {\n";
-        cpp_code += "  return ::jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
-        cpp_code += "}\n";
 
         // Cross-compile to ARM64 object file
         auto const object_result = cross_compile(id, cpp_code);
@@ -1558,12 +1562,11 @@ namespace jank::compile_server
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
         auto const cpp_code_body = cg_prc.declaration_str();
-        auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name).data());
-        auto const entry_symbol = "_" + munged_struct_name + "_0";
 
-        auto const module_ns = runtime::module::module_to_native_ns(module_name);
-        auto const qualified_struct
-          = std::string(module_ns.data(), module_ns.size()) + "::" + munged_struct_name;
+        // Use the jank_load_XXX function as the entry symbol - this function is generated
+        // by the codegen processor and contains the critical var/constant initialization code.
+        auto const load_fn_name = runtime::module::module_to_load_function(module_name);
+        auto const entry_symbol = std::string(load_fn_name.data(), load_fn_name.size());
 
         std::string cpp_code;
         cpp_code += "#include <jank/prelude.hpp>\n";
@@ -1578,11 +1581,8 @@ namespace jank::compile_server
         }
         cpp_code += "\n";
 
+        // The codegen processor already generates the jank_load_XXX entry function
         cpp_code += std::string(cpp_code_body);
-        cpp_code += "\n\n";
-        cpp_code += "extern \"C\" ::jank::runtime::object_ref " + entry_symbol + "() {\n";
-        cpp_code += "  return ::jank::runtime::make_box<" + qualified_struct + ">()->call();\n";
-        cpp_code += "}\n";
 
         // Cross-compile to ARM64 object file
         auto const object_result = cross_compile(id, cpp_code);

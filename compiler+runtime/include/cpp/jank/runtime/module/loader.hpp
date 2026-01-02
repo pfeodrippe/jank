@@ -168,8 +168,10 @@ namespace jank::runtime::module
     load_o(jtl::immutable_string const &module, file_entry const &entry) const;
     jtl::result<void, error_ref>
     load_cpp(jtl::immutable_string const &module, file_entry const &entry) const;
-    jtl::result<void, error_ref> load_jank(file_entry const &entry) const;
-    jtl::result<void, error_ref> load_cljc(file_entry const &entry) const;
+    jtl::result<void, error_ref>
+    load_jank(jtl::immutable_string const &module, file_entry const &entry) const;
+    jtl::result<void, error_ref>
+    load_cljc(jtl::immutable_string const &module, file_entry const &entry) const;
 
     /* This only adds a single path, so it's assumed there's no separator present. */
     void add_path(jtl::immutable_string const &path);

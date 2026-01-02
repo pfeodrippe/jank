@@ -943,7 +943,7 @@ namespace jank::runtime::module
     switch(module_type_to_load)
     {
       case module_type::jank:
-        res = load_jank(module_sources.jank.unwrap());
+        res = load_jank(module, module_sources.jank.unwrap());
         break;
       case module_type::o:
         res = load_o(module, module_sources.o.unwrap());
@@ -952,7 +952,7 @@ namespace jank::runtime::module
         res = load_cpp(module, module_sources.cpp.unwrap());
         break;
       case module_type::cljc:
-        res = load_cljc(module_sources.cljc.unwrap());
+        res = load_cljc(module, module_sources.cljc.unwrap());
         break;
       default:
         res = error::internal_runtime_failure(
@@ -1070,7 +1070,9 @@ namespace jank::runtime::module
 #endif
   }
 
-  jtl::result<void, error_ref> loader::load_jank(file_entry const &entry) const
+  jtl::result<void, error_ref>
+  loader::load_jank([[maybe_unused]] jtl::immutable_string const &module,
+                    file_entry const &entry) const
   {
 #ifdef JANK_TARGET_EMSCRIPTEN
     return error::runtime_unable_to_load_module("Loading source modules at runtime is unsupported "
@@ -1116,8 +1118,10 @@ namespace jank::runtime::module
         source = buffer.str();
       }
 
-      /* Convert path to namespace name */
-      auto const ns_name = path_to_module(std::filesystem::path(std::string(entry.path)));
+      /* Use the module name directly instead of deriving from path.
+       * On iOS, entry.path is an absolute path, and path_to_module would
+       * incorrectly convert it to something like Users.pfeodrippe.Library... */
+      auto const ns_name = std::string(module.data(), module.size());
 
       /* Send to compile server */
       auto const response = compile_server::remote_require(std::string(ns_name), source);
@@ -1216,9 +1220,10 @@ namespace jank::runtime::module
 #endif
   }
 
-  jtl::result<void, error_ref> loader::load_cljc(file_entry const &entry) const
+  jtl::result<void, error_ref>
+  loader::load_cljc(jtl::immutable_string const &module, file_entry const &entry) const
   {
-    return load_jank(entry);
+    return load_jank(module, entry);
   }
 
   void loader::add_path(jtl::immutable_string const &path)
