@@ -1025,7 +1025,8 @@ namespace jank::runtime::module
     }
 
     auto const load_fn_res{ __rt_ctx->jit_prc.find_symbol(load_function_name).expect_ok() };
-    reinterpret_cast<object *(*)()>(load_fn_res)();
+    /* jank_load_XXX functions return void, not object* */
+    reinterpret_cast<void (*)()>(load_fn_res)();
 
     return ok();
 #endif
@@ -1211,7 +1212,8 @@ namespace jank::runtime::module
       for(auto const &[name, fn_addr, entry_sym] : entry_functions)
       {
         std::cout << "[loader] Phase 2 - Calling entry function for: " << name << std::endl;
-        auto fn_ptr = reinterpret_cast<object_ref (*)()>(fn_addr);
+        /* jank_load_XXX functions return void, not object_ref */
+        auto fn_ptr = reinterpret_cast<void (*)()>(fn_addr);
         fn_ptr();
         std::cout << "[loader] Loaded remote module: " << name << std::endl;
       }

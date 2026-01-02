@@ -83,7 +83,7 @@ namespace
   }
 }
 
-jank_object_ref jank_load_jank_debug_allocator_native()
+void jank_load_jank_debug_allocator_native()
 {
   using namespace jank;
   using namespace jank::runtime;
@@ -107,6 +107,4 @@ jank_object_ref jank_load_jank_debug_allocator_native()
   intern_fn("detect-leaks", &debug_allocator_detect_leaks);
   intern_fn("double-free-count", &debug_allocator_double_free_count);
   intern_fn("debug-stats", &debug_allocator_debug_stats);
-
-  return jank_nil().erase().data;
 }

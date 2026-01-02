@@ -284,7 +284,7 @@ namespace
   }
 }
 
-jank_object_ref jank_load_jank_arena_native()
+void jank_load_jank_arena_native()
 {
   using namespace jank;
   using namespace jank::runtime;
@@ -319,6 +319,4 @@ jank_object_ref jank_load_jank_arena_native()
 
   /* Create custom allocator from jank functions */
   intern_fn("create-jank-allocator", &create_jank_allocator);
-
-  return jank_nil().erase().data;
 }

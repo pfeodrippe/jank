@@ -27,7 +27,7 @@
 #ifdef JANK_PHASE_2
 extern "C" void jank_load_clojure_core();
 #endif
-extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
+extern "C" void jank_load_jank_nrepl_server_asio();
 
 namespace jank::environment
 {

@@ -1,3 +1,22 @@
+## 2026-01-02 - iOS JIT: binding_scope destructor + "expected symbol found nil"
+
+### Symptom
+- During iOS remote-JIT module loading, after calling an entry function (e.g. `vybe.util`), the runtime prints `Exception caught while destructing binding_scope` and then fails with `invalid object type (expected symbol found nil)`.
+
+### Key discovery
+- `binding_scope::~binding_scope()` in `compiler+runtime/src/cpp/jank/runtime/context.cpp` catches and **swallows** the real exception thrown by `pop_thread_bindings().expect_ok()`, so the print is often a secondary symptom.
+- This repo already contains investigation notes pointing to a common root cause: **ABI/function signature mismatches** for `jank_load_*` entrypoints can corrupt state and later manifest as binding/pop failures and “expected symbol found nil”.
+
+### Concrete repo issue fixed
+- Found inconsistent `extern "C"` declarations in:
+   - `compiler+runtime/src/cpp/main.cpp` declaring `jank_load_jank_{nrepl_server_asio,arena_native,debug_allocator_native}` as returning `jank_object_ref`.
+   - `compiler+runtime/src/cpp/compile_server_main.cpp` declaring `jank_load_jank_nrepl_server_asio` as returning `void*`.
+- Actual definitions (and the iOS loader) treat these `jank_load_*` functions as `void`, so the inconsistent declarations are UB and can contribute to hard-to-explain crashes.
+- Patched these declarations to `extern "C" void ...();` to match the implementation and loader behavior.
+
+### Useful pointers
+- Throw site masking: `compiler+runtime/src/cpp/jank/runtime/context.cpp` (`binding_scope` destructor).
+- iOS loader calls `jank_load_*` as `void (*)()` in `compiler+runtime/src/cpp/jank/runtime/module/loader.cpp`.
 # WASM Development Context
 
 ## Session: November 25, 2025

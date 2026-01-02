@@ -595,11 +595,11 @@ namespace jank::nrepl_server::asio
 /* The 'used' and 'visibility' attributes prevent the linker from stripping
  * this symbol during dead code elimination. This is needed for iOS JIT where
  * native modules are looked up via dlsym at runtime. */
-extern "C" __attribute__((used, visibility("default"))) jank_object_ref
+extern "C" __attribute__((used, visibility("default"))) void
 jank_load_jank_nrepl_server_asio()
 {
   jank::nrepl_server::asio::__ns loader;
-  return loader.call().erase().data;
+  loader.call();
 }
 
 /* Start the nREPL server on the given port and bind address.

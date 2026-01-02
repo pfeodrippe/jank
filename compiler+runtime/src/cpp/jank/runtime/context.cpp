@@ -268,8 +268,21 @@ namespace jank::runtime
             "Failed to find entry symbol in remote-compiled object: " + response.entry_symbol });
         }
 
-        auto const fn_ptr = reinterpret_cast<object *(*)()>(fn_result.expect_ok());
-        return fn_ptr();
+        /* jank_load_XXX entry functions return void, while eval functions return object*.
+         * Check the entry symbol prefix to determine which type we're calling. */
+        if(entry_sym.starts_with("jank_load_"))
+        {
+          /* Namespace load - returns void */
+          auto fn_ptr = reinterpret_cast<void (*)()>(fn_result.expect_ok());
+          fn_ptr();
+          return jank_nil();
+        }
+        else
+        {
+          /* Eval - returns object* */
+          auto fn_ptr = reinterpret_cast<object *(*)()>(fn_result.expect_ok());
+          return fn_ptr();
+        }
       }
     }
 #endif /* JANK_IOS_JIT */

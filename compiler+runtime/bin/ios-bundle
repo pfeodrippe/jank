@@ -596,23 +596,23 @@ if [[ "${jit_mode}" == "true" && -z "${entry_module}" ]]; then
 #include <iostream>
 
 // Core library load functions
-extern "C" void* jank_load_clojure_core_native();
-extern "C" void* jank_load_core();
-extern "C" void* jank_load_string();
-extern "C" void* jank_load_set();
-extern "C" void* jank_load_walk();
-extern "C" void* jank_load_template__();
-extern "C" void* jank_load_test();
+extern "C" void jank_load_clojure_core_native();
+extern "C" void jank_load_core();
+extern "C" void jank_load_string();
+extern "C" void jank_load_set();
+extern "C" void jank_load_walk();
+extern "C" void jank_load_template__();
+extern "C" void jank_load_test();
 
 // nREPL native module loader (required for JIT mode)
-extern "C" void* jank_load_jank_nrepl_server_asio();
+extern "C" void jank_load_jank_nrepl_server_asio();
 
 // Compiler native module (native-source, etc.)
-extern "C" void* jank_load_jank_compiler_native();
+extern "C" void jank_load_jank_compiler_native();
 
 // nREPL server module (jank code that wraps the native module)
 // Note: jank uses only the last segment for function names, so jank.nrepl-server.server -> jank_load_server
-extern "C" void* jank_load_server();
+extern "C" void jank_load_server();
 
 extern "C" void jank_module_set_loaded(const char* module);
 
@@ -797,13 +797,13 @@ if [[ -n "${entry_module}" ]]; then
 #include <iostream>
 
 // Core library load functions
-extern "C" void* jank_load_clojure_core_native();
-extern "C" void* jank_load_core();
-extern "C" void* jank_load_string();
-extern "C" void* jank_load_set();
-extern "C" void* jank_load_walk();
-extern "C" void* jank_load_template__();  // double underscore because 'template' is C++ reserved word
-extern "C" void* jank_load_test();
+extern "C" void jank_load_clojure_core_native();
+extern "C" void jank_load_core();
+extern "C" void jank_load_string();
+extern "C" void jank_load_set();
+extern "C" void jank_load_walk();
+extern "C" void jank_load_template__();  // double underscore because 'template' is C++ reserved word
+extern "C" void jank_load_test();
 
 HEADER
 
@@ -811,14 +811,14 @@ HEADER
   for module in "${user_modules[@]}"; do
     # Replace both . and - with underscores for valid C++ identifiers
     func_name="jank_load_$(echo "${module}" | tr '.-' '__')"
-    echo "extern \"C\" void* ${func_name}();" >> "${init_file}"
+    echo "extern \"C\" void ${func_name}();" >> "${init_file}"
   done
 
   cat >> "${init_file}" << 'MIDDLE'
 
 // nREPL native module loader (only for JIT mode)
 #if defined(JANK_IOS_JIT)
-extern "C" void* jank_load_jank_nrepl_server_asio();
+extern "C" void jank_load_jank_nrepl_server_asio();
 #endif
 
 extern "C" void jank_module_set_loaded(const char* module);

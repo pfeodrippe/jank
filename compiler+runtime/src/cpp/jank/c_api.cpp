@@ -32,10 +32,10 @@
   #include <jank/ios/eval_server.hpp>
   #include <jank/compile_server/remote_compile.hpp>
 
-extern "C" jank_object_ref jank_load_jank_nrepl_server_asio();
-extern "C" jank_object_ref jank_load_clojure_core_native();
-extern "C" jank_object_ref jank_load_jank_arena_native();
-extern "C" jank_object_ref jank_load_jank_debug_allocator_native();
+extern "C" void jank_load_jank_nrepl_server_asio();
+extern "C" void jank_load_clojure_core_native();
+extern "C" void jank_load_jank_arena_native();
+extern "C" void jank_load_jank_debug_allocator_native();
 
 /* Force linker to include native modules. This function MUST be called
  * at init time to ensure the linker includes these symbols from the static library. */

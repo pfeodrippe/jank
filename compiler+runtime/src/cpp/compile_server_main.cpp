@@ -28,7 +28,7 @@
 #include <jank/perf_native.hpp>
 
 // nREPL server asio native module (no header - declare extern)
-extern "C" void *jank_load_jank_nrepl_server_asio();
+extern "C" void jank_load_jank_nrepl_server_asio();
 
 namespace
 {

@@ -1,3 +1,71 @@
+Why would I have this error?
+
+[compile-server] Modules to compile for iOS: 17
+[compile-server] Skipping core module: jank.nrepl-server.asio
+[compile-server] Skipping core module: clojure.core
+[compile-server] Compiling transitive dependency: vybe.sdf.math
+[compile-server] Dumped dep code to: /tmp/jank-debug-dep-vybe_sdf_math.cpp
+[incremental-compiler] Compiled compile_1 (571768 bytes) - parse: 154ms, emit: 196ms, total: 352ms
+[compile-server] Compiled dependency: vybe.sdf.math (571768 bytes)
+[compile-server] Compiling transitive dependency: vybe.sdf.state
+[compile-server] Dumped dep code to: /tmp/jank-debug-dep-vybe_sdf_state.cpp
+[incremental-compiler] Compiled compile_1 (238456 bytes) - parse: 36ms, emit: 80ms, total: 118ms
+[compile-server] Compiled dependency: vybe.sdf.state (238456 bytes)
+[compile-server] Skipping core module: clojure.string
+[compile-server] Compiling transitive dependency: vybe.util
+[compile-server] Dumped dep code to: /tmp/jank-debug-dep-vybe_util.cpp
+[incremental-compiler] Compiled compile_1 (1432208 bytes) - parse: 311ms, emit: 698ms, total: 1014ms
+[compile-server] Compiled dependency: vybe.util (1432208 bytes)
+[compile-server] Compiling transitive dependency: vybe.sdf.shader
+[compile-server] Dumped dep code to: /tmp/jank-debug-dep-vybe_sdf_shader.cpp
+[incremental-compiler] Compiled compile_1 (315952 bytes) - parse: 863ms, emit: 107ms, total: 972ms
+[compile-server] Compiled dependency: vybe.sdf.shader (315952 bytes)
+[compile-server] Compiling transitive dependency: vybe.sdf.greeting
+[compile-server] Dumped dep code to: /tmp/jank-debug-dep-vybe_sdf_greeting.cpp
+[incremental-compiler] Compiled compile_1 (99440 bytes) - parse: 14ms, emit: 32ms, total: 47ms
+[compile-server] Compiled dependency: vybe.sdf.greeting (99440 bytes)
+[compile-server] Compiling transitive dependency: vybe.sdf.ui
+[compile-server] Dumped dep code to: /tmp/jank-debug-dep-vybe_sdf_ui.cpp
+[incremental-compiler] Compiled compile_1 (1902296 bytes) - parse: 193ms, emit: 663ms, total: 863ms
+[compile-server] Compiled dependency: vybe.sdf.ui (1902296 bytes)
+[compile-server] Compiling transitive dependency: vybe.type
+[compile-server] Dumped dep code to: /tmp/jank-debug-dep-vybe_type.cpp
+[incremental-compiler] Compiled compile_1 (909400 bytes) - parse: 316ms, emit: 314ms, total: 634ms
+[compile-server] Compiled dependency: vybe.type (909400 bytes)
+[compile-server] Compiling transitive dependency: vybe.flecs
+[compile-server] Dumped dep code to: /tmp/jank-debug-dep-vybe_flecs.cpp
+[incremental-compiler] Compiled compile_1 (1603528 bytes) - parse: 301ms, emit: 605ms, total: 913ms
+[compile-server] Compiled dependency: vybe.flecs (1603528 bytes)
+[compile-server] Skipping core module: clojure.core-native
+[compile-server] Skipping core module: jank.perf-native
+[compile-server] Skipping core module: jank.compiler-native
+[compile-server] Skipping core module: native
+[compile-server] Skipping core module: cpp
+warning: 'run!' already referred to #'clojure.core/run! in namespace 'vybe.sdf.ios' but has been replaced by #'vybe.sdf.ios/run!
+[compile-server] Adding native header: vulkan/sdf_engine.hpp
+[compile-server] Dumped main ns code to: /tmp/jank-debug-vybe_sdf_ios.cpp
+[incremental-compiler] Compiled compile_1 (1329872 bytes) - parse: 140ms, emit: 452ms, total: 597ms
+[compile-server] Namespace vybe.sdf.ios compiled successfully, object size: 1329872 bytes
+[compile-server] Total modules compiled: 9
+[compile-client] Required namespace successfully, 9 module(s)
+[loader] Phase 1 - Loaded object for: vybe.sdf.math
+[loader] Phase 1 - Loaded object for: vybe.sdf.state
+[loader] Phase 1 - Loaded object for: vybe.util
+[loader] Phase 1 - Loaded object for: vybe.sdf.shader
+[loader] Phase 1 - Loaded object for: vybe.sdf.greeting
+[loader] Phase 1 - Loaded object for: vybe.sdf.ui
+[loader] Phase 1 - Loaded object for: vybe.type
+[loader] Phase 1 - Loaded object for: vybe.flecs
+[loader] Phase 1 - Loaded object for: vybe.sdf.ios
+[loader] Phase 2 - Executing 9 entry functions...
+[loader] Phase 2 - Calling entry function for: vybe.sdf.math
+[jank-ios] Registered native alias (header pre-compiled by server): <vybe/vybe_sdf_math.h>warning: 'abs' already referred to #'clojure.core/abs in namespace 'vybe.sdf.math' but has been replaced by #'vybe.sdf.math/abs
+[loader] Loaded remote module: vybe.sdf.math
+[loader] Phase 2 - Calling entry function for: vybe.sdf.state
+[loader] Loaded remote module: vybe.sdf.state
+[loader] Phase 2 - Calling entry function for: vybe.util
+Exception caught while destructing binding_scope
+[jank] Error calling -main: invalid object type (expected symbol found nil)
 # Prompts
 
 ## Prompt 1 (November 25, 2025)

@@ -2,4 +2,4 @@
 
 #include <jank/c_api.h>
 
-extern "C" jank_object_ref jank_load_jank_debug_allocator_native();
+extern "C" void jank_load_jank_debug_allocator_native();
