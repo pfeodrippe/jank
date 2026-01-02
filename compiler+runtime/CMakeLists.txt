@@ -93,7 +93,7 @@ execute_process(
   ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-set(jank_version "jank-${CMAKE_PROJECT_VERSION}-${jank_git_hash}")
+set(jank_version "jank-${CMAKE_PROJECT_VERSION}-alpha")
 
 if(jank_target_wasm)
   # Don't force C++ standard for wasm - let emscripten handle it

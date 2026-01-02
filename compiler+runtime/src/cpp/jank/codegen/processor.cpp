@@ -559,26 +559,27 @@ namespace jank::codegen
         auto const dynamic{ truthy(
           get(expr->name->meta.unwrap(), __rt_ctx->intern_keyword("dynamic").expect_ok())) };
 
-        auto v{
-          util::format("{}->with_meta({})->set_dynamic({})", var_tmp, meta.unwrap(), dynamic)
-        };
+        util::format_to(body_buffer,
+                        "{}->with_meta({})->set_dynamic({});",
+                        var_tmp,
+                        meta.unwrap(),
+                        dynamic);
         if(expr->position == expression_position::tail)
         {
-          util::format_to(body_buffer, "return {};", v);
+          util::format_to(body_buffer, "return {};", var_tmp);
           return none;
         }
-        return v;
       }
       else
       {
-        auto v{ util::format("{}->with_meta(jank::runtime::jank_nil())", var_tmp) };
+        util::format_to(body_buffer, "{}->with_meta(jank::runtime::jank_nil())", var_tmp);
         if(expr->position == expression_position::tail)
         {
-          util::format_to(body_buffer, "return {};", v);
+          util::format_to(body_buffer, "return {};", var_tmp);
           return none;
         }
-        return v;
       }
+      return var_tmp;
     }
 
     auto const val(gen(expr->value.unwrap(), fn_arity).unwrap());
@@ -589,17 +590,21 @@ namespace jank::codegen
         {
           auto const dynamic{ truthy(
             get(expr->name->meta.unwrap(), __rt_ctx->intern_keyword("dynamic").expect_ok())) };
-          return util::format("{}->bind_root({})->with_meta({})->set_dynamic({})",
-                              var_tmp,
-                              val.str(true),
-                              meta.unwrap(),
-                              dynamic);
+          util::format_to(body_buffer,
+                          "{}->bind_root({})->with_meta({})->set_dynamic({});",
+                          var_tmp,
+                          val.str(true),
+                          meta.unwrap(),
+                          dynamic);
+          return var_tmp;
         }
         else
         {
-          return util::format("{}->bind_root({})->with_meta(jank::runtime::jank_nil())",
-                              var_tmp,
-                              val.str(true));
+          util::format_to(body_buffer,
+                          "{}->bind_root({})->with_meta(jank::runtime::jank_nil());",
+                          var_tmp,
+                          val.str(true));
+          return var_tmp;
         }
       case analyze::expression_position::tail:
         util::format_to(body_buffer, "return ");
@@ -2098,24 +2103,27 @@ namespace jank::codegen
     {
       auto const arg_type{ cpp_util::expression_type(expr->arg_exprs[0]) };
       bool needs_conversion{};
-      jtl::immutable_string conversion_type;
+      jtl::immutable_string conversion_direction, trait_type;
+      /* TODO: For aggregate initialization, consider the member type, not the expr type. */
       if(cpp_util::is_any_object(expr->type) && !cpp_util::is_any_object(arg_type))
       {
         needs_conversion = true;
-        conversion_type = "into_object";
+        conversion_direction = "into_object";
+        trait_type = cpp_util::get_qualified_type_name(arg_type);
       }
       else if(!cpp_util::is_any_object(expr->type) && cpp_util::is_any_object(arg_type))
       {
         needs_conversion = true;
-        conversion_type = "from_object";
+        conversion_direction = "from_object";
+        trait_type = cpp_util::get_qualified_type_name(expr->type);
       }
 
       if(needs_conversion)
       {
         util::format_to(body_buffer,
                         "jank::runtime::convert<{}>::{}({}.get())",
-                        cpp_util::get_qualified_type_name(expr->type),
-                        conversion_type,
+                        trait_type,
+                        conversion_direction,
                         arg_tmps[0].str(false));
       }
       else
@@ -2316,7 +2324,7 @@ namespace jank::codegen
     auto ret_tmp{ runtime::munge(__rt_ctx->unique_string("cpp_box")) };
     auto value_tmp{ gen(expr->value_expr, arity) };
     auto const value_expr_type{ cpp_util::expression_type(expr->value_expr) };
-    auto const type_str{ Cpp::GetTypeAsString(
+    auto const type_str{ cpp_util::get_qualified_type_name(
       Cpp::GetCanonicalType(Cpp::GetNonReferenceType(value_expr_type))) };
 
     util::format_to(
@@ -2346,7 +2354,7 @@ namespace jank::codegen
   {
     auto ret_tmp{ runtime::munge(__rt_ctx->unique_string("cpp_unbox")) };
     auto value_tmp{ gen(expr->value_expr, arity) };
-    auto const type_name{ cpp_util::get_qualified_type_name(expr->type) };
+    auto const type_name{ cpp_util::get_qualified_type_name(Cpp::GetCanonicalType(expr->type)) };
     auto const meta{ detail::lift_constant(lifted_constants,
                                            runtime::source_to_meta(expr->source)) };
 
