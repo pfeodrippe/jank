@@ -142,10 +142,26 @@ namespace jank::runtime::module
 
   static native_set<jtl::immutable_string> const &core_modules()
   {
+    // Core modules that are AOT-compiled into libjank or libjank_aot.
+    // These modules should NOT be recompiled by the compile server for iOS JIT
+    // as they're already loaded on the iOS side.
     static native_set<jtl::immutable_string> const modules{
       "clojure.core",
-      // This module is compiled into libjank and does not ship a standalone object file.
+      "clojure.string",
+      "clojure.set",
+      "clojure.walk",
+      "clojure.template",
+      "clojure.test",
+      // These modules are compiled into libjank and do not ship standalone object files.
       "jank.nrepl-server.asio",
+      "jank.nrepl-server.server",
+      // Native modules (C++ implementations, no jank source to compile)
+      "clojure.core-native",
+      "jank.perf-native",
+      "jank.compiler-native",
+      // Special pseudo-modules that represent native/C++ functionality
+      "native",
+      "cpp",
     };
     return modules;
   }
@@ -1132,7 +1148,13 @@ namespace jank::runtime::module
           util::format("Remote require failed for {}: {}", ns_name, response.error));
       }
 
-      /* Load each compiled module */
+      /* Two-phase loading: Load ALL objects first, THEN call entry functions.
+       * This ensures all symbols are registered in ORC JIT's symbol table
+       * before any entry function tries to resolve cross-module references. */
+
+      /* Phase 1: Load all object files and collect entry functions */
+      std::vector<std::tuple<std::string, void *, std::string>> entry_functions;
+
       for(auto const &mod : response.modules)
       {
         if(mod.object_data.empty())
@@ -1148,7 +1170,7 @@ namespace jank::runtime::module
           clean_name = clean_name.substr(0, suffix_pos);
         }
 
-        /* Mark module as loaded BEFORE executing it.
+        /* Mark module as loaded BEFORE loading object.
          * This ensures that if the module's code has require calls for other
          * modules we're about to load, they won't try to load again. */
         jtl::immutable_string const clean_module_name{ clean_name };
@@ -1169,7 +1191,7 @@ namespace jank::runtime::module
             util::format("Failed to load object for {}", mod.name));
         }
 
-        /* Call the entry function to execute the module */
+        /* Find the entry function symbol (but don't call it yet) */
         auto sym_result = __rt_ctx->jit_prc.find_symbol(mod.entry_symbol);
         if(sym_result.is_err())
         {
@@ -1177,10 +1199,21 @@ namespace jank::runtime::module
             util::format("Failed to find symbol {} for {}", mod.entry_symbol, mod.name));
         }
 
-        auto fn_ptr = reinterpret_cast<object_ref (*)()>(sym_result.expect_ok());
-        fn_ptr();
+        entry_functions.push_back(
+          std::make_tuple(clean_name, sym_result.expect_ok(), mod.entry_symbol));
+        std::cout << "[loader] Phase 1 - Loaded object for: " << clean_name << std::endl;
+      }
 
-        std::cout << "[loader] Loaded remote module: " << clean_name << std::endl;
+      /* Phase 2: Call all entry functions in dependency order */
+      std::cout << "[loader] Phase 2 - Executing " << entry_functions.size()
+                << " entry functions..." << std::endl;
+
+      for(auto const &[name, fn_addr, entry_sym] : entry_functions)
+      {
+        std::cout << "[loader] Phase 2 - Calling entry function for: " << name << std::endl;
+        auto fn_ptr = reinterpret_cast<object_ref (*)()>(fn_addr);
+        fn_ptr();
+        std::cout << "[loader] Loaded remote module: " << name << std::endl;
       }
 
       return ok();

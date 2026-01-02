@@ -1095,6 +1095,19 @@ namespace jank::compile_server
         // We just need to include its output.
         cpp_code += std::string(cpp_code_body);
 
+        // Debug: dump generated code to file for inspection
+        {
+          std::string safe_name = ns_name;
+          std::replace(safe_name.begin(), safe_name.end(), '.', '_');
+          std::string debug_filename = "/tmp/jank-debug-" + safe_name + ".cpp";
+          std::ofstream debug_file(debug_filename);
+          if(debug_file)
+          {
+            debug_file << cpp_code;
+            std::cout << "[compile-server] Dumped main ns code to: " << debug_filename << std::endl;
+          }
+        }
+
         // Cross-compile to ARM64 object file
         auto const object_result = cross_compile(id, cpp_code);
 
@@ -1583,6 +1596,19 @@ namespace jank::compile_server
 
         // The codegen processor already generates the jank_load_XXX entry function
         cpp_code += std::string(cpp_code_body);
+
+        // Debug: dump generated code to file for inspection
+        {
+          std::string safe_name = ns_name;
+          std::replace(safe_name.begin(), safe_name.end(), '.', '_');
+          std::string debug_filename = "/tmp/jank-debug-dep-" + safe_name + ".cpp";
+          std::ofstream debug_file(debug_filename);
+          if(debug_file)
+          {
+            debug_file << cpp_code;
+            std::cout << "[compile-server] Dumped dep code to: " << debug_filename << std::endl;
+          }
+        }
 
         // Cross-compile to ARM64 object file
         auto const object_result = cross_compile(id, cpp_code);
