@@ -1704,7 +1704,6 @@ namespace jank::compile_server
         auto const third_party = compiler_runtime_dir / "third-party";
         config.include_paths.push_back((third_party / "bdwgc" / "include").string());
         config.include_paths.push_back((third_party / "immer").string());
-        config.include_paths.push_back((third_party / "bpptree" / "include").string());
         config.include_paths.push_back((third_party / "folly").string());
         config.include_paths.push_back((third_party / "boost-preprocessor" / "include").string());
         config.include_paths.push_back((third_party / "boost-multiprecision" / "include").string());

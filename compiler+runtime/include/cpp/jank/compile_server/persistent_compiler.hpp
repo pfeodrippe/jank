@@ -152,6 +152,10 @@ namespace jank::compile_server
       driver_args_storage.push_back("-Xclang");
       driver_args_storage.push_back("-fincremental-extensions");
       driver_args_storage.push_back("-DJANK_IOS_JIT=1");
+      // CRITICAL: IMMER defines must match iOS app for ABI compatibility
+      // These affect memory layout of immer data structures (hash maps, vectors)
+      driver_args_storage.push_back("-DIMMER_HAS_LIBGC=1");
+      driver_args_storage.push_back("-DIMMER_TAGGED_NODE=0");
 
       if(!pch_path_.empty() && std::filesystem::exists(pch_path_))
       {
@@ -326,6 +330,10 @@ namespace jank::compile_server
       args_storage.push_back("-w");
       args_storage.push_back("-fincremental-extensions");
       args_storage.push_back("-DJANK_IOS_JIT=1");
+      // CRITICAL: IMMER defines must match iOS app for ABI compatibility
+      // These affect memory layout of immer data structures (hash maps, vectors)
+      args_storage.push_back("-DIMMER_HAS_LIBGC=1");
+      args_storage.push_back("-DIMMER_TAGGED_NODE=0");
 
       // Add clang resource directory BEFORE isysroot for proper header resolution
       // Derive from clang_path: /path/to/bin/clang -> /path/to/lib/clang/<version>
