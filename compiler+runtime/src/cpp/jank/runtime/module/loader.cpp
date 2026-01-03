@@ -29,6 +29,8 @@
 #ifdef JANK_IOS_JIT
   #include <fstream>
   #include <sstream>
+  #include <map>
+  #include <mutex>
   #include <jank/compile_server/remote_compile.hpp>
 
 /* Symbol table file for decoding JIT stack traces.
@@ -36,8 +38,47 @@
 static std::ofstream jit_symbol_file;
 static bool jit_symbol_file_initialized = false;
 
-static void log_jit_symbol(std::string const &name, void *addr, size_t approx_size = 0x1000)
+/* In-memory symbol table for runtime lookup */
+struct jit_symbol_entry
 {
+  uintptr_t start;
+  uintptr_t end;
+  std::string name;
+};
+static std::vector<jit_symbol_entry> jit_symbol_table;
+static std::mutex jit_symbol_mutex;
+
+namespace jank::runtime::module
+{
+  std::string lookup_jit_symbol(uintptr_t addr)
+  {
+    std::lock_guard<std::mutex> lock(jit_symbol_mutex);
+    for(auto const &entry : jit_symbol_table)
+    {
+      if(addr >= entry.start && addr < entry.end)
+      {
+        return entry.name;
+      }
+    }
+    return "";
+  }
+}
+
+static void log_jit_symbol(std::string const &name, void *addr, size_t approx_size = 0x100000)
+{
+  auto start = reinterpret_cast<uintptr_t>(addr);
+  auto end = start + approx_size;
+
+  /* Store in memory for runtime lookup */
+  {
+    std::lock_guard<std::mutex> lock(jit_symbol_mutex);
+    jit_symbol_table.push_back({ start, end, name });
+  }
+
+  /* Always print to console for iOS debugging */
+  std::cout << "[jit-symbol] 0x" << std::hex << start << " 0x" << end << " " << name << std::dec
+            << std::endl;
+
   if(!jit_symbol_file_initialized)
   {
     jit_symbol_file.open("/tmp/jank-jit-symbols.txt", std::ios::out | std::ios::trunc);
@@ -51,8 +92,6 @@ static void log_jit_symbol(std::string const &name, void *addr, size_t approx_si
   }
   if(jit_symbol_file)
   {
-    auto start = reinterpret_cast<uintptr_t>(addr);
-    auto end = start + approx_size;
     jit_symbol_file << std::hex << "0x" << start << " 0x" << end << " " << name << std::dec << "\n";
     jit_symbol_file.flush();
   }

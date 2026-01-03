@@ -14,6 +14,11 @@ namespace jank::runtime
 
 namespace jank::runtime::module
 {
+#ifdef JANK_IOS_JIT
+  /* Lookup a JIT symbol name from an address. Returns empty string if not found. */
+  std::string lookup_jit_symbol(uintptr_t addr);
+#endif
+
   enum class origin : u8
   {
     /* Regardless of which binaries are present, and how new they are,

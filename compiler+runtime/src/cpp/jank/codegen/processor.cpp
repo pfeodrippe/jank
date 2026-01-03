@@ -2757,6 +2757,35 @@ namespace jank::codegen
 
       //util::format_to(body_buffer, "jank::profile::timer __timer{ \"{}\" };", root_fn->name);
 
+      /* Emit source location tracking for debugging */
+      if(root_fn->source.is_some())
+      {
+        auto const &src{ root_fn->source.unwrap() };
+        util::format_to(body_buffer,
+                        R"(jank::runtime::source_hint_guard __src_guard{{ "{}", "{}", {}, {} }};)",
+                        util::escape(src.file),
+                        util::escape(src.module),
+                        src.start.line,
+                        src.start.col);
+      }
+
+      /* Always emit debug trace with function name and source location when available */
+      if(root_fn->source.is_some())
+      {
+        auto const &src{ root_fn->source.unwrap() };
+        util::format_to(body_buffer,
+                        R"(jank::runtime::debug_trace_guard __debug_trace{{ "{}", "{}", {} }};)",
+                        util::escape(root_fn->name),
+                        util::escape(src.file),
+                        src.start.line);
+      }
+      else
+      {
+        util::format_to(body_buffer,
+                        R"(jank::runtime::debug_trace_guard __debug_trace{{ "{}" }};)",
+                        util::escape(root_fn->name));
+      }
+
       if(!param_shadows_fn && arity.fn_ctx->is_named_recursive)
       {
         util::format_to(body_buffer,

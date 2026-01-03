@@ -297,6 +297,11 @@ namespace jank::compile_server
 
     void handle_connection(tcp::socket socket)
     {
+      // Clear loaded namespaces cache for fresh client
+      // This is needed because the iOS app may have restarted (fresh JIT state)
+      // while the compile server is still running with stale cache
+      loaded_namespaces_.clear();
+
       try
       {
         boost::asio::streambuf buffer;
