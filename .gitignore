@@ -24,6 +24,7 @@ pom.xml.asc
 .hg/
 .clj-kondo
 .nrepl-port
+.calva
 
 # C++
 .ccls-cache
@@ -56,6 +57,12 @@ node_modules
 # CI thingies
 /llvm.sh
 /linux-install.sh
+
+# Temp files
+/tmp/
+
+# WASM LLVM build (Phase 0 artifacts)
+wasm-llvm-build/
 
 # MacOS
 .DS_Store

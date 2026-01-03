@@ -1,13 +1,22 @@
 #include <clojure/core_native.hpp>
+
+#ifndef JANK_TARGET_WASM
+  #include <jank/nrepl_server/native_header_completion.hpp>
+#endif
+
+#include <jank/profile/time.hpp>
+#include <jank/util/cli.hpp>
+#include <jank/runtime/behavior/callable.hpp>
+#include <jank/runtime/context.hpp>
 #include <jank/runtime/convert/function.hpp>
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/equal.hpp>
 #include <jank/runtime/core/meta.hpp>
-#include <jank/runtime/context.hpp>
-#include <jank/runtime/behavior/callable.hpp>
-#include <jank/runtime/visit.hpp>
+#include <jank/runtime/detail/type.hpp>
 #include <jank/runtime/sequence_range.hpp>
+#include <jank/runtime/visit.hpp>
 #include <jank/util/fmt/print.hpp>
+#include <iostream>
 
 namespace clojure::core_native
 {
@@ -183,9 +192,52 @@ namespace clojure::core_native
     return make_box(duration_cast<nanoseconds>(t.time_since_epoch()).count());
   }
 
+  object_ref profile_enter(object_ref const label)
+  {
+    profile::enter(to_string(label));
+    return jank_nil();
+  }
+
+  object_ref profile_exit(object_ref const label)
+  {
+    profile::exit(to_string(label));
+    return jank_nil();
+  }
+
+  object_ref profile_enabled()
+  {
+    return make_box(profile::is_enabled());
+  }
+
   object_ref in_ns(object_ref const sym)
   {
-    __rt_ctx->current_ns_var->set(__rt_ctx->intern_ns(try_object<obj::symbol>(sym))).expect_ok();
+    auto const ns(__rt_ctx->intern_ns(try_object<obj::symbol>(sym)));
+    __rt_ctx->current_ns_var->set(ns).expect_ok();
+
+    /* Automatically refer all clojure.core vars into new namespaces.
+     * This matches Clojure's behavior and is essential for AOT/WASM compilation. */
+    auto const sym_obj(try_object<obj::symbol>(sym));
+    auto const core_ns(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core")));
+
+    if(!core_ns.is_nil() && sym_obj->name != "clojure.core")
+    {
+      auto const core_map = core_ns->get_mappings();
+      auto const target_ns(expect_object<runtime::ns>(ns));
+
+      for(auto it = core_map->fresh_seq(); !it.is_nil(); it = it->next_in_place())
+      {
+        auto const entry = it->first();
+        auto const entry_sym = expect_object<obj::symbol>(runtime::first(entry));
+        auto const val = runtime::second(entry);
+
+        if(!val.is_nil() && val->type == object_type::var)
+        {
+          /* Silently skip any errors during referring - some vars might already exist */
+          (void)target_ns->refer(entry_sym, expect_object<runtime::var>(val));
+        }
+      }
+    }
+
     return jank_nil();
   }
 
@@ -258,22 +310,248 @@ namespace clojure::core_native
 
   object_ref refer(object_ref const current_ns, object_ref const sym, object_ref const var)
   {
-    expect_object<runtime::ns>(current_ns)
-      ->refer(try_object<obj::symbol>(sym), expect_object<runtime::var>(var))
-      .expect_ok();
+    auto const ns_obj = expect_object<runtime::ns>(current_ns);
+    auto const var_obj = expect_object<runtime::var>(var);
+
+    /* Defensive check with better error message for debugging nil symbol issues */
+    if(sym.is_nil())
+    {
+      throw std::runtime_error("refer: sym is nil for var " + var_obj->n->name->to_code_string()
+                               + "/" + var_obj->name->to_code_string() + " in namespace "
+                               + ns_obj->name->to_code_string());
+    }
+
+    ns_obj->refer(try_object<obj::symbol>(sym), var_obj).expect_ok();
     return jank_nil();
   }
 
   object_ref load_module(object_ref const path)
   {
-    __rt_ctx->load_module(runtime::to_string(path), module::origin::latest).expect_ok();
+    /* For WASM AOT compilation, force loading from source to recompile
+     * dependencies rather than trying to JIT-load cached object files.
+     * This allows modules to require other jank modules during AOT compilation. */
+    auto const ori = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
+      ? module::origin::source
+      : module::origin::latest;
+    __rt_ctx->load_module(runtime::to_string(path), ori).expect_ok();
     return jank_nil();
   }
+
+#ifndef JANK_TARGET_WASM
+  // These functions require JIT/nREPL and are not available in WASM builds
 
   object_ref compile(object_ref const path)
   {
     __rt_ctx->compile_module(runtime::to_string(path)).expect_ok();
     return jank_nil();
+  }
+
+  /* Evaluates C++ code and returns a map with detailed result info:
+   * {:valid bool, :void? bool, :ptr int, :type string, :repr string}
+   * The :repr is similar to clang-repl output, e.g. "(int) 42" */
+  object_ref cpp_eval_with_info(object_ref const code)
+  {
+    auto const code_str(runtime::to_string(code));
+    auto const result(__rt_ctx->jit_prc.eval_string_with_result(code_str));
+
+    if(result.is_err())
+    {
+      throw std::runtime_error{ std::string{ result.expect_err().data() } };
+    }
+
+    auto const &r{ result.expect_ok() };
+    auto const kw_valid(__rt_ctx->intern_keyword("valid").expect_ok());
+    auto const kw_void(__rt_ctx->intern_keyword("void?").expect_ok());
+    auto const kw_ptr(__rt_ctx->intern_keyword("ptr").expect_ok());
+    auto const kw_type(__rt_ctx->intern_keyword("type").expect_ok());
+    auto const kw_repr(__rt_ctx->intern_keyword("repr").expect_ok());
+
+    return obj::persistent_hash_map::create_unique(
+      std::make_pair(kw_valid, make_box(r.valid)),
+      std::make_pair(kw_void, make_box(r.is_void)),
+      std::make_pair(kw_ptr, make_box(reinterpret_cast<i64>(r.ptr))),
+      std::make_pair(kw_type, make_box<obj::persistent_string>(r.type_str)),
+      std::make_pair(kw_repr, make_box<obj::persistent_string>(r.repr)));
+  }
+
+  object_ref register_native_header(object_ref const current_ns,
+                                    object_ref const alias,
+                                    object_ref const header,
+                                    object_ref const scope,
+                                    object_ref const include_directive)
+  {
+    auto const ns_obj(try_object<ns>(current_ns));
+    runtime::ns::native_alias alias_data{ runtime::to_string(header),
+                                          runtime::to_string(include_directive),
+                                          runtime::to_string(scope) };
+    auto const include_arg(alias_data.include_directive);
+    auto const added(
+      ns_obj->add_native_alias(try_object<obj::symbol>(alias), std::move(alias_data)).expect_ok());
+    if(added)
+    {
+  #if defined(JANK_TARGET_IOS)
+      /* On iOS, native headers are already compiled into the cross-compiled code
+       * sent from the compile server. We just need to register the alias without
+       * attempting local JIT compilation (which would fail since headers aren't
+       * available on iOS and the iOS JIT can't compile arbitrary headers). */
+      std::cerr << "[jank-ios] Registered native alias (header pre-compiled by server): "
+                << include_arg << std::flush;
+  #else
+      auto const include_code{ util::format("#include {}\n", include_arg) };
+      std::cerr << "[jank-jit] Attempting to compile: " << include_code << std::flush;
+      auto const res{ __rt_ctx->eval_cpp_string(include_code) };
+      if(res.is_err())
+      {
+        auto const alias_sym(try_object<obj::symbol>(alias));
+        std::cerr << "[jank-jit] Compilation FAILED for: " << include_code << std::flush;
+        throw std::runtime_error{ util::format(
+          "Failed to JIT compile native header require.\n"
+          "  Namespace: {}\n"
+          "  Alias: {}\n"
+          "  Header: {}\n"
+          "  Include directive: {}\n\n"
+          "If this is an AOT compiled binary, the header should have been pre-registered.\n"
+          "Check that the AOT compilation included all required modules.",
+          ns_obj->name->to_string(),
+          alias_sym->name,
+          runtime::to_string(header),
+          include_arg) };
+      }
+      std::cerr << "[jank-jit] Compilation SUCCEEDED for: " << include_code << std::flush;
+  #endif
+    }
+    return jank_nil();
+  }
+
+  object_ref register_native_refer(object_ref const current_ns,
+                                   object_ref const alias,
+                                   object_ref const local_sym,
+                                   object_ref const member_sym)
+  {
+    auto const ns_obj(try_object<ns>(current_ns));
+    auto const alias_sym(try_object<obj::symbol>(alias));
+    auto const member(try_object<obj::symbol>(member_sym));
+    ns_obj->add_native_refer(try_object<obj::symbol>(local_sym), alias_sym, member).expect_ok();
+    return jank_nil();
+  }
+
+  object_ref native_header_functions(object_ref const current_ns,
+                                     object_ref const alias,
+                                     object_ref const prefix)
+  {
+    auto const alias_sym(try_object<obj::symbol>(alias));
+    jtl::option<ns::native_alias> alias_data;
+
+    /* If current_ns is nil, search all namespaces for the alias. */
+    if(runtime::is_nil(current_ns))
+    {
+      __rt_ctx->namespaces.withRLock([&](auto const &ns_map) {
+        for(auto const &pair : ns_map)
+        {
+          auto const ns_ptr = try_object<ns>(pair.second);
+          alias_data = ns_ptr->find_native_alias(alias_sym);
+          if(alias_data)
+          {
+            break;
+          }
+        }
+      });
+      if(!alias_data)
+      {
+        throw std::runtime_error{ util::format("Native alias '{}' not found in any namespace",
+                                               alias_sym->to_string()) };
+      }
+    }
+    else
+    {
+      auto const ns_obj(try_object<ns>(current_ns));
+      alias_data = ns_obj->find_native_alias(alias_sym);
+      if(!alias_data)
+      {
+        throw std::runtime_error{ util::format(
+          "Native alias '{}' is not registered in namespace '{}'",
+          alias_sym->to_string(),
+          ns_obj->name->to_string()) };
+      }
+    }
+
+    auto const &alias_value(alias_data.unwrap());
+    std::string prefix_str;
+    if(!runtime::is_nil(prefix))
+    {
+      prefix_str = runtime::to_string(prefix);
+    }
+
+    auto matches(
+      jank::nrepl_server::asio::enumerate_native_header_symbols(alias_value, prefix_str));
+    native_vector<object_ref> boxed;
+    boxed.reserve(matches.size());
+    for(auto const &match : matches)
+    {
+      boxed.emplace_back(make_box<obj::persistent_string>(match));
+    }
+
+    return make_box<obj::persistent_vector>(
+      runtime::detail::native_persistent_vector{ boxed.begin(), boxed.end() });
+  }
+#endif // !JANK_TARGET_WASM
+
+  // WASM versions of native header functions
+  // In native jank: delegate to the regular functions (which do JIT include)
+  // In WASM: only register metadata, no JIT compilation needed
+  object_ref register_native_header_wasm(object_ref const current_ns,
+                                         object_ref const alias,
+                                         object_ref const header,
+                                         object_ref const scope,
+                                         object_ref const include_directive)
+  {
+#ifndef JANK_TARGET_WASM
+    // In native jank, just call the regular function
+    return register_native_header(current_ns, alias, header, scope, include_directive);
+#else
+    // In WASM, only register metadata (JIT is not available)
+    auto const ns_obj(try_object<ns>(current_ns));
+    runtime::ns::native_alias alias_data{ runtime::to_string(header),
+                                          runtime::to_string(include_directive),
+                                          runtime::to_string(scope) };
+    ns_obj->add_native_alias(try_object<obj::symbol>(alias), std::move(alias_data)).expect_ok();
+    return jank_nil();
+#endif
+  }
+
+  object_ref register_native_refer_wasm(object_ref const current_ns,
+                                        object_ref const alias,
+                                        object_ref const local_sym,
+                                        object_ref const member_sym)
+  {
+#ifndef JANK_TARGET_WASM
+    // In native jank, just call the regular function
+    return register_native_refer(current_ns, alias, local_sym, member_sym);
+#else
+    // In WASM, only register metadata
+    auto const ns_obj(try_object<ns>(current_ns));
+    auto const alias_sym(try_object<obj::symbol>(alias));
+    auto const member(try_object<obj::symbol>(member_sym));
+    ns_obj->add_native_refer(try_object<obj::symbol>(local_sym), alias_sym, member).expect_ok();
+    return jank_nil();
+#endif
+  }
+
+  namespace
+  {
+    object_ref all_ns()
+    {
+      native_vector<object_ref> namespaces;
+      __rt_ctx->namespaces.withRLock([&](auto const &ns_map) {
+        namespaces.reserve(ns_map.size());
+        for(auto const &pair : ns_map)
+        {
+          namespaces.emplace_back(pair.second);
+        }
+      });
+      return make_box<obj::persistent_list>(
+        runtime::detail::native_persistent_list{ namespaces.rbegin(), namespaces.rend() });
+    }
   }
 
   object_ref eval(object_ref const expr)
@@ -289,7 +567,31 @@ namespace clojure::core_native
   /* TODO: implement opts for `read-string` */
   object_ref read_string(object_ref const /* opts */, object_ref const str)
   {
-    return __rt_ctx->read_string(runtime::to_string(str));
+    auto const hint(runtime::object_source(str));
+    bool const has_hint{ hint != read::source::unknown() };
+    if(has_hint)
+    {
+      push_source_hint(hint);
+    }
+
+    auto const result(__rt_ctx->read_string(runtime::to_string(str)));
+
+    if(has_hint)
+    {
+      pop_source_hint();
+    }
+
+    return result;
+  }
+
+  object_ref read_line()
+  {
+    std::string line;
+    if(!std::getline(std::cin, line))
+    {
+      return jank_nil();
+    }
+    return make_box<obj::persistent_string>(line);
   }
 
   object_ref jank_version()
@@ -487,6 +789,9 @@ extern "C" void jank_load_clojure_core_native()
   intern_val("int32-max", std::numeric_limits<i32>::max());
   intern_fn("sleep", &core_native::sleep);
   intern_fn("current-time", &core_native::current_time);
+  intern_fn("profile-enter", &core_native::profile_enter);
+  intern_fn("profile-exit", &core_native::profile_exit);
+  intern_fn("profile-enabled?", &core_native::profile_enabled);
   intern_fn("create-ns", &core_native::intern_ns);
   intern_fn("in-ns", &core_native::in_ns);
   intern_fn("find-ns", &core_native::find_ns);
@@ -502,10 +807,21 @@ extern "C" void jank_load_clojure_core_native()
   intern_fn("ns-unmap", &core_native::ns_unmap);
   intern_fn("refer", &core_native::refer);
   intern_fn("load-module", &core_native::load_module);
+#ifndef JANK_TARGET_WASM
   intern_fn("compile", &core_native::compile);
+  intern_fn("cpp-eval-with-info", &core_native::cpp_eval_with_info);
+  intern_fn("register-native-header", &core_native::register_native_header);
+  intern_fn("register-native-refer", &core_native::register_native_refer);
+  intern_fn("native-header-functions", &core_native::native_header_functions);
+#endif
+  // WASM versions are always registered (for AOT compilation in native, and runtime in WASM)
+  intern_fn("register-native-header-wasm", &core_native::register_native_header_wasm);
+  intern_fn("register-native-refer-wasm", &core_native::register_native_refer_wasm);
+  intern_fn("all-ns", &core_native::all_ns);
   intern_fn("eval", &core_native::eval);
   intern_fn("hash-unordered-coll", &core_native::hash_unordered);
   intern_fn("read-string", &core_native::read_string);
+  intern_fn("read-line", &core_native::read_line);
   intern_fn("jank-version", &core_native::jank_version);
   intern_fn("parse-long", &parse_long);
   intern_fn("parse-double", &parse_double);
@@ -531,4 +847,51 @@ extern "C" void jank_load_clojure_core_native()
   intern_fn("tan", static_cast<f64 (*)(object_ref const)>(&runtime::tan));
   intern_fn("abs", static_cast<object_ref (*)(object_ref const)>(&runtime::abs));
   intern_fn("pow", static_cast<f64 (*)(object_ref const, object_ref const)>(&runtime::pow));
+}
+
+/* WASM AOT helper: Set up clojure.core namespace by referring all vars from clojure.core-native.
+ * This is needed because the WASM AOT code expects functions in clojure.core namespace,
+ * but jank_load_clojure_core_native() puts them in clojure.core-native.
+ * In normal jank operation, clojure.core.jank does this referring, but we don't have
+ * that compiled into the WASM build. */
+extern "C" jank_object_ref jank_setup_clojure_core_for_wasm()
+{
+  using namespace jank;
+  using namespace jank::runtime;
+
+  std::cout << "[jank_setup_clojure_core_for_wasm] Starting setup...\n";
+
+  auto const core_native_ns(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core-native")));
+  if(core_native_ns.is_nil())
+  {
+    std::cout << "[jank_setup_clojure_core_for_wasm] clojure.core-native not found!\n";
+    return jank_nil().erase().data;
+  }
+
+  std::cout << "[jank_setup_clojure_core_for_wasm] Found clojure.core-native\n";
+
+  auto const core_ns(__rt_ctx->intern_ns("clojure.core"));
+
+  std::cout << "[jank_setup_clojure_core_for_wasm] Interned clojure.core\n";
+
+  /* Get all vars from clojure.core-native and refer them to clojure.core */
+  auto const native_map = core_native_ns->get_mappings();
+  int count = 0;
+  for(auto it = native_map->fresh_seq(); !it.is_nil(); it = it->next_in_place())
+  {
+    auto const entry = it->first();
+    auto const sym = expect_object<obj::symbol>(runtime::first(entry));
+    auto const val = runtime::second(entry);
+
+    /* Only refer vars, not other types of entries */
+    if(!val.is_nil() && val->type == object_type::var)
+    {
+      core_ns->refer(sym, expect_object<runtime::var>(val)).expect_ok();
+      count++;
+    }
+  }
+
+  std::cout << "[jank_setup_clojure_core_for_wasm] Referred " << count << " vars\n";
+
+  return jank_nil().erase().data;
 }

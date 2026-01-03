@@ -3,6 +3,7 @@
 #include <jank/read/parse.hpp>
 #include <jank/error/parse.hpp>
 #include <jank/util/escape.hpp>
+#include <jank/util/cli.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core.hpp>
@@ -1067,16 +1068,19 @@ namespace jank::read::parse
     }
 
     auto const jank_keyword(__rt_ctx->intern_keyword("", "jank").expect_ok());
+    auto const wasm_keyword(__rt_ctx->intern_keyword("", "wasm").expect_ok());
     auto const default_keyword(__rt_ctx->intern_keyword("", "default").expect_ok());
 
     auto const r{ make_sequence_range(list) };
     for(auto it(r.begin()); it != r.end(); ++it, ++it)
     {
       auto const kw(*it);
-      /* We take the first match, checking for :jank first. If there are duplicates, it doesn't
-       * matter. If :default comes first, we'll always take it. In short, order is important. This
-       * matches Clojure's behavior. */
-      if(equal(kw, jank_keyword) || equal(kw, default_keyword))
+      /* We take the first match, checking for :jank and :wasm (if WASM AOT codegen is active).
+       * If there are duplicates, it doesn't matter. If :default comes first, we'll always take it.
+       * In short, order is important. This matches Clojure's behavior. */
+      bool const is_wasm_build = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
+      if(equal(kw, jank_keyword) || (is_wasm_build && equal(kw, wasm_keyword))
+         || equal(kw, default_keyword))
       {
         if(splice)
         {
@@ -1254,7 +1258,13 @@ namespace jank::read::parse
     object_ref ret{};
 
     /* Specials, such as fn*, let*, try, etc. just get left alone. We can't qualify them more. */
-    if(__rt_ctx->an_prc.is_special(form))
+#ifdef JANK_TARGET_WASM
+    /* In WASM, an_prc doesn't exist, so we skip the is_special check */
+    bool const is_special_form = false;
+#else
+    bool const is_special_form = __rt_ctx->an_prc.is_special(form);
+#endif
+    if(is_special_form)
     {
       ret = make_box<obj::persistent_list>(std::in_place, make_box<obj::symbol>("quote"), form);
     }
@@ -1689,7 +1699,8 @@ namespace jank::read::parse
   {
     auto const token(token_current->expect_ok());
     ++token_current;
-    return object_source_info{ make_box<obj::integer>(std::get<i64>(token.data)), token, token };
+    /* Use make_box(i64) to get integer from cache when possible */
+    return object_source_info{ make_box(std::get<i64>(token.data)), token, token };
   }
 
   processor::object_result processor::parse_big_integer()

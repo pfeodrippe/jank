@@ -1,0 +1,50 @@
+(ns dynamic.shared-entrypoint
+  (:require [jank.export]))
+
+(defn my-inc [x]
+  (+ x 1))
+
+(jank.export/register #'my-inc "my_inc" [:=> [:cat :int] :int])
+
+(defn my-add-double [x y]
+  (+ x y))
+
+(jank.export/register #'my-add-double "my_add_double" [:=> [:cat :double :double] :double])
+
+(defn my-str-len [s]
+  (count s))
+
+(jank.export/register #'my-str-len "my_str_len" [:=> [:cat :string] :int])
+
+(defn my-void []
+  (println "Void called!"))
+
+(jank.export/register #'my-void "my_void" [:=> [:cat] :void])
+
+(defn my-apply [f x]
+  (f x))
+
+(jank.export/register
+  #'my-apply
+  "my_apply"
+  [:=> [:cat [:fn [:long] :long] :long] :long])
+
+(defn my-return-fn [f]
+  f)
+
+(jank.export/register
+ #'my-return-fn
+ "my_return_fn"
+ [:=> [:cat [:fn [:long] :long]] [:fn [:long] :long]])
+
+(defn my-return-jank-fn []
+  (fn [x]
+    (* x 4)))
+
+(jank.export/register
+ #'my-return-jank-fn
+ "my_return_jank_fn"
+ [:=> [:cat] [:fn [:long] :long]])
+
+(defn -main [& args]
+  (println "Main called!"))

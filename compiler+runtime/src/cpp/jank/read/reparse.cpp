@@ -18,25 +18,25 @@ namespace jank::read::parse
                                                     usize const n,
                                                     object_ref const macro_expansion)
   {
-    if(module == no_source_path)
-    {
-      return error::internal_parse_failure("Cannot reparse object with no source path.");
-    }
-
     auto mapped_file(runtime::module::loader::read_file(file));
     if(mapped_file.is_err())
     {
-      if(file != read::no_source_path)
+      if(module == no_source_path)
       {
-        mapped_file = runtime::__rt_ctx->module_loader.read_module(module);
+        return mapped_file.expect_err();
       }
+
+      mapped_file = runtime::__rt_ctx->module_loader.read_module(module);
       if(mapped_file.is_err())
       {
         return mapped_file.expect_err();
       }
     }
 
-    lex::processor l_prc{ mapped_file.expect_ok().view(), offset };
+    auto const &resolved_file{ mapped_file.expect_ok() };
+    auto const &resolved_path{ resolved_file.file_path() };
+
+    lex::processor l_prc{ resolved_file.view(), offset };
     parse::processor p_prc{ l_prc.begin(), l_prc.end() };
 
     auto it{ p_prc.begin() };
@@ -59,7 +59,7 @@ namespace jank::read::parse
     }
 
     auto const &res{ it->expect_ok().unwrap() };
-    return source{ file, module, res.start.start, res.end.end, macro_expansion };
+    return source{ resolved_path, module, res.start.start, res.end.end, macro_expansion };
   }
 
   source reparse_nth(obj::persistent_list_ref const o, usize const n)

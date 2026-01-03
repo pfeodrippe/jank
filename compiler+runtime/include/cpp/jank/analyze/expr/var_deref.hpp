@@ -24,7 +24,8 @@ namespace jank::analyze::expr
               local_frame_ptr frame,
               bool needs_box,
               runtime::obj::symbol_ref const qualified_name,
-              runtime::var_ref const var);
+              runtime::var_ref const var,
+              jtl::ptr<void> tag_type = nullptr);
 
     runtime::object_ref to_runtime_data() const override;
 
@@ -36,5 +37,9 @@ namespace jank::analyze::expr
      * to the actual value of the var.. */
     runtime::obj::symbol_ref qualified_name{};
     runtime::var_ref var{};
+
+    /* Type derived from :tag metadata on the var, if present.
+     * Used for compile-time type inference. */
+    jtl::ptr<void> tag_type{};
   };
 }

@@ -1,0 +1,26 @@
+; Test that integer caching works correctly
+; Cached integers should be identical (same object)
+
+; Small integers in cache range should be identical
+(assert (identical? 0 0))
+(assert (identical? 1 1))
+(assert (identical? -1 -1))
+(assert (identical? 100 100))
+(assert (identical? -128 -128))
+
+; Arithmetic results in cache range should use cached values
+(assert (identical? (+ 1 1) 2))
+(assert (identical? (- 5 3) 2))
+(assert (identical? (* 2 3) 6))
+(assert (identical? (inc 0) 1))
+(assert (identical? (dec 1) 0))
+
+; Loop counters should use cached values
+(assert (identical?
+         (loop [i 0 sum 0]
+           (if (< i 10)
+             (recur (inc i) (+ sum i))
+             sum))
+         45))
+
+:success

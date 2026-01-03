@@ -1,4 +1,6 @@
 #include <cstdarg>
+#include <array>
+#include <stdexcept>
 
 #include <Interpreter/Compatibility.h>
 #include <llvm-c/Target.h>
@@ -16,11 +18,78 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/meta.hpp>
 #include <jank/aot/resource.hpp>
+#include <jank/runtime/obj/native_pointer_wrapper.hpp>
+#include <jank/runtime/obj/native_function_wrapper.hpp>
 #include <jank/error/runtime.hpp>
 #include <jank/profile/time.hpp>
 #include <jank/util/scope_exit.hpp>
 #include <jank/util/try.hpp>
 #include <jank/util/fmt/print.hpp>
+
+/* For iOS JIT, native modules are statically linked but need to be
+ * explicitly referenced to prevent dead code elimination. */
+#ifdef JANK_IOS_JIT
+  #include <jank/ios/eval_server.hpp>
+  #include <jank/compile_server/remote_compile.hpp>
+  #include <jank/runtime/ns.hpp>
+  #include <jank/runtime/obj/symbol.hpp>
+  #include <jank/runtime/obj/persistent_array_map.hpp>
+  #include <jank/runtime/var.hpp>
+  #include <jank/runtime/detail/type.hpp>
+
+extern "C" void jank_load_jank_nrepl_server_asio();
+extern "C" void jank_load_clojure_core_native();
+extern "C" void jank_load_jank_arena_native();
+extern "C" void jank_load_jank_debug_allocator_native();
+
+/* Force linker to include native modules. This function MUST be called
+ * at init time to ensure the linker includes these symbols from the static library. */
+__attribute__((visibility("default"))) extern "C" void jank_ios_register_native_modules()
+{
+  /* These calls load the native modules and register their namespaces/functions.
+   * After loading, we must call jank_module_set_loaded to mark them as available
+   * so the module loader knows they exist without looking for files. */
+  jank_load_clojure_core_native();
+  jank_load_jank_arena_native();
+  jank_load_jank_debug_allocator_native();
+  jank_load_jank_nrepl_server_asio();
+  /* Note: NO leading slash - context::load_module strips it before calling loader::load,
+   * so is_loaded() checks for "jank.nrepl-server.asio" without the slash. */
+  jank_module_set_loaded("jank.nrepl-server.asio");
+}
+
+/* Debug function to print sizeof for key types - helps diagnose ABI mismatches */
+__attribute__((visibility("default"))) extern "C" void jank_debug_print_sizeof()
+{
+  std::cerr << "[ABI CHECK - iOS JIT lib]\n";
+  std::cerr << "  sizeof(object): " << sizeof(jank::runtime::object) << "\n";
+  std::cerr << "  sizeof(object_ref): " << sizeof(jank::runtime::object_ref) << "\n";
+  std::cerr << "  sizeof(object_type): " << sizeof(jank::runtime::object_type) << "\n";
+  std::cerr << "  sizeof(native_persistent_hash_map): "
+            << sizeof(jank::runtime::detail::native_persistent_hash_map) << "\n";
+  std::cerr << "  sizeof(native_persistent_vector): "
+            << sizeof(jank::runtime::detail::native_persistent_vector) << "\n";
+  std::cerr << "  sizeof(native_persistent_hash_set): "
+            << sizeof(jank::runtime::detail::native_persistent_hash_set) << "\n";
+  std::cerr << "  sizeof(ns): " << sizeof(jank::runtime::ns) << "\n";
+  std::cerr << "  sizeof(var): " << sizeof(jank::runtime::var) << "\n";
+  std::cerr << "  sizeof(symbol): " << sizeof(jank::runtime::obj::symbol) << "\n";
+  std::cerr << "  sizeof(persistent_array_map): "
+            << sizeof(jank::runtime::obj::persistent_array_map) << "\n";
+  std::cerr << "  sizeof(std::atomic<i32>): " << sizeof(std::atomic<jank::i32>) << "\n";
+  std::cerr << "  IMMER_TAGGED_NODE: " << IMMER_TAGGED_NODE << "\n";
+  std::cerr << "  IMMER_HAS_LIBGC: "
+  #ifdef IMMER_HAS_LIBGC
+            << IMMER_HAS_LIBGC
+  #else
+            << "undefined"
+  #endif
+            << "\n";
+  std::cerr << "  JANK_IOS_JIT: 1\n";
+  std::cerr << "  JANK_TARGET_IOS: 1\n";
+  std::cerr << "[END ABI CHECK]\n";
+}
+#endif
 
 using namespace jank;
 using namespace jank::runtime;
@@ -453,6 +522,213 @@ extern "C"
     return make_box<obj::inst>(s).erase().data;
   }
 
+  jank_object_ref jank_pointer_create(void * const p)
+  {
+    return make_box<obj::native_pointer_wrapper>(p).erase().data;
+  }
+
+  void *jank_to_pointer(jank_object_ref const o)
+  {
+    auto const o_obj(reinterpret_cast<object *>(o));
+    if(o_obj->type == object_type::native_pointer_wrapper)
+    {
+      return expect_object<obj::native_pointer_wrapper>(o_obj)->data;
+    }
+    return nullptr;
+  }
+
+#define JANK_NATIVE_FUNCTION_SIG_0 object_ref()
+#define JANK_NATIVE_FUNCTION_SIG_1 object_ref(object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_2 object_ref(object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_3 object_ref(object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_4 object_ref(object_ref, object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_5 \
+  object_ref(object_ref, object_ref, object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_6 \
+  object_ref(object_ref, object_ref, object_ref, object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_7 \
+  object_ref(object_ref, object_ref, object_ref, object_ref, object_ref, object_ref, object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_8 \
+  object_ref(object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_9 \
+  object_ref(object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref,           \
+             object_ref)
+#define JANK_NATIVE_FUNCTION_SIG_10 \
+  object_ref(object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref,            \
+             object_ref)
+
+#define JANK_NATIVE_LAMBDA_PARAMS_0
+#define JANK_NATIVE_LAMBDA_PARAMS_1 object_ref arg0
+#define JANK_NATIVE_LAMBDA_PARAMS_2 object_ref arg0, object_ref arg1
+#define JANK_NATIVE_LAMBDA_PARAMS_3 object_ref arg0, object_ref arg1, object_ref arg2
+#define JANK_NATIVE_LAMBDA_PARAMS_4 \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3
+#define JANK_NATIVE_LAMBDA_PARAMS_5 \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4
+#define JANK_NATIVE_LAMBDA_PARAMS_6                                                    \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5
+#define JANK_NATIVE_LAMBDA_PARAMS_7                                                    \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5, object_ref arg6
+#define JANK_NATIVE_LAMBDA_PARAMS_8                                                    \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5, object_ref arg6, object_ref arg7
+#define JANK_NATIVE_LAMBDA_PARAMS_9                                                    \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5, object_ref arg6, object_ref arg7, object_ref arg8
+#define JANK_NATIVE_LAMBDA_PARAMS_10                                                   \
+  object_ref arg0, object_ref arg1, object_ref arg2, object_ref arg3, object_ref arg4, \
+    object_ref arg5, object_ref arg6, object_ref arg7, object_ref arg8, object_ref arg9
+
+#define JANK_NATIVE_ARG_ARRAY_0
+#define JANK_NATIVE_ARG_ARRAY_1 reinterpret_cast<jank_object_ref>(arg0.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_2 \
+  JANK_NATIVE_ARG_ARRAY_1, reinterpret_cast<jank_object_ref>(arg1.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_3 \
+  JANK_NATIVE_ARG_ARRAY_2, reinterpret_cast<jank_object_ref>(arg2.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_4 \
+  JANK_NATIVE_ARG_ARRAY_3, reinterpret_cast<jank_object_ref>(arg3.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_5 \
+  JANK_NATIVE_ARG_ARRAY_4, reinterpret_cast<jank_object_ref>(arg4.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_6 \
+  JANK_NATIVE_ARG_ARRAY_5, reinterpret_cast<jank_object_ref>(arg5.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_7 \
+  JANK_NATIVE_ARG_ARRAY_6, reinterpret_cast<jank_object_ref>(arg6.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_8 \
+  JANK_NATIVE_ARG_ARRAY_7, reinterpret_cast<jank_object_ref>(arg7.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_9 \
+  JANK_NATIVE_ARG_ARRAY_8, reinterpret_cast<jank_object_ref>(arg8.erase().data)
+#define JANK_NATIVE_ARG_ARRAY_10 \
+  JANK_NATIVE_ARG_ARRAY_9, reinterpret_cast<jank_object_ref>(arg9.erase().data)
+
+#define JANK_NATIVE_WRAPPER_CASE(N)                                                            \
+  case N:                                                                                      \
+    {                                                                                          \
+      auto const lambda                                                                        \
+        = [callback_ptr, context, invoke](JANK_NATIVE_LAMBDA_PARAMS_##N) -> object_ref {       \
+        std::array<jank_object_ref, N> args{ JANK_NATIVE_ARG_ARRAY_##N };                      \
+        auto const result = invoke(callback_ptr, context, args.data(), N);                     \
+        return object_ref{ reinterpret_cast<object *>(result) };                               \
+      };                                                                                       \
+      obj::detail::function_type::value_type<JANK_NATIVE_FUNCTION_SIG_##N> fn{ lambda };       \
+      auto const wrapper                                                                       \
+        = make_box<obj::native_function_wrapper>(obj::detail::function_type{ std::move(fn) }); \
+      wrapper->native_callback_ptr = callback_ptr;                                             \
+      return wrapper.erase().data;                                                             \
+    }
+
+  jank_object_ref jank_native_function_wrapper_create(void * const callback_ptr,
+                                                      void * const context,
+                                                      jank_native_callback_invoke_fn const invoke,
+                                                      jank_u8 const arg_count)
+  {
+    if(callback_ptr == nullptr || invoke == nullptr)
+    {
+      return jank_const_nil();
+    }
+
+    switch(arg_count)
+    {
+      JANK_NATIVE_WRAPPER_CASE(0);
+      JANK_NATIVE_WRAPPER_CASE(1);
+      JANK_NATIVE_WRAPPER_CASE(2);
+      JANK_NATIVE_WRAPPER_CASE(3);
+      JANK_NATIVE_WRAPPER_CASE(4);
+      JANK_NATIVE_WRAPPER_CASE(5);
+      JANK_NATIVE_WRAPPER_CASE(6);
+      JANK_NATIVE_WRAPPER_CASE(7);
+      JANK_NATIVE_WRAPPER_CASE(8);
+      JANK_NATIVE_WRAPPER_CASE(9);
+      JANK_NATIVE_WRAPPER_CASE(10);
+      default:
+        break;
+    }
+
+    throw std::runtime_error{ "Unsupported native callback arity" };
+  }
+
+  void *jank_native_function_wrapper_get_pointer(jank_object_ref const wrapper_ref)
+  {
+    if(wrapper_ref == nullptr)
+    {
+      return nullptr;
+    }
+
+    auto const wrapper_obj(
+      dyn_cast<obj::native_function_wrapper>(reinterpret_cast<object *>(wrapper_ref)));
+    if(wrapper_obj.is_nil())
+    {
+      throw std::runtime_error{ "Object is not a native function wrapper" };
+    }
+
+    if(wrapper_obj->native_callback_ptr == nullptr)
+    {
+      throw std::runtime_error{
+        "Native function wrapper does not carry a native callback pointer"
+      };
+    }
+
+    return wrapper_obj->native_callback_ptr;
+  }
+
+#undef JANK_NATIVE_WRAPPER_CASE
+#undef JANK_NATIVE_ARG_ARRAY_10
+#undef JANK_NATIVE_ARG_ARRAY_9
+#undef JANK_NATIVE_ARG_ARRAY_8
+#undef JANK_NATIVE_ARG_ARRAY_7
+#undef JANK_NATIVE_ARG_ARRAY_6
+#undef JANK_NATIVE_ARG_ARRAY_5
+#undef JANK_NATIVE_ARG_ARRAY_4
+#undef JANK_NATIVE_ARG_ARRAY_3
+#undef JANK_NATIVE_ARG_ARRAY_2
+#undef JANK_NATIVE_ARG_ARRAY_1
+#undef JANK_NATIVE_ARG_ARRAY_0
+#undef JANK_NATIVE_LAMBDA_PARAMS_10
+#undef JANK_NATIVE_LAMBDA_PARAMS_9
+#undef JANK_NATIVE_LAMBDA_PARAMS_8
+#undef JANK_NATIVE_LAMBDA_PARAMS_7
+#undef JANK_NATIVE_LAMBDA_PARAMS_6
+#undef JANK_NATIVE_LAMBDA_PARAMS_5
+#undef JANK_NATIVE_LAMBDA_PARAMS_4
+#undef JANK_NATIVE_LAMBDA_PARAMS_3
+#undef JANK_NATIVE_LAMBDA_PARAMS_2
+#undef JANK_NATIVE_LAMBDA_PARAMS_1
+#undef JANK_NATIVE_LAMBDA_PARAMS_0
+#undef JANK_NATIVE_FUNCTION_SIG_10
+#undef JANK_NATIVE_FUNCTION_SIG_9
+#undef JANK_NATIVE_FUNCTION_SIG_8
+#undef JANK_NATIVE_FUNCTION_SIG_7
+#undef JANK_NATIVE_FUNCTION_SIG_6
+#undef JANK_NATIVE_FUNCTION_SIG_5
+#undef JANK_NATIVE_FUNCTION_SIG_4
+#undef JANK_NATIVE_FUNCTION_SIG_3
+#undef JANK_NATIVE_FUNCTION_SIG_2
+#undef JANK_NATIVE_FUNCTION_SIG_1
+#undef JANK_NATIVE_FUNCTION_SIG_0
+
   jank_object_ref jank_list_create(jank_u64 const size, ...)
   {
     /* NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) */
@@ -566,6 +842,27 @@ extern "C"
                      op_box->canonical_type,
                      type),
         meta_source(source_obj),
+        object_source(op_box));
+    }
+
+    return op_box->data;
+  }
+
+  void *jank_unbox_lazy_source(char const * const type,
+                               jank_object_ref const o,
+                               char const * const source_str)
+  {
+    auto const box_obj(reinterpret_cast<object *>(o));
+    auto const op_box{ try_object<obj::opaque_box>(box_obj) };
+    if(!op_box->canonical_type.empty() && op_box->canonical_type != type)
+    {
+      /* Only parse the source string when an error occurs (rare path) */
+      auto const source_obj(__rt_ctx->read_string(source_str));
+      throw error::runtime_invalid_unbox(
+        util::format("This opaque box holds a '{}', but it was unboxed as a '{}'.",
+                     op_box->canonical_type,
+                     type),
+        meta_source(source_obj.data),
         object_source(op_box));
     }
 
@@ -950,6 +1247,26 @@ extern "C"
     return to_integer_or_hash(o_obj);
   }
 
+  jank_f64 jank_to_real(jank_object_ref const o)
+  {
+    auto const o_obj(reinterpret_cast<object *>(o));
+    if(o_obj->type == object_type::real)
+    {
+      return expect_object<obj::real>(o_obj)->data;
+    }
+    return static_cast<jank_f64>(to_integer_or_hash(o_obj));
+  }
+
+  char const *jank_to_string(jank_object_ref const o)
+  {
+    auto const o_obj(reinterpret_cast<object *>(o));
+    if(o_obj->type == object_type::persistent_string)
+    {
+      return expect_object<obj::persistent_string>(o_obj)->data.c_str();
+    }
+    return nullptr;
+  }
+
   jank_i64
   jank_shift_mask_case_integer(jank_object_ref const o, jank_i64 const shift, jank_i64 const mask)
   {
@@ -1018,6 +1335,22 @@ extern "C"
     runtime::__rt_ctx->module_loader.set_is_loaded(module);
   }
 
+  void jank_register_native_alias(char const * const ns_name,
+                                  char const * const alias_name,
+                                  char const * const header,
+                                  char const * const include_directive,
+                                  char const * const scope)
+  {
+    /* Pre-populate native aliases for AOT compiled code.
+     * When called before module load functions run, this ensures that
+     * register_native_header will find the alias already exists and skip
+     * JIT compilation (which would fail since headers aren't bundled). */
+    auto const ns = __rt_ctx->intern_ns(ns_name);
+    auto const alias_sym = make_box<obj::symbol>(alias_name);
+    runtime::ns::native_alias alias_data{ header, include_directive, scope };
+    ns->add_native_alias(alias_sym, std::move(alias_data)).expect_ok();
+  }
+
   int jank_init(int const argc,
                 char const ** const argv,
                 jank_bool const init_default_ctx,
@@ -1074,6 +1407,16 @@ extern "C"
         runtime::__rt_ctx = new(GC) runtime::context{};
       }
 
+#ifdef JANK_IOS_JIT
+      /* Load native modules for iOS JIT. This must be called after context creation
+       * so the modules can register their namespaces and functions.
+       * This also forces the linker to include the native module object files. */
+      if(init_default_ctx)
+      {
+        jank_ios_register_native_modules();
+      }
+#endif
+
       return fn(argc, argv);
     }
     JANK_CATCH_THEN(jank::util::print_exception, return 1)
@@ -1093,4 +1436,88 @@ extern "C"
 
     return trans.to_persistent().erase().data;
   }
+
+  /* iOS Eval Server C API implementation */
+#ifdef JANK_IOS_JIT
+  void jank_ios_start_eval_server(jank_u16 const port)
+  {
+    jank::ios::start_eval_server(port);
+  }
+
+  void jank_ios_start_eval_server_remote(jank_u16 const eval_port,
+                                         char const *compile_host,
+                                         jank_u16 const compile_port)
+  {
+    jank::ios::start_eval_server_with_remote_compile(eval_port, compile_host, compile_port);
+  }
+
+  void jank_ios_stop_eval_server(void)
+  {
+    jank::ios::stop_eval_server();
+  }
+
+  void jank_ios_enable_remote_compile(char const *compile_host, jank_u16 const compile_port)
+  {
+    jank::ios::enable_remote_compile(compile_host, compile_port);
+  }
+#else
+  /* Stub implementations for non-iOS platforms */
+  void jank_ios_start_eval_server(jank_u16 const)
+  {
+  }
+
+  void jank_ios_start_eval_server_remote(jank_u16 const, char const *, jank_u16 const)
+  {
+  }
+
+  void jank_ios_stop_eval_server(void)
+  {
+  }
+
+  void jank_ios_enable_remote_compile(char const *, jank_u16 const)
+  {
+  }
+#endif
+
+  /* ---- Remote Compilation C API implementation ---- */
+#ifdef JANK_IOS_JIT
+  void jank_remote_compile_configure(char const *host, jank_u16 const port)
+  {
+    jank::compile_server::configure_remote_compile(host, port);
+  }
+
+  jank_bool jank_remote_compile_connect(void)
+  {
+    return jank::compile_server::connect_remote_compile() ? 1 : 0;
+  }
+
+  void jank_remote_compile_disconnect(void)
+  {
+    jank::compile_server::disconnect_remote_compile();
+  }
+
+  jank_bool jank_remote_compile_is_enabled(void)
+  {
+    return jank::compile_server::is_remote_compile_enabled() ? 1 : 0;
+  }
+#else
+  /* Stub implementations for non-iOS platforms */
+  void jank_remote_compile_configure(char const *, jank_u16 const)
+  {
+  }
+
+  jank_bool jank_remote_compile_connect(void)
+  {
+    return 0;
+  }
+
+  void jank_remote_compile_disconnect(void)
+  {
+  }
+
+  jank_bool jank_remote_compile_is_enabled(void)
+  {
+    return 0;
+  }
+#endif
 }

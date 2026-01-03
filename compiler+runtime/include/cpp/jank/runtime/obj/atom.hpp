@@ -1,7 +1,6 @@
 #pragma once
 
-#include <folly/Synchronized.h>
-
+#include <jank/util/folly_shim.hpp>
 #include <jank/runtime/object.hpp>
 #include <jank/runtime/obj/persistent_hash_map.hpp>
 #include <jank/runtime/obj/persistent_vector.hpp>

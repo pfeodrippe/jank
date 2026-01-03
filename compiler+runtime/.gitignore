@@ -1,0 +1,16 @@
+# Temporary build artifacts
+/tmp/
+
+# Build directories
+/build/
+/build-*/
+
+# Cache
+.cache/
+.ccache
+
+# REPL history
+.jank-repl-history
+
+# Profile data
+*.profile

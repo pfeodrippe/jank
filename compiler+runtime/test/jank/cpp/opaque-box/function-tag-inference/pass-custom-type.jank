@@ -1,0 +1,15 @@
+; Test :tag metadata with custom struct type for cpp/unbox type inference.
+
+; Define a simple struct
+(cpp/raw "struct MyWorld { int value; };")
+
+(defn ^{:tag "MyWorld*"} get-world-ptr []
+  (let* [ptr (cpp/new (cpp/type "MyWorld"))
+         _ (cpp/= (cpp/.-value (cpp/* ptr)) 123)]
+    (cpp/box ptr)))
+
+; Unbox should infer MyWorld* from function's :tag metadata
+(let* [raw-ptr (cpp/unbox (get-world-ptr))
+       value (cpp/.-value (cpp/* raw-ptr))]
+  (if (= value 123)
+    :success))

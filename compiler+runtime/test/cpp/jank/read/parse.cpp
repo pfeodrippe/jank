@@ -16,6 +16,7 @@
 #include <jank/runtime/obj/keyword.hpp>
 #include <jank/util/escape.hpp>
 #include <jank/util/fmt.hpp>
+#include <jank/util/scope_exit.hpp>
 
 /* This must go last; doctest and glog both define CHECK and family. */
 #include <doctest/doctest.h>
@@ -644,8 +645,10 @@ namespace jank::read::parse
       {
         lex::processor lp{ "::foo/foo" };
         auto const foo_ns(__rt_ctx->intern_ns(make_box<obj::symbol>("foo.bar.spam")));
-        auto const clojure_ns(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core")));
-        clojure_ns->add_alias(make_box<obj::symbol>("foo"), foo_ns).expect_ok();
+        auto const alias_sym(make_box<obj::symbol>("foo"));
+        auto const current_ns(__rt_ctx->current_ns());
+        util::scope_exit const alias_guard{ [&] { current_ns->remove_alias(alias_sym); } };
+        current_ns->add_alias(alias_sym, foo_ns).expect_ok();
         processor p{ lp.begin(), lp.end() };
         auto const r(p.next());
         CHECK(equal(r.expect_ok().unwrap().ptr,

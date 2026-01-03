@@ -1,0 +1,42 @@
+(ns jank.nrepl-server.server
+  (:require [jank.nrepl-server.asio]))
+
+(def ^:dynamic *server* nil)
+
+(defn start-server
+  "Start an embedded nREPL server.
+
+  Options:
+    :port - The port to bind to (default: 5555)
+    :bind - The address to bind to (default: \"127.0.0.1\")
+
+  Returns a server instance that can be passed to stop-server."
+  ([]
+   (start-server {}))
+  ([opts]
+   (let [port (or (:port opts) 5555)
+         bind (or (:bind opts) "127.0.0.1")]
+     (println (str "Starting embedded nREPL server on " bind ":" port))
+     (let [server (jank.nrepl-server.asio/start! port bind)]
+       (alter-var-root #'*server* (constantly server))
+       server))))
+
+(defn stop-server
+  "Stop a running nREPL server instance.
+  
+  If no server is provided, stops the server in *server*."
+  ([]
+   (stop-server *server*))
+  ([server]
+   (when server
+     (println "Stopping nREPL server")
+     (jank.nrepl-server.asio/stop! server)
+     (alter-var-root #'*server* (constantly nil)))))
+
+(defn server-port
+  "Get the port of a running server."
+  ([]
+   (server-port *server*))
+  ([server]
+   (when server
+     (jank.nrepl-server.asio/get-port server))))

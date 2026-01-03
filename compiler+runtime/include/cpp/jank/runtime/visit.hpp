@@ -52,6 +52,7 @@
 #include <jank/runtime/obj/atom.hpp>
 #include <jank/runtime/obj/volatile.hpp>
 #include <jank/runtime/obj/delay.hpp>
+#include <jank/runtime/obj/arena.hpp>
 #include <jank/runtime/obj/reduced.hpp>
 #include <jank/runtime/obj/tagged_literal.hpp>
 #include <jank/runtime/obj/re_pattern.hpp>
@@ -59,6 +60,7 @@
 #include <jank/runtime/obj/uuid.hpp>
 #include <jank/runtime/obj/inst.hpp>
 #include <jank/runtime/obj/opaque_box.hpp>
+#include <jank/runtime/obj/user_type.hpp>
 #include <jank/runtime/ns.hpp>
 #include <jank/runtime/var.hpp>
 #include <jank/runtime/rtti.hpp>
@@ -193,6 +195,8 @@ namespace jank::runtime
         return fn(expect_object<obj::reduced>(erased), std::forward<Args>(args)...);
       case object_type::delay:
         return fn(expect_object<obj::delay>(erased), std::forward<Args>(args)...);
+      case object_type::arena:
+        return fn(expect_object<obj::arena_obj>(erased), std::forward<Args>(args)...);
       case object_type::ns:
         return fn(expect_object<ns>(erased), std::forward<Args>(args)...);
       case object_type::var:
@@ -213,6 +217,8 @@ namespace jank::runtime
         return fn(expect_object<obj::inst>(erased), std::forward<Args>(args)...);
       case object_type::opaque_box:
         return fn(expect_object<obj::opaque_box>(erased), std::forward<Args>(args)...);
+      case object_type::user_type:
+        return fn(expect_object<obj::user_type>(erased), std::forward<Args>(args)...);
       default:
         jtl::panic("invalid object type: {}, raw value {}",
                    object_type_str(erased->type),
@@ -303,6 +309,7 @@ namespace jank::runtime
         return fn(expect_object<obj::chunked_cons>(erased), std::forward<Args>(args)...);
       case object_type::persistent_string:
         return fn(expect_object<obj::persistent_string>(erased), std::forward<Args>(args)...);
+      /* Note: user_type implements seq() but delegates to jank, so it's not in visit_seqable. */
 
       /* Not seqable. */
       default:

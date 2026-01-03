@@ -1,0 +1,262 @@
+(ns clojure.pprint
+  (:require [clojure.string :as str]))
+
+;; Configuration dynamic vars
+(def ^:dynamic *print-right-margin*
+  "The column at which to wrap output. Default is 72."
+  72)
+
+(def ^:dynamic *print-miser-width*
+  "When the right margin minus the current column is less than this,
+   use more compact printing. Default is 40."
+  40)
+
+(def ^:dynamic *print-length*
+  "Maximum number of items to print per collection. nil means unlimited."
+  nil)
+
+(def ^:dynamic *print-level*
+  "Maximum depth to descend into nested data structures. nil means unlimited."
+  nil)
+
+(def ^:dynamic *print-pprint-dispatch*
+  "The dispatch function for pprint. Default handles standard Clojure types."
+  nil)
+
+;; Internal helper to repeat a string n times
+(defn- repeat-str [s n]
+  (loop [result ""
+         i 0]
+    (if (>= i n)
+      result
+      (recur (str result s) (inc i)))))
+
+;; Internal helper to create indentation
+(defn- indent-str [n]
+  (repeat-str " " n))
+
+;; Check if value is a simple/atomic type (prints on one line)
+(defn- simple-value? [x]
+  (or (nil? x)
+      (string? x)
+      (number? x)
+      (keyword? x)
+      (symbol? x)
+      (boolean? x)
+      (char? x)))
+
+;; Estimate the printed length of a value (rough approximation)
+(defn- estimate-length [x]
+  (cond
+    (nil? x) 3
+    (string? x) (+ 2 (count x))  ; quotes
+    (keyword? x) (inc (count (str x)))
+    (symbol? x) (count (str x))
+    (number? x) (count (str x))
+    (boolean? x) (if x 4 5)  ; true/false
+    (char? x) 3  ; \c
+    (map-entry? x) (+ 1 (estimate-length (key x)) (estimate-length (val x)))
+    (map? x) (+ 2 (* 3 (count x)))  ; rough estimate
+    (set? x) (+ 3 (* 2 (count x)))
+    (vector? x) (+ 2 (* 2 (count x)))
+    (sequential? x) (+ 2 (* 2 (count x)))
+    :else 10))
+
+;; Check if a collection fits on one line
+(defn- fits-on-line? [coll remaining-width]
+  (let [estimated (reduce + 0 (map estimate-length coll))]
+    (< estimated remaining-width)))
+
+;; Pretty print a value to a string, with indentation tracking
+(declare pprint-str*)
+
+(defn- pprint-coll
+  "Pretty print a collection with given delimiters."
+  [coll open close indent level max-width]
+  (if (and *print-level* (>= level *print-level*))
+    "#"
+    (let [items (if *print-length*
+                  (take *print-length* coll)
+                  coll)
+          truncated? (and *print-length* (> (count coll) *print-length*))
+          item-indent (+ indent (count open))
+          remaining-width (- max-width indent)
+          ;; Try to fit on one line first
+          one-line (str open
+                        (str/join " " (map #(pprint-str* % 0 (inc level) max-width) items))
+                        (if truncated? " ..." "")
+                        close)]
+      (if (<= (count one-line) remaining-width)
+        one-line
+        ;; Multi-line format
+        (let [item-strs (map #(pprint-str* % item-indent (inc level) max-width) items)
+              inner (str/join (str "\n" (indent-str item-indent)) item-strs)]
+          (str open
+               inner
+               (if truncated? (str "\n" (indent-str item-indent) "...") "")
+               close))))))
+
+(defn- pprint-map
+  "Pretty print a map."
+  [m indent level max-width]
+  (if (and *print-level* (>= level *print-level*))
+    "#"
+    (if (empty? m)
+      "{}"
+      (let [entries (if *print-length*
+                      (take *print-length* m)
+                      m)
+            truncated? (and *print-length* (> (count m) *print-length*))
+            entry-indent (+ indent 1)
+            remaining-width (- max-width indent)
+            ;; Format each entry
+            format-entry (fn [e]
+                           (let [k (key e)
+                                 v (val e)
+                                 k-str (pprint-str* k 0 (inc level) max-width)
+                                 v-str (pprint-str* v (+ entry-indent (count k-str) 1) (inc level) max-width)]
+                             (str k-str " " v-str)))
+            ;; Try one line first
+            one-line (str "{" (str/join ", " (map format-entry entries))
+                          (if truncated? ", ..." "")
+                          "}")]
+        (if (<= (count one-line) remaining-width)
+          one-line
+          ;; Multi-line format
+          (let [entry-strs (map format-entry entries)
+                inner (str/join (str "\n" (indent-str entry-indent)) entry-strs)]
+            (str "{"
+                 inner
+                 (if truncated? (str "\n" (indent-str entry-indent) "...") "")
+                 "}")))))))
+
+(defn- pprint-str*
+  "Internal pretty print to string with tracking."
+  [x indent level max-width]
+  (cond
+    (nil? x) "nil"
+    (string? x) (pr-str x)
+    (char? x) (pr-str x)
+    (keyword? x) (str x)
+    (symbol? x) (str x)
+    (number? x) (str x)
+    (boolean? x) (str x)
+    (map? x) (pprint-map x indent level max-width)
+    (set? x) (str "#" (pprint-coll x "{" "}" indent level max-width))
+    (vector? x) (pprint-coll x "[" "]" indent level max-width)
+    (sequential? x) (pprint-coll x "(" ")" indent level max-width)
+    (fn? x) "#<fn>"
+    (var? x) (str x)
+    :else (pr-str x)))
+
+(defn pprint-str
+  "Pretty print to a string."
+  [x]
+  (pprint-str* x 0 0 *print-right-margin*))
+
+(defn pprint
+  "Pretty print object to *out* with a trailing newline."
+  ([x]
+   (println (pprint-str x)))
+  ([x writer]
+   ;; For now, ignore writer and print to *out*
+   ;; TODO: support custom writers when jank has them
+   (pprint x)))
+
+(defn pp
+  "A convenience macro that pretty prints the last thing output.
+   Equivalent to (pprint *1)."
+  []
+  (pprint *1))
+
+(defn print-table
+  "Prints a collection of maps in a textual table.
+   Column order is determined by the keys in the first item."
+  ([ks rows]
+   (when (seq rows)
+     (let [widths (map
+                    (fn [k]
+                      (apply max (count (str k))
+                             (map #(count (str (get % k))) rows)))
+                    ks)
+           spacers (map #(repeat-str "-" %) widths)
+           fmt-row (fn [row]
+                     (str/join " | "
+                       (map (fn [k w]
+                              (let [s (str (get row k))
+                                    padding (- w (count s))]
+                                (str s (repeat-str " " padding))))
+                            ks widths)))]
+       (println (str/join " | " (map str ks)))
+       (println (str/join "-+-" spacers))
+       (doseq [row rows]
+         (println (fmt-row row))))))
+  ([rows]
+   (when (seq rows)
+     (print-table (keys (first rows)) rows))))
+
+;; cl-format stub - basic implementation
+(defn cl-format
+  "A minimal cl-format implementation.
+   Currently supports: ~A (aesthetic), ~S (standard), ~% (newline), ~~ (tilde)"
+  [writer format-str & args]
+  (let [output (volatile! "")
+        args-vec (vec args)
+        arg-idx (volatile! 0)
+        next-arg (fn []
+                   (let [idx @arg-idx]
+                     (vswap! arg-idx inc)
+                     (get args-vec idx)))
+        result (loop [i 0]
+                 (if (>= i (count format-str))
+                   @output
+                   (let [c (nth format-str i)]
+                     (if (= c \~)
+                       (let [next-c (nth format-str (inc i) nil)]
+                         (cond
+                           (or (= next-c \A) (= next-c \a))
+                           (do (vswap! output str (str (next-arg)))
+                               (recur (+ i 2)))
+
+                           (or (= next-c \S) (= next-c \s))
+                           (do (vswap! output str (pr-str (next-arg)))
+                               (recur (+ i 2)))
+
+                           (= next-c \%)
+                           (do (vswap! output str "\n")
+                               (recur (+ i 2)))
+
+                           (= next-c \~)
+                           (do (vswap! output str "~")
+                               (recur (+ i 2)))
+
+                           ;; Unknown directive, just output as-is
+                           :else
+                           (do (vswap! output str c)
+                               (recur (inc i)))))
+                       (do (vswap! output str c)
+                           (recur (inc i)))))))]
+    (if writer
+      (do (print result) nil)
+      result)))
+
+;; Write function for compatibility
+(defn write
+  "Write an object with keyword argument options.
+   Options: :stream, :base, :circle, :length, :level, :lines,
+            :miser-width, :dispatch, :pretty, :radix, :readably, :right-margin"
+  [object & kw-args]
+  (let [opts (apply hash-map kw-args)
+        stream (get opts :stream true)
+        pretty (get opts :pretty true)]
+    (binding [*print-right-margin* (get opts :right-margin *print-right-margin*)
+              *print-miser-width* (get opts :miser-width *print-miser-width*)
+              *print-length* (get opts :length *print-length*)
+              *print-level* (get opts :level *print-level*)]
+      (if pretty
+        (if stream
+          (pprint object)
+          (pprint-str object))
+        (if stream
+          (pr object)
+          (pr-str object))))))

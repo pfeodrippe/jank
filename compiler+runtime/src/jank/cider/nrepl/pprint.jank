@@ -1,0 +1,11 @@
+(ns cider.nrepl.pprint
+  (:require [clojure.pprint :as pp]))
+
+(defn pprint
+  [value writer]
+  (pp/pprint value))
+
+(defn pr
+  "Print value using pr (non-pretty-printed)"
+  [value writer]
+  (clojure.core/pr value))

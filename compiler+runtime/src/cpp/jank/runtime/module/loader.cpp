@@ -26,6 +26,77 @@
 #include <jank/util/environment.hpp>
 #include <jank/profile/time.hpp>
 #include <jank/error/runtime.hpp>
+#ifdef JANK_IOS_JIT
+  #include <fstream>
+  #include <sstream>
+  #include <map>
+  #include <mutex>
+  #include <jank/compile_server/remote_compile.hpp>
+
+/* Symbol table file for decoding JIT stack traces.
+   * Format: START_ADDR END_ADDR SYMBOL_NAME */
+static std::ofstream jit_symbol_file;
+static bool jit_symbol_file_initialized = false;
+
+/* In-memory symbol table for runtime lookup */
+struct jit_symbol_entry
+{
+  uintptr_t start;
+  uintptr_t end;
+  std::string name;
+};
+static std::vector<jit_symbol_entry> jit_symbol_table;
+static std::mutex jit_symbol_mutex;
+
+namespace jank::runtime::module
+{
+  std::string lookup_jit_symbol(uintptr_t addr)
+  {
+    std::lock_guard<std::mutex> lock(jit_symbol_mutex);
+    for(auto const &entry : jit_symbol_table)
+    {
+      if(addr >= entry.start && addr < entry.end)
+      {
+        return entry.name;
+      }
+    }
+    return "";
+  }
+}
+
+static void log_jit_symbol(std::string const &name, void *addr, size_t approx_size = 0x100000)
+{
+  auto start = reinterpret_cast<uintptr_t>(addr);
+  auto end = start + approx_size;
+
+  /* Store in memory for runtime lookup */
+  {
+    std::lock_guard<std::mutex> lock(jit_symbol_mutex);
+    jit_symbol_table.push_back({ start, end, name });
+  }
+
+  /* Always print to console for iOS debugging */
+  std::cout << "[jit-symbol] 0x" << std::hex << start << " 0x" << end << " " << name << std::dec
+            << std::endl;
+
+  if(!jit_symbol_file_initialized)
+  {
+    jit_symbol_file.open("/tmp/jank-jit-symbols.txt", std::ios::out | std::ios::trunc);
+    jit_symbol_file_initialized = true;
+    if(jit_symbol_file)
+    {
+      jit_symbol_file << "# JIT Symbol Table - use to decode stack traces\n";
+      jit_symbol_file << "# Format: START_ADDR END_ADDR SYMBOL_NAME\n";
+      jit_symbol_file.flush();
+    }
+  }
+  if(jit_symbol_file)
+  {
+    jit_symbol_file << std::hex << "0x" << start << " 0x" << end << " " << name << std::dec << "\n";
+    jit_symbol_file.flush();
+  }
+}
+#endif
 
 namespace jank::runtime::module
 {
@@ -137,7 +208,27 @@ namespace jank::runtime::module
 
   static native_set<jtl::immutable_string> const &core_modules()
   {
-    static native_set<jtl::immutable_string> const modules{ "clojure.core" };
+    // Core modules that are AOT-compiled into libjank or libjank_aot.
+    // These modules should NOT be recompiled by the compile server for iOS JIT
+    // as they're already loaded on the iOS side.
+    static native_set<jtl::immutable_string> const modules{
+      "clojure.core",
+      "clojure.string",
+      "clojure.set",
+      "clojure.walk",
+      "clojure.template",
+      "clojure.test",
+      // These modules are compiled into libjank and do not ship standalone object files.
+      "jank.nrepl-server.asio",
+      "jank.nrepl-server.server",
+      // Native modules (C++ implementations, no jank source to compile)
+      "clojure.core-native",
+      "jank.perf-native",
+      "jank.compiler-native",
+      // Special pseudo-modules that represent native/C++ functionality
+      "native",
+      "cpp",
+    };
     return modules;
   }
 
@@ -606,7 +697,7 @@ namespace jank::runtime::module
       return error::runtime_unable_to_open_file(util::format("Unable to map file '{}'.", path));
     }
 
-    return ok(file_view{ path, fd, head, file_size });
+    return ok(file_view{ path, fd, head, static_cast<usize>(file_size) });
   }
 
   jtl::result<file_view, error_ref> loader::read_file(jtl::immutable_string const &path)
@@ -824,7 +915,7 @@ namespace jank::runtime::module
     return ret;
   }
 
-  void loader::set_is_loaded(jtl::immutable_string const &module)
+  void loader::set_is_loaded(jtl::immutable_string const &module) const
   {
     auto const loaded_libs_atom{ runtime::try_object<runtime::obj::atom>(
       __rt_ctx->loaded_libs_var->deref()) };
@@ -934,7 +1025,7 @@ namespace jank::runtime::module
     switch(module_type_to_load)
     {
       case module_type::jank:
-        res = load_jank(module_sources.jank.unwrap());
+        res = load_jank(module, module_sources.jank.unwrap());
         break;
       case module_type::o:
         res = load_o(module, module_sources.o.unwrap());
@@ -943,11 +1034,11 @@ namespace jank::runtime::module
         res = load_cpp(module, module_sources.cpp.unwrap());
         break;
       case module_type::cljc:
-        res = load_cljc(module_sources.cljc.unwrap());
+        res = load_cljc(module, module_sources.cljc.unwrap());
         break;
       default:
         res = error::internal_runtime_failure(
-          util::format("Unknown module type '{}'.", module_type_to_load));
+          util::format("Unknown module type '{}'.", static_cast<int>(module_type_to_load)));
     }
 
     if(res.is_err())
@@ -966,6 +1057,11 @@ namespace jank::runtime::module
   jtl::result<void, error_ref>
   loader::load_o(jtl::immutable_string const &module, file_entry const &entry) const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return error::runtime_unable_to_load_module(
+      util::format("Loading precompiled object modules is unsupported on emscripten (module '{}').",
+                   module));
+#else
     profile::timer const timer{ util::format("load object {}", module) };
 
     /* While loading an object, if the main ns loading symbol exists, then
@@ -995,14 +1091,20 @@ namespace jank::runtime::module
     }
 
     auto const load_fn_res{ __rt_ctx->jit_prc.find_symbol(load_function_name).expect_ok() };
-    reinterpret_cast<object *(*)()>(load_fn_res)();
+    /* jank_load_XXX functions return void, not object* */
+    reinterpret_cast<void (*)()>(load_fn_res)();
 
     return ok();
+#endif
   }
 
   jtl::result<void, error_ref>
   loader::load_cpp(jtl::immutable_string const &module, file_entry const &entry) const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return error::runtime_unable_to_load_module(
+      util::format("Loading C++ modules is unsupported on emscripten (module '{}').", module));
+#else
     if(entry.archive_path.is_some())
     {
       jtl::result<void, error_ref> res{ ok() };
@@ -1048,10 +1150,242 @@ namespace jank::runtime::module
     reinterpret_cast<void (*)()>(load)();
 
     return ok();
+#endif
   }
 
-  jtl::result<void, error_ref> loader::load_jank(file_entry const &entry) const
+  jtl::result<void, error_ref>
+  loader::load_jank([[maybe_unused]] jtl::immutable_string const &module,
+                    file_entry const &entry) const
   {
+#ifdef JANK_TARGET_EMSCRIPTEN
+    return error::runtime_unable_to_load_module("Loading source modules at runtime is unsupported "
+                                                "on emscripten; precompile modules on the host.");
+#else
+
+  #ifdef JANK_IOS_JIT
+    /* On iOS with JIT, delegate namespace loading to the compile server.
+     * This allows the compile server to build up its namespace context
+     * so that subsequent eval operations can resolve symbols correctly. */
+    if(compile_server::is_remote_compile_enabled())
+    {
+      std::string source;
+
+      if(entry.archive_path.is_some())
+      {
+        auto const res{ visit_jar_entry(entry,
+                                        [&](zip_t * const zip) -> jtl::result<void, error_ref> {
+                                          auto const read_result{ read_zip_entry(zip) };
+                                          if(read_result.is_err())
+                                          {
+                                            return read_result.expect_err();
+                                          }
+                                          source = std::string(read_result.expect_ok());
+                                          return ok();
+                                        }) };
+        if(res.is_err())
+        {
+          return res;
+        }
+      }
+      else
+      {
+        /* Read source from file */
+        std::ifstream file(entry.path.c_str());
+        if(!file)
+        {
+          return error::runtime_unable_to_load_module(
+            util::format("Failed to open file: {}", entry.path));
+        }
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        source = buffer.str();
+      }
+
+      /* Use the module name directly instead of deriving from path.
+       * On iOS, entry.path is an absolute path, and path_to_module would
+       * incorrectly convert it to something like Users.pfeodrippe.Library... */
+      auto const ns_name = std::string(module.data(), module.size());
+
+      /* Send to compile server (include best-effort source path for better runtime errors) */
+      std::string request_source_path;
+      if(entry.archive_path.is_some())
+      {
+        request_source_path = util::format("{}:{}", entry.archive_path.unwrap(), entry.path);
+      }
+      else
+      {
+        request_source_path = entry.path.c_str();
+      }
+
+      auto const response
+        = compile_server::remote_require(std::string(ns_name), source, request_source_path);
+
+      if(!response.success)
+      {
+        return error::runtime_unable_to_load_module(
+          util::format("Remote require failed for {}: {}", ns_name, response.error));
+      }
+
+      /* Two-phase loading: Load ALL objects first, THEN call entry functions.
+       * This ensures all symbols are registered in ORC JIT's symbol table
+       * before any entry function tries to resolve cross-module references. */
+
+      /* Phase 1: Load all object files and collect entry functions */
+      std::vector<std::tuple<std::string, void *, std::string, std::string>> entry_functions;
+
+      for(auto const &mod : response.modules)
+      {
+        if(mod.object_data.empty())
+        {
+          continue; /* Skip empty modules (already loaded) */
+        }
+
+        /* Extract clean module name (strip $loading__ suffix) */
+        std::string clean_name = mod.name;
+        auto const suffix_pos = clean_name.find("$loading__");
+        if(suffix_pos != std::string::npos)
+        {
+          clean_name = clean_name.substr(0, suffix_pos);
+        }
+
+        /* Mark module as loaded BEFORE loading object.
+         * This ensures that if the module's code has require calls for other
+         * modules we're about to load, they won't try to load again. */
+        jtl::immutable_string const clean_module_name{ clean_name };
+        set_is_loaded(clean_module_name);
+        {
+          auto const locked_ordered_modules{ __rt_ctx->loaded_modules_in_order.wlock() };
+          locked_ordered_modules->push_back(clean_module_name);
+        }
+
+        /* Load object file into JIT */
+        bool load_success
+          = __rt_ctx->jit_prc.load_object(reinterpret_cast<char const *>(mod.object_data.data()),
+                                          mod.object_data.size(),
+                                          mod.entry_symbol);
+        if(!load_success)
+        {
+          return error::runtime_unable_to_load_module(
+            util::format("Failed to load object for {}", mod.name));
+        }
+
+        /* Find the entry function symbol (but don't call it yet) */
+        auto sym_result = __rt_ctx->jit_prc.find_symbol(mod.entry_symbol);
+        if(sym_result.is_err())
+        {
+          return error::runtime_unable_to_load_module(
+            util::format("Failed to find symbol {} for {}", mod.entry_symbol, mod.name));
+        }
+
+        /* Log the entry function symbol address for stack trace decoding */
+        log_jit_symbol(mod.entry_symbol, sym_result.expect_ok());
+
+        std::string module_source_path = mod.source_path;
+        if(module_source_path.empty())
+        {
+          module_source_path = util::format("<remote:{}>", clean_name);
+        }
+
+        entry_functions.push_back(std::make_tuple(clean_name,
+                                                  sym_result.expect_ok(),
+                                                  mod.entry_symbol,
+                                                  std::move(module_source_path)));
+        std::cout << "[loader] Phase 1 - Loaded object for: " << clean_name << std::endl;
+      }
+
+      /* Phase 2: Call all entry functions in dependency order */
+      std::cout << "[loader] Phase 2 - Executing " << entry_functions.size()
+                << " entry functions..." << std::endl;
+
+      for(auto const &[name, fn_addr, entry_sym, source_path] : entry_functions)
+      {
+        std::cout << "[loader] Phase 2 - Calling entry function for: " << name << std::endl;
+        /* jank_load_XXX functions return void, not object_ref */
+        auto fn_ptr = reinterpret_cast<void (*)()>(fn_addr);
+        try
+        {
+          context::binding_scope const preserve{ runtime::obj::persistent_hash_map::create_unique(
+            std::make_pair(__rt_ctx->current_file_var, make_box(source_path))) };
+          fn_ptr();
+        }
+        catch(jtl::ref<error::base> const &e)
+        {
+          std::cerr << "[loader] ERROR while executing entry function for: " << name << " ("
+                    << entry_sym << ")\n";
+          std::cerr << "[loader] jank error: " << e->message << "\n";
+          if(e->cause)
+          {
+            std::cerr << "[loader]   caused by: " << e->cause->message << "\n";
+          }
+          if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+          {
+            std::cerr << "[loader] current *ns*: "
+                      << runtime::to_code_string(__rt_ctx->current_ns_var->deref()) << "\n";
+            std::cerr << "[loader] current *file*: "
+                      << runtime::to_code_string(__rt_ctx->current_file_var->deref()) << "\n";
+          }
+          return e;
+        }
+        catch(object_ref const e)
+        {
+          std::cerr << "[loader] ERROR while executing entry function for: " << name << " ("
+                    << entry_sym << ")\n";
+          std::cerr << "[loader] thrown object: " << runtime::to_code_string(e) << "\n";
+          if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+          {
+            std::cerr << "[loader] current *ns*: "
+                      << runtime::to_code_string(__rt_ctx->current_ns_var->deref()) << "\n";
+            std::cerr << "[loader] current *file*: "
+                      << runtime::to_code_string(__rt_ctx->current_file_var->deref()) << "\n";
+          }
+          return error::runtime_unable_to_load_module(
+            util::format("Exception (object) while calling entry function for {} ({}): {}",
+                         name,
+                         entry_sym,
+                         runtime::to_code_string(e)));
+        }
+        catch(std::exception const &e)
+        {
+          std::cerr << "[loader] ERROR while executing entry function for: " << name << " ("
+                    << entry_sym << ")\n";
+          std::cerr << "[loader] what(): " << e.what() << "\n";
+          if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+          {
+            std::cerr << "[loader] current *ns*: "
+                      << runtime::to_code_string(__rt_ctx->current_ns_var->deref()) << "\n";
+            std::cerr << "[loader] current *file*: "
+                      << runtime::to_code_string(__rt_ctx->current_file_var->deref()) << "\n";
+          }
+          return error::runtime_unable_to_load_module(
+            util::format("Exception while calling entry function for {} ({}): {}",
+                         name,
+                         entry_sym,
+                         e.what()));
+        }
+        catch(...)
+        {
+          std::cerr << "[loader] ERROR while executing entry function for: " << name << " ("
+                    << entry_sym << ")\n";
+          if(__rt_ctx && __rt_ctx->current_ns_var.is_some() && __rt_ctx->current_file_var.is_some())
+          {
+            std::cerr << "[loader] current *ns*: "
+                      << runtime::to_code_string(__rt_ctx->current_ns_var->deref()) << "\n";
+            std::cerr << "[loader] current *file*: "
+                      << runtime::to_code_string(__rt_ctx->current_file_var->deref()) << "\n";
+          }
+          return error::runtime_unable_to_load_module(
+            util::format("Unknown exception while calling entry function for {} ({})",
+                         name,
+                         entry_sym));
+        }
+        std::cout << "[loader] Loaded remote module: " << name << std::endl;
+      }
+
+      return ok();
+    }
+  #endif
+
+    /* Standard loading path (non-iOS or remote compile not enabled) */
     if(entry.archive_path.is_some())
     {
       auto const res{ visit_jar_entry(
@@ -1067,7 +1401,7 @@ namespace jank::runtime::module
           auto const path{ util::format("{}:{}", entry.archive_path.unwrap(), entry.path) };
           context::binding_scope const preserve{ runtime::obj::persistent_hash_map::create_unique(
             std::make_pair(__rt_ctx->current_file_var, make_box(path))) };
-          __rt_ctx->eval_string(read_result.expect_ok());
+          __rt_ctx->eval_string(read_result.expect_ok()).unwrap();
           return ok();
         }) };
       if(res.is_err())
@@ -1077,15 +1411,17 @@ namespace jank::runtime::module
     }
     else
     {
-      __rt_ctx->eval_file(entry.path);
+      __rt_ctx->eval_file(entry.path).unwrap();
     }
 
     return ok();
+#endif
   }
 
-  jtl::result<void, error_ref> loader::load_cljc(file_entry const &entry) const
+  jtl::result<void, error_ref>
+  loader::load_cljc(jtl::immutable_string const &module, file_entry const &entry) const
   {
-    return load_jank(entry);
+    return load_jank(module, entry);
   }
 
   void loader::add_path(jtl::immutable_string const &path)

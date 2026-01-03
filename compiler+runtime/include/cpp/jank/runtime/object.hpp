@@ -75,6 +75,7 @@ namespace jank::runtime
     volatile_,
     reduced,
     delay,
+    arena,
     ns,
 
     var,
@@ -89,6 +90,7 @@ namespace jank::runtime
     inst,
 
     opaque_box,
+    user_type,
   };
 
   [[gnu::visibility("default")]]
@@ -213,6 +215,8 @@ namespace jank::runtime
         return "reduced";
       case object_type::delay:
         return "delay";
+      case object_type::arena:
+        return "arena";
       case object_type::ns:
         return "ns";
 
@@ -237,6 +241,8 @@ namespace jank::runtime
 
       case object_type::opaque_box:
         return "opaque_box";
+      case object_type::user_type:
+        return "user_type";
     }
     return "unknown";
   }

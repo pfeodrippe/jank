@@ -1,8 +1,18 @@
 #include <ranges>
+#include <set>
+#include <cstdlib>
+#include <stdexcept>
 
-#include <Interpreter/Compatibility.h>
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <Interpreter/Compatibility.h>
+  #include <clang/Basic/Diagnostic.h>
+#endif
 
-#include <cpptrace/from_current.hpp>
+#include <jank/util/cpptrace.hpp>
+
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <jank/nrepl_server/native_header_completion.hpp>
+#endif
 
 #include <jank/read/reparse.hpp>
 #include <jank/runtime/visit.hpp>
@@ -18,6 +28,7 @@
 #include <jank/runtime/core/munge.hpp>
 #include <jank/analyze/processor.hpp>
 #include <jank/analyze/step/force_boxed.hpp>
+#include <jank/jit/interpreter.hpp>
 #include <jank/evaluate.hpp>
 #include <jtl/result.hpp>
 #include <jank/util/scope_exit.hpp>
@@ -356,11 +367,27 @@ namespace jank::analyze
   {
     if(args.size() == 2)
     {
-      auto const is_arg0_ptr{ Cpp::IsPointerType(Cpp::GetNonReferenceType(args[0].m_Type)) };
-      if((is_arg0_ptr
-          && is_arg0_ptr != Cpp::IsPointerType(Cpp::GetNonReferenceType(args[1].m_Type)))
-         || !Cpp::IsImplicitlyConvertible(Cpp::GetNonReferenceType(args[0].m_Type),
-                                          Cpp::GetNonReferenceType(args[1].m_Type)))
+      auto const arg0_type{ Cpp::GetNonReferenceType(args[0].m_Type) };
+      auto const arg1_type{ Cpp::GetNonReferenceType(args[1].m_Type) };
+      auto const is_arg0_ptr{ Cpp::IsPointerType(arg0_type) };
+      auto const is_arg1_ptr{ Cpp::IsPointerType(arg1_type) };
+      auto const is_arg1_arr{ Cpp::IsArrayType(arg1_type) };
+
+      /* Handle array-to-pointer decay: arrays are compatible with pointers
+       * when the array element type matches the pointer's pointee type.
+       * This handles cases like: const char* = "string literal" */
+      if(is_arg0_ptr && is_arg1_arr)
+      {
+        auto const pointee_type{ Cpp::GetPointeeType(arg0_type) };
+        auto const elem_type{ Cpp::GetArrayElementType(arg1_type) };
+        if(pointee_type && elem_type && Cpp::IsImplicitlyConvertible(elem_type, pointee_type))
+        {
+          return ok();
+        }
+      }
+
+      if((is_arg0_ptr && is_arg0_ptr != is_arg1_ptr)
+         || !Cpp::IsImplicitlyConvertible(arg0_type, arg1_type))
       {
         return invalid(args, op_name, val, macro_expansions);
       }
@@ -449,6 +476,58 @@ namespace jank::analyze
       Cpp::GetPointeeType(Cpp::GetNonReferenceType(args[0].m_Type)));
   }
 
+  /* Returns the native type for a primitive literal expression (integer -> long, real -> double).
+   * Also works for local_references that refer to primitive literal bindings.
+   * Returns nullptr if the expression is not a primitive literal or has no native equivalent. */
+  static jtl::ptr<void> get_primitive_native_type(expression_ref const expr)
+  {
+    runtime::object_type data_type{};
+
+    if(expr->kind == expression_kind::primitive_literal)
+    {
+      auto const lit = llvm::cast<expr::primitive_literal>(expr.data);
+      data_type = lit->data->type;
+    }
+    else if(expr->kind == expression_kind::local_reference)
+    {
+      auto const ref = llvm::cast<expr::local_reference>(expr.data);
+      if(ref->binding->value_expr.is_some())
+      {
+        auto const val_expr = ref->binding->value_expr.unwrap();
+        if(val_expr->kind == expression_kind::primitive_literal)
+        {
+          auto const lit = llvm::cast<expr::primitive_literal>(val_expr.data);
+          data_type = lit->data->type;
+        }
+        else
+        {
+          return nullptr;
+        }
+      }
+      else
+      {
+        return nullptr;
+      }
+    }
+    else
+    {
+      return nullptr;
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wswitch-enum"
+    switch(data_type)
+    {
+      case runtime::object_type::integer:
+        return Cpp::GetType("long");
+      case runtime::object_type::real:
+        return Cpp::GetType("double");
+      default:
+        return nullptr;
+    }
+#pragma clang diagnostic pop
+  }
+
   static processor::expression_result
   build_builtin_operator_call(expr::cpp_value_ref const val,
                               Cpp::Operator const op,
@@ -460,6 +539,28 @@ namespace jank::analyze
                               native_vector<runtime::object_ref> const &macro_expansions)
   {
     auto const op_name{ try_object<obj::symbol>(val->form)->name };
+
+    /* Auto-unbox primitive literals for cpp/ operator usage.
+     * This allows (let [n 5] (cpp/+ n 10)) to work without manual conversion. */
+    auto converted_arg_types{ arg_types };
+    for(usize i{}; i < arg_exprs.size(); ++i)
+    {
+      auto const native_type = get_primitive_native_type(arg_exprs[i]);
+      if(native_type && cpp_util::is_any_object(converted_arg_types[i].m_Type))
+      {
+        /* Wrap the expression in a cpp_cast to unbox it. */
+        auto const cast_position{ arg_exprs[i]->position };
+        arg_exprs[i]->propagate_position(expression_position::value);
+        arg_exprs[i] = jtl::make_ref<expr::cpp_cast>(cast_position,
+                                                     arg_exprs[i]->frame,
+                                                     arg_exprs[i]->needs_box,
+                                                     native_type,
+                                                     native_type,
+                                                     conversion_policy::from_object,
+                                                     arg_exprs[i]);
+        converted_arg_types[i].m_Type = native_type;
+      }
+    }
 
     struct op_processor
     {
@@ -522,22 +623,23 @@ namespace jank::analyze
     {
       for(auto const &f : found->second.validators)
       {
-        auto const res{ f(arg_types, op_name, val, macro_expansions) };
+        auto const res{ f(converted_arg_types, op_name, val, macro_expansions) };
         if(res.is_err())
         {
           return res.expect_err();
         }
       }
 
-      return jtl::make_ref<expr::cpp_builtin_operator_call>(position,
-                                                            current_frame,
-                                                            needs_box,
-                                                            op,
-                                                            jtl::move(arg_exprs),
-                                                            found->second.type(arg_types));
+      return jtl::make_ref<expr::cpp_builtin_operator_call>(
+        position,
+        current_frame,
+        needs_box,
+        op,
+        jtl::move(arg_exprs),
+        found->second.type(converted_arg_types));
     }
 
-    return invalid(arg_types, op_name, val, macro_expansions);
+    return invalid(converted_arg_types, op_name, val, macro_expansions);
   }
 
   static processor::expression_result
@@ -666,6 +768,26 @@ namespace jank::analyze
       }
 
 
+      /* Auto-unbox primitive literals for overloaded operator calls.
+       * This allows (cpp/aget ImVector n) to work when n is a primitive literal binding. */
+      for(usize i{}; i < arg_exprs.size(); ++i)
+      {
+        auto const native_type = get_primitive_native_type(arg_exprs[i]);
+        if(native_type && cpp_util::is_any_object(arg_types[i].m_Type))
+        {
+          auto const cast_position{ arg_exprs[i]->position };
+          arg_exprs[i]->propagate_position(expression_position::value);
+          arg_exprs[i] = jtl::make_ref<expr::cpp_cast>(cast_position,
+                                                       arg_exprs[i]->frame,
+                                                       arg_exprs[i]->needs_box,
+                                                       native_type,
+                                                       native_type,
+                                                       conversion_policy::from_object,
+                                                       arg_exprs[i]);
+          arg_types[i].m_Type = native_type;
+        }
+      }
+
       auto const arity{ arg_count == 1 ? Cpp::kUnary : Cpp::kBinary };
       Cpp::GetOperator(op, arg_types, fns, arity);
 
@@ -687,6 +809,7 @@ namespace jank::analyze
       case expr::cpp_value::value_kind::null:
       case expr::cpp_value::value_kind::bool_true:
       case expr::cpp_value::value_kind::bool_false:
+      case expr::cpp_value::value_kind::string_literal:
       case expr::cpp_value::value_kind::variable:
       case expr::cpp_value::value_kind::enum_constant:
       case expr::cpp_value::value_kind::member_access:
@@ -777,7 +900,7 @@ namespace jank::analyze
        * Nothing else could have an unresolved template up until now. */
       for(size_t i{}; i < arg_types.size(); ++i)
       {
-        if(auto const value = llvm::dyn_cast<expr::cpp_value>(arg_exprs[i].data))
+        if(auto const value = expr_dyn_cast<expr::cpp_value>(arg_exprs[i].data))
         {
           /* Just adding a reference to the same type is not worthy of change.
            * For some situations, this would fuck up codegen. For example, with enum constants. */
@@ -990,7 +1113,14 @@ namespace jank::analyze
                           bool const needs_box,
                           native_vector<runtime::object_ref> const &macro_expansions)
   {
-    auto const source_type{ cpp_util::expression_type(source) };
+    auto source_type{ cpp_util::expression_type(source) };
+    /* Function pointers accessed via member access (e.g. struct->callback) return
+     * a reference to the function pointer type. We need to strip the reference
+     * to properly detect and call function pointers. */
+    if(Cpp::IsReferenceType(source_type))
+    {
+      source_type = Cpp::GetNonReferenceType(source_type);
+    }
     if(!Cpp::IsFunctionPointerType(source_type))
     {
       /* If we get to this function but we don't have a function pointer, we assume
@@ -1268,11 +1398,37 @@ namespace jank::analyze
     auto const sym_obj(l->data.rest().first().unwrap());
     if(sym_obj->type != runtime::object_type::symbol)
     {
-      return error::analyze_invalid_def("The var name in a 'def' must be a symbol.",
-                                        object_source(sym_obj),
-                                        "A symbol is needed for the name here.",
-                                        latest_expansion(macro_expansions))
-        ->add_usage(read::parse::reparse_nth(l, 1));
+      auto usage_source(read::parse::reparse_nth(l, 1));
+      if(std::getenv("JANK_DEBUG_DEF"))
+      {
+        auto const list_source(meta_source(l->meta));
+        auto const sym_source_debug(object_source(sym_obj));
+        util::println(
+          "JANK_DEBUG_DEF list_source_unknown={} usage_unknown={} sym_source_unknown={} "
+          "list_file={} usage_file={} sym_file={} sym_line={} sym_col={}",
+          list_source == read::source::unknown(),
+          usage_source == read::source::unknown(),
+          sym_source_debug == read::source::unknown(),
+          list_source.file,
+          usage_source.file,
+          sym_source_debug.file,
+          sym_source_debug.start.line,
+          sym_source_debug.start.col);
+      }
+      auto sym_source(object_source(sym_obj));
+      if(sym_source == read::source::unknown() || sym_source.file == read::no_source_path)
+      {
+        sym_source = usage_source;
+      }
+      auto err(error::analyze_invalid_def("The var name in a 'def' must be a symbol.",
+                                          sym_source,
+                                          "A symbol is needed for the name here.",
+                                          latest_expansion(macro_expansions)));
+      if(usage_source != read::source::unknown() && usage_source != sym_source)
+      {
+        err = err->add_usage(usage_source);
+      }
+      return err;
     }
 
     auto const sym(runtime::expect_object<runtime::obj::symbol>(sym_obj));
@@ -1309,7 +1465,23 @@ namespace jank::analyze
       {
         return value_result;
       }
-      value_result = apply_implicit_conversion(value_result.expect_ok(),
+
+      /* Store the original expression BEFORE implicit conversion for type inference.
+       * This allows us to look up the underlying type (e.g., cpp_box's boxed_type)
+       * when the var is later referenced. */
+      auto const original_value_expr{ value_result.expect_ok() };
+      vars.insert_or_assign(var_res.expect_ok(), original_value_expr);
+
+      /* For cpp_box expressions, store the boxed_type directly on the var object.
+       * This persists across processor instances, allowing type inference when
+       * the var is referenced in later top-level forms. */
+      if(original_value_expr->kind == expression_kind::cpp_box)
+      {
+        auto const box_expr{ llvm::cast<expr::cpp_box>(original_value_expr.data) };
+        var_res.expect_ok()->boxed_type = box_expr->boxed_type;
+      }
+
+      value_result = apply_implicit_conversion(original_value_expr,
                                                cpp_util::untyped_object_ptr_type(),
                                                macro_expansions);
       if(value_result.is_err())
@@ -1317,8 +1489,6 @@ namespace jank::analyze
         return value_result;
       }
       value_expr = some(value_result.expect_ok());
-
-      vars.insert_or_assign(var_res.expect_ok(), value_expr.unwrap());
     }
 
     if(has_docstring)
@@ -1335,6 +1505,36 @@ namespace jank::analyze
                                               __rt_ctx->intern_keyword("doc").expect_ok(),
                                               docstring_obj));
       qualified_sym = qualified_sym->with_meta(meta_with_doc);
+    }
+
+    /* Add source location (file, line, column) to var metadata.
+     * If this def came from a macro expansion (like defn), use the original source location.
+     * Otherwise, use the def form's source location. */
+    auto def_source(read::source::unknown());
+    auto const expansion(latest_expansion(macro_expansions));
+    if(expansion != runtime::jank_nil())
+    {
+      def_source = object_source(expansion);
+    }
+    if(def_source == read::source::unknown() || def_source.file == read::no_source_path)
+    {
+      def_source = meta_source(l->meta);
+    }
+    if(def_source != read::source::unknown() && def_source.file != read::no_source_path)
+    {
+      auto meta(qualified_sym->meta.unwrap_or(runtime::jank_nil()));
+      meta = runtime::assoc(meta,
+                            __rt_ctx->intern_keyword("file").expect_ok(),
+                            runtime::make_box<runtime::obj::persistent_string>(def_source.file));
+      meta = runtime::assoc(
+        meta,
+        __rt_ctx->intern_keyword("line").expect_ok(),
+        runtime::make_box<runtime::obj::integer>(static_cast<i64>(def_source.start.line)));
+      meta = runtime::assoc(
+        meta,
+        __rt_ctx->intern_keyword("column").expect_ok(),
+        runtime::make_box<runtime::obj::integer>(static_cast<i64>(def_source.start.col)));
+      qualified_sym = qualified_sym->with_meta(meta);
     }
 
     return jtl::make_ref<expr::def>(position, current_frame, true, qualified_sym, value_expr);
@@ -1495,6 +1695,78 @@ namespace jank::analyze
                             jtl::option<expr::function_context_ref> const &fc,
                             bool needs_box)
   {
+    auto const rewrite_native_symbol
+      = [&](runtime::obj::symbol_ref const alias_sym,
+            jtl::immutable_string const &member_name,
+            runtime::obj::symbol_ref const origin_sym) -> expression_result {
+      auto const native_alias(runtime::__rt_ctx->current_ns()->find_native_alias(alias_sym));
+      if(native_alias.is_none())
+      {
+        throw std::runtime_error(
+          util::format("Native alias '{}' is not registered in namespace '{}'",
+                       alias_sym->to_string(),
+                       runtime::__rt_ctx->current_ns()->to_string()));
+      }
+      auto const &alias_info(native_alias.unwrap());
+
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+      /* Check if this is a C preprocessor macro from the header.
+       * Macros are not C++ symbols, so we handle them by evaluating
+       * them as cpp/value expressions. */
+      if(!member_name.empty()
+         && nrepl_server::asio::is_native_header_macro(alias_info, std::string(member_name)))
+      {
+        /* Create (cpp/value "MACRO_NAME") form and analyze it */
+        runtime::detail::native_persistent_list const cpp_value_form{
+          make_box<runtime::obj::symbol>("cpp", "value"),
+          make_box<runtime::obj::persistent_string>(member_name)
+        };
+        return analyze_cpp_value(make_box<runtime::obj::persistent_list>(cpp_value_form),
+                                 current_frame,
+                                 position,
+                                 fc,
+                                 needs_box);
+      }
+#endif
+
+      native_transient_string scoped(alias_info.scope.data(), alias_info.scope.size());
+      if(!member_name.empty())
+      {
+        /* Only add the dot separator if there's a scope prefix.
+         * For empty scope (global C functions), we don't want the dot
+         * because that would make it look like a member access.
+         * e.g., scope="" + member="GetMouseX" -> "GetMouseX" (not ".GetMouseX") */
+        if(!scoped.empty() && member_name[0] != '.')
+        {
+          scoped.push_back('.');
+        }
+        scoped.append(member_name.data(), member_name.size());
+      }
+      auto const cpp_sym(make_box<runtime::obj::symbol>("cpp", scoped));
+      cpp_sym->meta = origin_sym->meta;
+      return analyze_cpp_symbol(cpp_sym, current_frame, position, fc, needs_box);
+    };
+
+    if(sym->ns.empty())
+    {
+      auto const native_refer(runtime::__rt_ctx->current_ns()->find_native_refer(sym));
+      if(native_refer.is_some())
+      {
+        auto const refer_info(native_refer.unwrap());
+        return rewrite_native_symbol(refer_info.alias, refer_info.member->name, sym);
+      }
+    }
+
+    if(!sym->ns.empty() && sym->ns != "cpp")
+    {
+      auto const alias_sym(make_box<runtime::obj::symbol>(sym->ns));
+      auto const native_alias(runtime::__rt_ctx->current_ns()->find_native_alias(alias_sym));
+      if(native_alias.is_some())
+      {
+        return rewrite_native_symbol(alias_sym, sym->name, sym);
+      }
+    }
+
     if(sym->ns == "cpp" && sym->name != "raw")
     {
       return analyze_cpp_symbol(sym, current_frame, position, fc, needs_box);
@@ -1583,7 +1855,17 @@ namespace jank::analyze
     }
 
     auto const qualified_sym(__rt_ctx->qualify_symbol(sym));
-    auto const var(__rt_ctx->find_var(qualified_sym));
+    auto var(__rt_ctx->find_var(qualified_sym));
+
+    /* If the var isn't found in the current namespace and the symbol is unqualified,
+     * try to find it in clojure.core as a fallback. This is especially important for
+     * AOT/WASM mode where namespace referring doesn't happen until runtime. */
+    if(var.is_nil() && sym->ns.empty())
+    {
+      auto const core_sym(runtime::make_box<runtime::obj::symbol>("clojure.core", sym->name));
+      var = __rt_ctx->find_var(core_sym);
+    }
+
     if(var.is_nil())
     {
       return error::analyze_unresolved_symbol(
@@ -1592,7 +1874,56 @@ namespace jank::analyze
         latest_expansion(macro_expansions));
     }
 
-    return jtl::make_ref<expr::var_deref>(position, current_frame, true, qualified_sym, var);
+    /* Use the var's actual namespace for the qualified symbol, not the current namespace.
+     * This is important for referred vars - e.g. when clojure.set uses 'reduce', we want
+     * to generate code that looks up clojure.core/reduce, not clojure.set/reduce. */
+    auto const var_qualified_sym(
+      make_box<runtime::obj::symbol>(var->n->name->name, var->name->name));
+
+    /* Infer type from var's boxed_type (stored on the var itself, persists
+     * across processor instances). Fall back to vars map for same-processor lookups. */
+    jtl::ptr<void> tag_type{ nullptr };
+
+    /* First check the var object's boxed_type - this persists across processor instances. */
+    if(var->boxed_type)
+    {
+      tag_type = var->boxed_type;
+    }
+    /* Fall back to vars map for same-processor lookups. */
+    else
+    {
+      auto const var_expr_it(vars.find(var));
+      if(var_expr_it != vars.end())
+      {
+        auto const &init_expr{ var_expr_it->second };
+        /* For cpp_box, use the boxed_type (the underlying pointer type)
+         * rather than expression_type which returns object*. */
+        if(init_expr->kind == expression_kind::cpp_box)
+        {
+          auto const box_expr{ llvm::cast<expr::cpp_box>(init_expr.data) };
+          tag_type = box_expr->boxed_type;
+        }
+        else
+        {
+          tag_type = cpp_util::expression_type(init_expr);
+        }
+      }
+    }
+
+    /* Fall back to :tag metadata for pre-compiled modules or explicit overrides. */
+    if(!tag_type && var->meta.is_some())
+    {
+      auto const tag_kw(__rt_ctx->intern_keyword("", "tag", true).expect_ok());
+      auto const tag_val(get(var->meta.unwrap(), tag_kw));
+      tag_type = cpp_util::tag_to_cpp_type(tag_val);
+    }
+
+    return jtl::make_ref<expr::var_deref>(position,
+                                          current_frame,
+                                          true,
+                                          var_qualified_sym,
+                                          var,
+                                          tag_type);
   }
 
   jtl::result<expr::function_arity, error_ref>
@@ -1736,6 +2067,7 @@ namespace jank::analyze
     {
       auto const last_expression{ body_do->values.back() };
       auto const last_expression_type{ cpp_util::expression_type(last_expression) };
+
       if(!cpp_util::is_any_object(last_expression_type)
          && !cpp_util::is_trait_convertible(last_expression_type))
       {
@@ -1762,7 +2094,8 @@ namespace jank::analyze
     return ok(expr::function_arity{ std::move(param_symbols),
                                     body_do,
                                     std::move(frame),
-                                    std::move(fn_ctx) });
+                                    std::move(fn_ctx),
+                                    jtl::none });
   }
 
   processor::expression_result
@@ -2410,13 +2743,19 @@ namespace jank::analyze
     {
       return condition_expr.expect_err();
     }
-    /* TODO: Support native types if they're compatible with bool. */
-    condition_expr = apply_implicit_conversion(condition_expr.expect_ok(),
-                                               cpp_util::untyped_object_ptr_type(),
-                                               macro_expansions);
-    if(condition_expr.is_err())
+    /* Optimization: Don't box C++ bool conditions - they can be used directly in if.
+     * This avoids the overhead of boxing and then calling truthy() on the boxed value. */
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+    if(!cpp_util::expr_is_cpp_bool(condition_expr.expect_ok()))
+#endif
     {
-      return condition_expr.expect_err();
+      condition_expr = apply_implicit_conversion(condition_expr.expect_ok(),
+                                                 cpp_util::untyped_object_ptr_type(),
+                                                 macro_expansions);
+      if(condition_expr.is_err())
+      {
+        return condition_expr.expect_err();
+      }
     }
 
     auto const then(o->data.rest().rest().first().unwrap());
@@ -2998,6 +3337,7 @@ namespace jank::analyze
     jtl::ptr<expression> source;
     bool needs_ret_box{ true };
     bool needs_arg_box{ true };
+    jtl::ptr<void> return_tag_type{};
 
     /* TODO: If this is a recursive call, note that and skip the var lookup. */
     if(first->type == runtime::object_type::symbol)
@@ -3008,6 +3348,411 @@ namespace jank::analyze
       {
         return (*this.*found_special->second)(o, current_frame, position, fn_ctx, needs_box);
       }
+
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+      /* Check for function-like macro calls from native headers.
+       * For calls like (alias/MACRO_NAME arg1 arg2), we need to generate
+       * C++ code like MACRO_NAME(arg1_repr, arg2_repr) and evaluate it. */
+      if(!sym->ns.empty() && sym->ns != "cpp")
+      {
+        auto const alias_sym(make_box<runtime::obj::symbol>(sym->ns));
+        auto const native_alias(runtime::__rt_ctx->current_ns()->find_native_alias(alias_sym));
+        if(native_alias.is_some())
+        {
+          auto const &alias_info(native_alias.unwrap());
+          std::string member_name{ sym->name.data(), sym->name.size() };
+
+          if(nrepl_server::asio::is_native_header_function_like_macro(alias_info, member_name))
+          {
+            pop_macro_expansions = push_macro_expansions(*this, o);
+
+            /* Helper function to recursively convert expressions to C++ code strings.
+             * This allows nested function calls like (ecs_new_w_pair (ecs_mini) 3 4) to work. */
+            std::function<jtl::option<native_transient_string>(expression_ref const &)>
+              expr_to_cpp_code;
+            expr_to_cpp_code
+              = [&](expression_ref const &e) -> jtl::option<native_transient_string> {
+              if(e->kind == expression_kind::primitive_literal)
+              {
+                auto const lit{ llvm::cast<expr::primitive_literal>(e.data) };
+                if(lit->data->type == runtime::object_type::integer)
+                {
+                  auto const i{ runtime::expect_object<runtime::obj::integer>(lit->data) };
+                  return native_transient_string{ std::to_string(i->data) };
+                }
+                else if(lit->data->type == runtime::object_type::real)
+                {
+                  auto const r{ runtime::expect_object<runtime::obj::real>(lit->data) };
+                  return native_transient_string{ std::to_string(r->data) };
+                }
+                else if(lit->data->type == runtime::object_type::boolean)
+                {
+                  auto const b{ runtime::expect_object<runtime::obj::boolean>(lit->data) };
+                  return native_transient_string{ b->data ? "true" : "false" };
+                }
+                return jtl::none;
+              }
+              else if(e->kind == expression_kind::cpp_call)
+              {
+                auto const call{ llvm::cast<expr::cpp_call>(e.data) };
+                /* If function_code is set (from cpp/value), use it directly */
+                if(!call->function_code.empty())
+                {
+                  return native_transient_string{ call->function_code };
+                }
+                /* Otherwise, build from source_expr and arg_exprs */
+                if(call->source_expr->kind == expression_kind::cpp_value)
+                {
+                  auto const src{ llvm::cast<expr::cpp_value>(call->source_expr.data) };
+                  /* Get function name from form (should be a symbol) */
+                  native_transient_string result;
+                  if(src->form->type == runtime::object_type::symbol)
+                  {
+                    auto const form_sym{ runtime::expect_object<runtime::obj::symbol>(src->form) };
+                    result.append(form_sym->name.data(), form_sym->name.size());
+                  }
+                  else
+                  {
+                    return jtl::none;
+                  }
+                  result.push_back('(');
+                  bool first = true;
+                  for(auto const &arg : call->arg_exprs)
+                  {
+                    if(!first)
+                    {
+                      result.append(", ");
+                    }
+                    first = false;
+                    auto const arg_code{ expr_to_cpp_code(arg) };
+                    if(arg_code.is_none())
+                    {
+                      return jtl::none;
+                    }
+                    result.append(arg_code.unwrap());
+                  }
+                  result.push_back(')');
+                  return result;
+                }
+                return jtl::none;
+              }
+              else if(e->kind == expression_kind::cpp_value)
+              {
+                auto const val{ llvm::cast<expr::cpp_value>(e.data) };
+                if(val->form->type == runtime::object_type::symbol)
+                {
+                  auto const form_sym{ runtime::expect_object<runtime::obj::symbol>(val->form) };
+                  native_transient_string result;
+                  result.append(form_sym->name.data(), form_sym->name.size());
+                  return result;
+                }
+                return jtl::none;
+              }
+              else if(e->kind == expression_kind::local_reference)
+              {
+                /* Handle local bindings to cpp_call, cpp_box, or primitive_literal expressions.
+                 * This enables: (let [a (fl/ecs_mini)] (fl/ecs_new_w_pair a 3 4))
+                 * or: (let [a (cpp/box (fl/ecs_mini))] (fl/ecs_new_w_pair a 3 x))
+                 * or: (let [x 5] (th/TEST_ADD x 10))
+                 * where the binding values get expanded inline in the macro call. */
+                auto const local_ref{ llvm::cast<expr::local_reference>(e.data) };
+                if(local_ref->binding && local_ref->binding->value_expr.is_some())
+                {
+                  auto const val_expr{ local_ref->binding->value_expr.unwrap() };
+                  /* If the binding is to a cpp_call, recursively convert it */
+                  if(val_expr->kind == expression_kind::cpp_call)
+                  {
+                    return expr_to_cpp_code(val_expr);
+                  }
+                  /* If the binding is to a cpp_box, extract and convert the inner expression */
+                  else if(val_expr->kind == expression_kind::cpp_box)
+                  {
+                    auto const box{ llvm::cast<expr::cpp_box>(val_expr.data) };
+                    return expr_to_cpp_code(box->value_expr);
+                  }
+                  /* If the binding is to a primitive literal, convert it directly */
+                  else if(val_expr->kind == expression_kind::primitive_literal)
+                  {
+                    return expr_to_cpp_code(val_expr);
+                  }
+                }
+                return jtl::none;
+              }
+              return jtl::none;
+            };
+
+            /* First pass: analyze all arguments and try to convert to C++ code */
+            native_vector<native_transient_string> cpp_codes;
+            native_vector<expression_ref> analyzed_args;
+            bool all_convertible = true;
+
+            auto it{ o->data.rest() };
+            while(it.first().is_some())
+            {
+              auto const arg_obj{ it.first().unwrap() };
+
+              /* Analyze ALL arguments - we need expressions for wrapper case */
+              auto const arg_result{
+                analyze(arg_obj, current_frame, expression_position::value, fn_ctx, false)
+              };
+              if(arg_result.is_err())
+              {
+                return arg_result;
+              }
+              auto const arg_expr{ arg_result.expect_ok() };
+              analyzed_args.push_back(arg_expr);
+
+              /* Try to convert to C++ code for the simple path */
+              auto const cpp_code{ expr_to_cpp_code(arg_expr) };
+              if(cpp_code.is_some())
+              {
+                cpp_codes.push_back(cpp_code.unwrap());
+              }
+              else
+              {
+                /* This argument needs runtime evaluation via wrapper */
+                cpp_codes.push_back(native_transient_string{});
+                all_convertible = false;
+              }
+
+              it = it.rest();
+            }
+
+            if(all_convertible)
+            {
+              /* Simple case: all arguments convert to C++ code at analysis time */
+              native_transient_string macro_call;
+              macro_call.append(member_name);
+              macro_call.push_back('(');
+              for(size_t i = 0; i < cpp_codes.size(); ++i)
+              {
+                if(i > 0)
+                {
+                  macro_call.append(", ");
+                }
+                macro_call.append(cpp_codes[i]);
+              }
+              macro_call.push_back(')');
+
+              runtime::detail::native_persistent_list const cpp_value_form{
+                make_box<runtime::obj::symbol>("cpp", "value"),
+                make_box<runtime::obj::persistent_string>(macro_call)
+              };
+              return analyze_cpp_value(make_box<runtime::obj::persistent_list>(cpp_value_form),
+                                       current_frame,
+                                       position,
+                                       fn_ctx,
+                                       needs_box);
+            }
+            else
+            {
+              /* Dynamic case: mix of C++ expressions and jank expressions as macro arguments.
+               * Generate a wrapper function that:
+               * 1. Takes object_ref parameters ONLY for jank expression arguments
+               * 2. Embeds C++ code directly for C++ expression arguments
+               * 3. Unboxes jank args to native_integer
+               * 4. Calls the macro
+               * 5. Boxes and returns the result
+               */
+
+              /* Generate unique wrapper function name */
+              auto const wrapper_name{ __rt_ctx->unique_string("__jank_macro_wrapper") };
+
+              /* Build mapping: which args need parameters vs embedded C++ code */
+              native_vector<size_t>
+                jank_arg_indices; /* Indices of args that need object_ref params */
+              for(size_t i = 0; i < cpp_codes.size(); ++i)
+              {
+                if(cpp_codes[i].empty())
+                {
+                  jank_arg_indices.push_back(i);
+                }
+              }
+
+              /* Build wrapper function code */
+              native_transient_string wrapper_code;
+              wrapper_code.append("[[gnu::always_inline]] inline jank::runtime::object_ref ");
+              wrapper_code.append(wrapper_name.c_str());
+              wrapper_code.push_back('(');
+
+              /* Parameters: object_ref ONLY for jank expression arguments */
+              for(size_t param_idx = 0; param_idx < jank_arg_indices.size(); ++param_idx)
+              {
+                if(param_idx > 0)
+                {
+                  wrapper_code.append(", ");
+                }
+                wrapper_code.append("jank::runtime::object_ref arg");
+                wrapper_code.append(std::to_string(param_idx));
+              }
+              wrapper_code.append(") {\n");
+
+              /* Helper to get the underlying C++ type from an expression.
+               * Returns a type for:
+               * - cpp_box expressions (boxed C++ values)
+               * - cpp_call expressions (direct C++ function calls)
+               * - local bindings to either of the above
+               * For regular jank expressions, returns none (defaults to integer unboxing). */
+              auto get_cpp_type_from_expr
+                = [](expression_ref const &exp) -> jtl::option<jtl::ptr<void>> {
+                if(exp->kind == expression_kind::local_reference)
+                {
+                  auto const local_ref{ llvm::cast<expr::local_reference>(exp.data) };
+                  if(local_ref->binding && local_ref->binding->value_expr.is_some())
+                  {
+                    auto const val_expr{ local_ref->binding->value_expr.unwrap() };
+                    /* Case 1: (let [a (cpp/box (fl/ecs_mini))] ...) */
+                    if(val_expr->kind == expression_kind::cpp_box)
+                    {
+                      auto const box{ llvm::cast<expr::cpp_box>(val_expr.data) };
+                      if(box->value_expr->kind == expression_kind::cpp_call)
+                      {
+                        return llvm::cast<expr::cpp_call>(box->value_expr.data)->type;
+                      }
+                    }
+                    /* Case 2: (let [a (fl/ecs_mini)] ...) - direct cpp_call without boxing */
+                    else if(val_expr->kind == expression_kind::cpp_call)
+                    {
+                      return llvm::cast<expr::cpp_call>(val_expr.data)->type;
+                    }
+                  }
+                  /* For regular jank bindings, return none to use integer unboxing */
+                }
+                else if(exp->kind == expression_kind::cpp_box)
+                {
+                  auto const box{ llvm::cast<expr::cpp_box>(exp.data) };
+                  if(box->value_expr->kind == expression_kind::cpp_call)
+                  {
+                    return llvm::cast<expr::cpp_call>(box->value_expr.data)->type;
+                  }
+                }
+                else if(exp->kind == expression_kind::cpp_call)
+                {
+                  return llvm::cast<expr::cpp_call>(exp.data)->type;
+                }
+                return jtl::none;
+              };
+
+              /* Unbox only the jank expression arguments, with type-aware unboxing */
+              for(size_t param_idx = 0; param_idx < jank_arg_indices.size(); ++param_idx)
+              {
+                auto const arg_idx{ jank_arg_indices[param_idx] };
+                auto const &arg_expr{ analyzed_args[arg_idx] };
+                auto const maybe_type{ get_cpp_type_from_expr(arg_expr) };
+
+                wrapper_code.append("  auto val");
+                wrapper_code.append(std::to_string(param_idx));
+
+                if(maybe_type.is_some() && Cpp::IsPointerType(maybe_type.unwrap()))
+                {
+                  /* Pointer type: unbox from native_pointer_wrapper and cast */
+                  auto const type_str{ Cpp::GetTypeAsString(maybe_type.unwrap()) };
+                  wrapper_code.append(" = static_cast<");
+                  wrapper_code.append(type_str);
+                  wrapper_code.append(
+                    ">(jank::runtime::expect_object<jank::runtime::obj::native_pointer_wrapper>("
+                    "arg");
+                  wrapper_code.append(std::to_string(param_idx));
+                  wrapper_code.append(")->data);\n");
+                }
+                else
+                {
+                  /* Default to integer - covers integral types and jank expressions */
+                  wrapper_code.append(
+                    " = jank::runtime::expect_object<jank::runtime::obj::integer>(arg");
+                  wrapper_code.append(std::to_string(param_idx));
+                  wrapper_code.append(")->data;\n");
+                }
+              }
+
+              /* Call the macro with embedded C++ code or unboxed values */
+              wrapper_code.append("  return jank::runtime::make_box(");
+              wrapper_code.append(member_name);
+              wrapper_code.push_back('(');
+
+              size_t param_idx = 0;
+              for(size_t i = 0; i < analyzed_args.size(); ++i)
+              {
+                if(i > 0)
+                {
+                  wrapper_code.append(", ");
+                }
+                if(!cpp_codes[i].empty())
+                {
+                  /* C++ expression: embed directly */
+                  wrapper_code.append(cpp_codes[i]);
+                }
+                else
+                {
+                  /* Jank expression: use unboxed parameter */
+                  wrapper_code.append("val");
+                  wrapper_code.append(std::to_string(param_idx));
+                  ++param_idx;
+                }
+              }
+              wrapper_code.append("));\n}\n");
+
+              /* Parse and execute the wrapper to register it with JIT */
+              auto &diag{ jit::get_interpreter()->getCompilerInstance()->getDiagnostics() };
+              clang::DiagnosticErrorTrap const trap{ diag };
+
+              auto parse_res{ jit::get_interpreter()->Parse(
+                { wrapper_code.data(), wrapper_code.size() }) };
+              if(!parse_res || trap.hasErrorOccurred())
+              {
+                return error::analyze_invalid_cpp_value(
+                  util::format("Failed to parse macro wrapper function. Generated code:\n{}",
+                               wrapper_code),
+                  meta_source(o->meta),
+                  latest_expansion(macro_expansions));
+              }
+
+              auto exec_res{ jit::get_interpreter()->Execute(*parse_res) };
+              if(exec_res)
+              {
+                return error::analyze_invalid_cpp_value(
+                  util::format("Failed to execute macro wrapper function. Generated code:\n{}",
+                               wrapper_code),
+                  meta_source(o->meta),
+                  latest_expansion(macro_expansions));
+              }
+
+              /* Get the function declaration to create cpp_value */
+              auto const * const translation_unit{ parse_res->TUPart };
+              auto const f_decl{ llvm::cast<clang::FunctionDecl>(
+                *translation_unit->decls_begin()) };
+              auto const ret_type{ Cpp::GetFunctionReturnType(f_decl) };
+
+              /* Create cpp_value for the wrapper function */
+              auto const wrapper_source{ jtl::make_ref<expr::cpp_value>(
+                position,
+                current_frame,
+                needs_box,
+                make_box<obj::symbol>(wrapper_name),
+                Cpp::GetTypeFromScope(f_decl),
+                f_decl,
+                expr::cpp_value::value_kind::function) };
+
+              /* Build args vector with ONLY the jank expression arguments */
+              native_vector<expression_ref> wrapper_args;
+              for(auto const idx : jank_arg_indices)
+              {
+                wrapper_args.push_back(analyzed_args[idx]);
+              }
+
+              /* Create cpp_call that calls the wrapper with jank expression arguments only */
+              return jtl::make_ref<expr::cpp_call>(position,
+                                                   current_frame,
+                                                   needs_box,
+                                                   ret_type,
+                                                   wrapper_source,
+                                                   jtl::move(wrapper_args),
+                                                   jtl::immutable_string{ wrapper_code });
+            }
+          }
+        }
+      }
+#endif
 
       pop_macro_expansions = push_macro_expansions(*this, o);
 
@@ -3036,6 +3781,13 @@ namespace jank::analyze
                && source->kind <= expression_kind::cpp_value_max)
               || !cpp_util::is_any_object(cpp_util::expression_type(source.data)))
       {
+        /* If we have a cpp_call with no additional arguments, just return it.
+         * This handles the case where a C macro symbol is used in call position,
+         * like (rl/KEY_ESCAPE) - we just want the evaluated macro value. */
+        if(source->kind == expression_kind::cpp_call && arg_count == 0)
+        {
+          return source.as_ref();
+        }
         return analyze_cpp_call(o, source.data, current_frame, position, fn_ctx, needs_box);
       }
 
@@ -3061,7 +3813,7 @@ namespace jank::analyze
       }
 
       source = sym_result.expect_ok();
-      auto const var_deref(llvm::dyn_cast<expr::var_deref>(source.data));
+      auto const var_deref(expr_dyn_cast<expr::var_deref>(source.data));
 
       /* If this expression doesn't need to be boxed, based on where it's called, we can dig
        * into the call details itself to see if the function supports unboxed returns. Most don't. */
@@ -3083,6 +3835,15 @@ namespace jank::analyze
           /* TODO: Rename key. */
           (get(arity_meta, __rt_ctx->intern_keyword("", "unboxed-output?", true).expect_ok())));
 
+        /* Extract :tag from arity metadata for return type hint.
+         * Use tag_to_cpp_type_literal to respect exact user-specified types:
+         * :i32 -> int, :i32* -> int*, not :i32 -> int* */
+        auto const tag_val(get(arity_meta, __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
+        if(!tag_val.is_nil())
+        {
+          return_tag_type = cpp_util::tag_to_cpp_type_literal(tag_val);
+        }
+
         if(supports_unboxed_input || supports_unboxed_output)
         {
           auto const fn_res(vars.find(var_deref->var));
@@ -3102,6 +3863,18 @@ namespace jank::analyze
 
           needs_arg_box = !supports_unboxed_input;
           needs_ret_box = needs_box | !supports_unboxed_output;
+        }
+
+        /* If no :tag in arity metadata, check for :tag directly on var metadata.
+         * This handles ^{:tag "Type*"} on defn for single-arity functions. */
+        if(!return_tag_type && var_deref->var->meta.is_some())
+        {
+          auto const direct_tag_val(get(var_deref->var->meta.unwrap(),
+                                        __rt_ctx->intern_keyword("", "tag", true).expect_ok()));
+          if(!direct_tag_val.is_nil())
+          {
+            return_tag_type = cpp_util::tag_to_cpp_type_literal(direct_tag_val);
+          }
         }
       }
     }
@@ -3192,7 +3965,168 @@ namespace jank::analyze
                                                        none));
     }
 
-    auto const recursion_ref(llvm::dyn_cast<expr::recursion_reference>(source.data));
+    /* Optimization: Route clojure.core arithmetic/comparison operations on C++ numeric types
+     * directly through C++ operators instead of dynamic_call. This avoids boxing overhead. */
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+    auto const arith_var_deref(expr_dyn_cast<expr::var_deref>(source.data));
+    if(arith_var_deref)
+    {
+      auto const &ns_name{ arith_var_deref->var->n->name->name };
+      auto const &fn_name{ arith_var_deref->var->name->name };
+      if(ns_name == "clojure.core" && !arg_exprs.empty())
+      {
+        auto const op{ cpp_util::match_operator(fn_name) };
+        if(op.is_some())
+        {
+          auto const op_val{ op.unwrap() };
+          bool const is_arith_op{ op_val == Cpp::OP_Plus || op_val == Cpp::OP_Minus
+                                  || op_val == Cpp::OP_Star || op_val == Cpp::OP_Slash };
+          bool const is_cmp_op{ op_val == Cpp::OP_Greater || op_val == Cpp::OP_Less
+                                || op_val == Cpp::OP_GreaterEqual || op_val == Cpp::OP_LessEqual };
+
+          if((is_arith_op || is_cmp_op) && arg_exprs.size() >= 2)
+          {
+            /* Check if arguments can participate in C++ arithmetic.
+             * At least ONE argument must be a C++ numeric type (not just primitive literals).
+             * Primitive literals can be mixed with C++ types.
+             * We also look through cpp_cast with into_object policy to find underlying C++ types. */
+            auto const is_primitive_numeric_literal = [](expression_ref const &arg) -> bool {
+              if(arg->kind == expression_kind::primitive_literal)
+              {
+                auto const lit{ static_cast<expr::primitive_literal *>(arg.data) };
+                return lit->data->type == runtime::object_type::integer
+                  || lit->data->type == runtime::object_type::real;
+              }
+              return false;
+            };
+
+            /* Helper to get the underlying expression, looking through into_object casts */
+            auto const get_underlying_expr = [](expression_ref const &arg) -> expression_ref {
+              if(arg->kind == expression_kind::cpp_cast)
+              {
+                auto const cast{ static_cast<expr::cpp_cast *>(arg.data) };
+                if(cast->policy == conversion_policy::into_object)
+                {
+                  return cast->value_expr;
+                }
+              }
+              return arg;
+            };
+
+            bool has_cpp_numeric{ false };
+            bool all_compatible{ true };
+            native_vector<expression_ref> unboxed_args;
+            unboxed_args.reserve(arg_exprs.size());
+
+            for(auto const &arg : arg_exprs)
+            {
+              auto const underlying{ get_underlying_expr(arg) };
+              unboxed_args.push_back(underlying);
+
+              if(cpp_util::expr_is_cpp_numeric(underlying))
+              {
+                has_cpp_numeric = true;
+              }
+              else if(!is_primitive_numeric_literal(underlying))
+              {
+                all_compatible = false;
+                break;
+              }
+            }
+
+            /* Only optimize if we have at least one actual C++ type (not all literals) */
+            bool all_numeric{ all_compatible && has_cpp_numeric };
+
+            if(all_numeric)
+            {
+              /* Determine result type: comparison operators return bool, arithmetic preserves type */
+              jtl::ptr<void> result_type{};
+              if(is_cmp_op)
+              {
+                result_type = Cpp::GetType("bool");
+              }
+              else
+              {
+                /* Use the first C++ numeric type (we're guaranteed to have one) */
+                for(auto const &arg : unboxed_args)
+                {
+                  if(cpp_util::expr_is_cpp_numeric(arg))
+                  {
+                    result_type = cpp_util::expression_type(arg);
+                    break;
+                  }
+                }
+              }
+
+              /* For binary operators with more than 2 args (like (+ a b c)), chain them */
+              if(unboxed_args.size() == 2)
+              {
+                return jtl::make_ref<expr::cpp_builtin_operator_call>(position,
+                                                                      current_frame,
+                                                                      needs_ret_box,
+                                                                      static_cast<int>(op_val),
+                                                                      std::move(unboxed_args),
+                                                                      result_type);
+              }
+              else
+              {
+                /* For multiple args, chain: (+ a b c) -> (a + b) + c */
+                expression_ref lhs{ unboxed_args[0] };
+                for(usize i{ 1 }; i < unboxed_args.size(); ++i)
+                {
+                  native_vector<expression_ref> pair_args;
+                  pair_args.push_back(lhs);
+                  pair_args.push_back(unboxed_args[i]);
+                  lhs = jtl::make_ref<expr::cpp_builtin_operator_call>(
+                    position,
+                    current_frame,
+                    false, /* intermediate results don't need boxing */
+                    static_cast<int>(op_val),
+                    std::move(pair_args),
+                    result_type);
+                }
+                /* The final result may need boxing */
+                lhs->needs_box = needs_ret_box;
+                return lhs;
+              }
+            }
+          }
+        }
+
+        /* Helper to get the underlying expression, looking through into_object casts */
+        auto const get_underlying_bool_expr = [](expression_ref const &arg) -> expression_ref {
+          if(arg->kind == expression_kind::cpp_cast)
+          {
+            auto const cast{ static_cast<expr::cpp_cast *>(arg.data) };
+            if(cast->policy == conversion_policy::into_object)
+            {
+              return cast->value_expr;
+            }
+          }
+          return arg;
+        };
+
+        /* Optimization: (not bool-expr) -> !bool-expr for C++ bools */
+        if(fn_name == "not" && arg_exprs.size() == 1)
+        {
+          auto const underlying{ get_underlying_bool_expr(arg_exprs[0]) };
+          if(cpp_util::expr_is_cpp_bool(underlying))
+          {
+            native_vector<expression_ref> not_args;
+            not_args.push_back(underlying);
+            return jtl::make_ref<expr::cpp_builtin_operator_call>(position,
+                                                                  current_frame,
+                                                                  needs_ret_box,
+                                                                  static_cast<int>(Cpp::OP_Exclaim),
+                                                                  std::move(not_args),
+                                                                  Cpp::GetType("bool"));
+          }
+        }
+      }
+    }
+#endif
+
+    auto const recursion_ref(expr_dyn_cast<expr::recursion_reference>(source.data));
     if(recursion_ref)
     {
       return jtl::make_ref<expr::named_recursion>(
@@ -3210,7 +4144,8 @@ namespace jank::analyze
                                        needs_ret_box,
                                        source.as_ref(),
                                        std::move(arg_exprs),
-                                       o);
+                                       o,
+                                       return_tag_type);
     }
   }
 
@@ -3496,10 +4431,13 @@ namespace jank::analyze
        *
        * We silence the diagnostics for this because it'll likely fail for any invalid symbols
        * anyway. */
-      auto &diag{ runtime::__rt_ctx->jit_prc.interpreter->getCompilerInstance()->getDiagnostics() };
-      auto old_client{ diag.takeClient() };
-      diag.setClient(new clang::IgnoringDiagConsumer{}, true);
-      util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
+      if(auto *interp = jit::get_interpreter())
+      {
+        auto &diag{ interp->getCompilerInstance()->getDiagnostics() };
+        auto old_client{ diag.takeClient() };
+        diag.setClient(new clang::IgnoringDiagConsumer{}, true);
+        util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
+      }
 
       /* So just wrap our cpp/foo into a (cpp/value "foo") and analyze that. */
       runtime::detail::native_persistent_list const cpp_value_form{ make_box<obj::symbol>("cpp",
@@ -3626,6 +4564,7 @@ namespace jank::analyze
     }
 
     auto const string_obj(l->data.rest().first().unwrap());
+
     auto const string_expr_res(
       analyze(string_obj, current_frame, expression_position::value, fn_ctx, false));
     if(string_expr_res.is_err())
@@ -3667,7 +4606,9 @@ namespace jank::analyze
                                           guard_name,
                                           raw_string) };
 
-    return jtl::make_ref<expr::cpp_raw>(position, current_frame, needs_box, guarded_code);
+    auto result(jtl::make_ref<expr::cpp_raw>(position, current_frame, needs_box, guarded_code));
+    result->source = object_source(l);
+    return result;
   }
 
   enum class literal_kind : u8
@@ -3816,6 +4757,28 @@ namespace jank::analyze
     }
     else
     {
+      /* Optimization: Detect simple C string literals and skip wrapper function.
+       * A string literal starts with " and ends with " after trimming. */
+      if(str.size() >= 2 && str[0] == '"' && str[str.size() - 1] == '"')
+      {
+        /* Get the char const* type for string literals.
+         * Only use the optimization if we can get a valid type. */
+        auto const char_const_ptr_type{ Cpp::GetType("char const*") };
+        if(char_const_ptr_type)
+        {
+          auto val = jtl::make_ref<expr::cpp_value>(position,
+                                                    current_frame,
+                                                    needs_box,
+                                                    try_object<obj::symbol>(l->first()),
+                                                    char_const_ptr_type,
+                                                    nullptr, /* No scope for literals */
+                                                    expr::cpp_value::value_kind::string_literal);
+          val->literal_str = str;
+          return val;
+        }
+        /* Fall through to normal path if type lookup failed */
+      }
+
       auto const literal_value{ cpp_util::resolve_literal_value(str) };
       if(literal_value.is_ok())
       {
@@ -4042,6 +5005,7 @@ namespace jank::analyze
                                         current_frame,
                                         needs_box,
                                         value_expr,
+                                        value_type,
                                         object_source(l->first()));
   }
 
@@ -4056,15 +5020,8 @@ namespace jank::analyze
     if(count < 2)
     {
       return error::analyze_invalid_cpp_unbox(
-               "This call to 'cpp/unbox' is missing a C++ type and a value as arguments.",
-               object_source(l->first()),
-               latest_expansion(macro_expansions))
-        ->add_usage(read::parse::reparse_nth(l, 0));
-    }
-    else if(count < 3)
-    {
-      return error::analyze_invalid_cpp_unbox(
-               "This call to 'cpp/unbox' is missing a value to unbox as an argument.",
+               "This call to 'cpp/unbox' requires at least one argument (either just a value for "
+               "type inference, or both a type and a value).",
                object_source(l->first()),
                latest_expansion(macro_expansions))
         ->add_usage(read::parse::reparse_nth(l, 0));
@@ -4072,13 +5029,75 @@ namespace jank::analyze
     else if(3 < count)
     {
       return error::analyze_invalid_cpp_unbox(
-               "A call to 'cpp/unbox' must only have a C++ type and a "
-               "value as arguments and nothing else.",
+               "A call to 'cpp/unbox' takes at most two arguments (a C++ type and a value).",
                object_source(l->next()->next()->next()->first()),
                latest_expansion(macro_expansions))
         ->add_usage(read::parse::reparse_nth(l, 3));
     }
 
+    /* Single-argument form: (cpp/unbox value)
+     * Type is inferred from the value expression (e.g., var with known type). */
+    if(count == 2)
+    {
+      auto const value_obj(l->data.rest().first().unwrap());
+      auto const value_expr_res(
+        analyze(value_obj, current_frame, expression_position::value, fn_ctx, false));
+      if(value_expr_res.is_err())
+      {
+        return value_expr_res.expect_err();
+      }
+
+      auto const value_expr{ value_expr_res.expect_ok() };
+
+      /* Get the unbox target type from var_deref's tag_type or call's return_tag_type.
+       * This is the boxed_type stored on the var (e.g., bool* for v->p false),
+       * or the :tag metadata on a function being called. */
+      jtl::ptr<void> inferred_type{ nullptr };
+      if(value_expr->kind == expression_kind::var_deref)
+      {
+        auto const var_deref_expr{ llvm::cast<expr::var_deref>(value_expr.data) };
+        inferred_type = var_deref_expr->tag_type;
+      }
+      else if(value_expr->kind == expression_kind::call)
+      {
+        auto const call_expr{ llvm::cast<expr::call>(value_expr.data) };
+        inferred_type = call_expr->return_tag_type;
+      }
+
+      /* Check if we got a useful type */
+      if(!inferred_type || !Cpp::IsPointerType(inferred_type))
+      {
+        return error::analyze_invalid_cpp_unbox(
+                 "Unable to infer type for 'cpp/unbox'. The value must be a var with a known "
+                 "pointer type, or you must specify the type explicitly: (cpp/unbox type value).",
+                 object_source(value_obj),
+                 latest_expansion(macro_expansions))
+          ->add_usage(read::parse::reparse_nth(l, 1));
+      }
+
+      /* Verify the value is an object type (can be unboxed) */
+      auto const value_type{ cpp_util::expression_type(value_expr) };
+      if(!cpp_util::is_any_object(value_type))
+      {
+        return error::analyze_invalid_cpp_unbox(
+                 util::format(
+                   "Unable to unbox value of type '{}', since it's not a jank object type."
+                   " You can only unbox the same object you get back from 'cpp/box'.",
+                   Cpp::GetTypeAsString(value_type)),
+                 object_source(value_obj),
+                 latest_expansion(macro_expansions))
+          ->add_usage(read::parse::reparse_nth(l, 1));
+      }
+
+      return jtl::make_ref<expr::cpp_unbox>(position,
+                                            current_frame,
+                                            needs_box,
+                                            inferred_type,
+                                            value_expr,
+                                            object_source(l->first()));
+    }
+
+    /* Two-argument form: (cpp/unbox type value) */
     auto const type_obj(l->data.rest().first().unwrap());
     /* TODO: Add a type expression_position and only allow types there? */
     auto const type_expr_res(
@@ -4345,6 +5364,16 @@ namespace jank::analyze
                  util::format("There is no '{}' member within '{}'.",
                               name,
                               cpp_util::get_qualified_name(parent_scope)),
+                 object_source(member),
+                 latest_expansion(macro_expansions))
+          ->add_usage(read::parse::reparse_nth(l, 0));
+      }
+
+      if(Cpp::IsStaticDatamember(member_scope))
+      {
+        return error::analyze_known_issue(
+                 "A blocking Clang bug prevents access to static members in some scenarios. See "
+                 "https://github.com/llvm/llvm-project/issues/146956 for details.",
                  object_source(member),
                  latest_expansion(macro_expansions))
           ->add_usage(read::parse::reparse_nth(l, 0));

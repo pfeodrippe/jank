@@ -1,0 +1,1746 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+error() {
+  echo -e "${RED}[emscripten-bundle] ERROR: $*${NC}" >&2
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  here="$(cd "$(dirname "$0")" && pwd)"
+else
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+repo_root="${here}/.."
+build_dir="${repo_root}/build-wasm"
+native_build_dir="${repo_root}/build"
+output_dir=""
+output_name="jank"
+skip_build=false
+run_after=false
+force_regenerate=false
+jank_source=""
+node_args=()
+verbose=false
+extra_include_paths=()
+extra_libs=()
+native_obj_files=()
+native_lib_dirs=()
+native_libs=()
+em_flags=()
+
+usage() {
+  cat <<'USAGE'
+Usage: emscripten-bundle [OPTIONS] [jank-source] [-- [extra cmake configure args]]
+
+Runs emcmake/cmake with -Djank_target_wasm=on and produces a wasm-friendly build tree,
+then links the result into runnable .js/.wasm/.html files.
+
+If a jank source file is provided, it will be compiled using the native jank compiler
+and linked into the WASM bundle.
+
+Options:
+  -h, --help              Show this help message
+  --build-dir DIR         CMake build directory for WASM (default: build-wasm)
+  --native-build-dir DIR  Native build directory with jank compiler (default: build)
+  --output-dir DIR        Output directory for .js/.wasm/.html (default: build-dir)
+  --output-name NAME      Base name for output files (default: jank, or source basename)
+  --skip-build            Skip cmake build, only run em++ linking step
+  --force-regenerate      Force regeneration of C++ from jank source (ignore cache)
+  --run                   Run the generated .js file with Node.js after building
+  --node-args ARGS        Extra arguments to pass to Node.js (implies --run)
+  -I DIR                  Add include directory for C++ compilation (can be used multiple times)
+  --lib FILE              Add extra library/object file to link (can be used multiple times)
+                          Supports .bc (bitcode), .a (static lib), .c/.cpp (sources)
+  --native-obj FILE       Add native object file (.o) to load in JIT during AOT compilation
+                          (use when native code needs symbols during codegen)
+  --native-lib LIB        Add native dynamic library to load in JIT during AOT compilation
+                          (use for libraries with framework dependencies, e.g., raylib)
+  -L DIR                  Add native library search directory for JIT (can be used multiple times)
+  --em-flag FLAG          Add extra flag to em++ linker (can be used multiple times)
+                          Example: --em-flag "-sUSE_GLFW=3" --em-flag "-sASYNCIFY"
+  --prelink-lib FILE      Alias for --lib (for libraries to link into final WASM)
+  -v, --verbose           Enable verbose output (shows compilation commands)
+
+Any arguments after -- are forwarded directly to the emcmake configure invocation.
+
+Examples:
+  emscripten-bundle                           # Build runtime and generate jank.js/jank.wasm
+  emscripten-bundle eita.jank                 # Compile eita.jank and bundle into eita.js/eita.wasm
+  emscripten-bundle --run eita.jank           # Compile and run with Node.js
+  emscripten-bundle --skip-build --run        # Just link and run (if already built)
+  emscripten-bundle --output-name hello       # Generate hello.js/hello.wasm/hello.html
+USAGE
+}
+
+cmake_args=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --build-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --build-dir expects an argument" >&2
+        exit 1
+      fi
+      build_dir="$2"
+      shift 2
+      ;;
+    --native-build-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --native-build-dir expects an argument" >&2
+        exit 1
+      fi
+      native_build_dir="$2"
+      shift 2
+      ;;
+    --output-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --output-dir expects an argument" >&2
+        exit 1
+      fi
+      output_dir="$2"
+      shift 2
+      ;;
+    --output-name)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --output-name expects an argument" >&2
+        exit 1
+      fi
+      output_name="$2"
+      shift 2
+      ;;
+    --skip-build)
+      skip_build=true
+      shift
+      ;;
+    --force-regenerate)
+      force_regenerate=true
+      shift
+      ;;
+    --run)
+      run_after=true
+      shift
+      ;;
+    -v|--verbose)
+      verbose=true
+      shift
+      ;;
+    --node-args)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --node-args expects an argument" >&2
+        exit 1
+      fi
+      run_after=true
+      node_args+=($2)
+      shift 2
+      ;;
+    -I)
+      if [[ $# -lt 2 ]]; then
+        echo "error: -I expects a directory path" >&2
+        exit 1
+      fi
+      extra_include_paths+=("$2")
+      shift 2
+      ;;
+    -I*)
+      # Handle -I/path/to/dir (without space)
+      extra_include_paths+=("${1:2}")
+      shift
+      ;;
+    --lib)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --lib expects a file path" >&2
+        exit 1
+      fi
+      extra_libs+=("$2")
+      shift 2
+      ;;
+    --native-obj)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --native-obj expects a file path" >&2
+        exit 1
+      fi
+      native_obj_files+=("$2")
+      shift 2
+      ;;
+    --native-lib)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --native-lib expects a library name" >&2
+        exit 1
+      fi
+      native_libs+=("$2")
+      shift 2
+      ;;
+    -L)
+      if [[ $# -lt 2 ]]; then
+        echo "error: -L expects a directory path" >&2
+        exit 1
+      fi
+      native_lib_dirs+=("$2")
+      shift 2
+      ;;
+    -L*)
+      # Handle -L/path/to/dir (without space)
+      native_lib_dirs+=("${1:2}")
+      shift
+      ;;
+    --em-flag)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --em-flag expects an argument" >&2
+        exit 1
+      fi
+      em_flags+=("$2")
+      shift 2
+      ;;
+    --prelink-lib)
+      # Alias for --lib (for libraries that should be linked into the final WASM)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --prelink-lib expects a file path" >&2
+        exit 1
+      fi
+      extra_libs+=("$2")
+      shift 2
+      ;;
+    --)
+      shift
+      cmake_args+=("$@")
+      break
+      ;;
+    *.jank)
+      # Jank source file
+      jank_source="$1"
+      shift
+      ;;
+    *)
+      cmake_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# If jank source provided but no output name specified, use source basename
+if [[ -n "${jank_source}" && "${output_name}" == "jank" ]]; then
+  output_name="$(basename "${jank_source}" .jank)"
+fi
+
+# Default output_dir to build_dir if not specified
+if [[ -z "${output_dir}" ]]; then
+  output_dir="${build_dir}"
+fi
+
+for tool in emcmake cmake em++; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "error: required tool '$tool' not found in PATH" >&2
+    exit 1
+  fi
+done
+
+if [[ "${run_after}" == "true" ]]; then
+  if ! command -v node >/dev/null 2>&1; then
+    echo "error: --run requires 'node' in PATH" >&2
+    exit 1
+  fi
+fi
+
+mkdir -p "${build_dir}"
+mkdir -p "${output_dir}"
+
+run() {
+  echo "[emscripten-bundle] $*"
+  "$@"
+}
+
+# --- Compile jank source if provided ---
+compiled_objects=()
+entrypoint_cpp=""
+aot_mode=false  # Whether we're using true AOT compilation
+
+# Detect native jank compiler early for cache invalidation
+native_jank="${native_build_dir}/jank"
+
+# Helper function to regenerate a core library if needed
+regenerate_core_lib() {
+  local lib_name="$1"
+  local cpp_file="$2"
+  local jank_source_path="$3"
+
+  if [[ ! -x "${native_jank}" ]]; then
+    echo "[emscripten-bundle] WARNING: Native jank not found, cannot regenerate ${lib_name}"
+    return 1
+  fi
+
+  local need_regen=false
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_regen=true
+    echo "[emscripten-bundle] Forcing ${lib_name} regeneration (--force-regenerate)..."
+  elif [[ ! -f "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[emscripten-bundle] ${lib_name} C++ doesn't exist, generating..."
+  elif [[ "${native_jank}" -nt "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[emscripten-bundle] Native jank newer than ${lib_name}, regenerating..."
+  elif [[ -f "${jank_source_path}" && "${jank_source_path}" -nt "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[emscripten-bundle] ${lib_name} source changed, regenerating..."
+  fi
+
+  if [[ "${need_regen}" == "true" ]]; then
+    echo "[emscripten-bundle] Regenerating ${lib_name} from ${jank_source_path}..."
+    rm -f "${cpp_file}"
+    if "${native_jank}" run \
+      --codegen wasm-aot \
+      --module-path src/jank \
+      --save-cpp \
+      --save-cpp-path "${cpp_file}" \
+      "${jank_source_path}" 2>&1; then
+      echo "[emscripten-bundle] ${lib_name} regeneration successful!"
+      return 0
+    else
+      error "${lib_name} regeneration failed!"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# Regenerate clojure.core if needed
+clojure_core_cpp="${output_dir}/clojure_core_generated.cpp"
+clojure_core_jank="${repo_root}/src/jank/clojure/core.jank"
+if [[ -f "${clojure_core_jank}" ]]; then
+  regenerate_core_lib "clojure.core" "${clojure_core_cpp}" "${clojure_core_jank}"
+fi
+
+if [[ -f "${clojure_core_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.core: ${clojure_core_cpp}"
+  compiled_objects+=("${clojure_core_cpp}")
+else
+  echo "[emscripten-bundle] WARNING: clojure.core not pre-compiled, some functions may not be available"
+  echo "[emscripten-bundle]          Run: ./build/jank run --codegen wasm-aot --save-cpp --save-cpp-path build-wasm/clojure_core_generated.cpp src/jank/clojure/core.jank"
+fi
+
+# Regenerate clojure.set if needed
+clojure_set_cpp="${output_dir}/clojure_set_generated.cpp"
+clojure_set_jank="${repo_root}/src/jank/clojure/set.jank"
+if [[ -f "${clojure_set_jank}" ]]; then
+  regenerate_core_lib "clojure.set" "${clojure_set_cpp}" "${clojure_set_jank}"
+fi
+
+if [[ -f "${clojure_set_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.set: ${clojure_set_cpp}"
+  compiled_objects+=("${clojure_set_cpp}")
+fi
+
+# Regenerate clojure.string if needed
+clojure_string_cpp="${output_dir}/clojure_string_generated.cpp"
+clojure_string_jank="${repo_root}/src/jank/clojure/string.jank"
+if [[ -f "${clojure_string_jank}" ]]; then
+  regenerate_core_lib "clojure.string" "${clojure_string_cpp}" "${clojure_string_jank}"
+fi
+
+if [[ -f "${clojure_string_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.string: ${clojure_string_cpp}"
+  compiled_objects+=("${clojure_string_cpp}")
+fi
+
+# Regenerate clojure.walk if needed
+clojure_walk_cpp="${output_dir}/clojure_walk_generated.cpp"
+clojure_walk_jank="${repo_root}/src/jank/clojure/walk.jank"
+if [[ -f "${clojure_walk_jank}" ]]; then
+  regenerate_core_lib "clojure.walk" "${clojure_walk_cpp}" "${clojure_walk_jank}"
+fi
+
+if [[ -f "${clojure_walk_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.walk: ${clojure_walk_cpp}"
+  compiled_objects+=("${clojure_walk_cpp}")
+fi
+
+# Regenerate clojure.template if needed
+clojure_template_cpp="${output_dir}/clojure_template_generated.cpp"
+clojure_template_jank="${repo_root}/src/jank/clojure/template.jank"
+if [[ -f "${clojure_template_jank}" ]]; then
+  regenerate_core_lib "clojure.template" "${clojure_template_cpp}" "${clojure_template_jank}"
+fi
+
+if [[ -f "${clojure_template_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.template: ${clojure_template_cpp}"
+  compiled_objects+=("${clojure_template_cpp}")
+fi
+
+# Regenerate clojure.test if needed
+clojure_test_cpp="${output_dir}/clojure_test_generated.cpp"
+clojure_test_jank="${repo_root}/src/jank/clojure/test.jank"
+if [[ -f "${clojure_test_jank}" ]]; then
+  regenerate_core_lib "clojure.test" "${clojure_test_cpp}" "${clojure_test_jank}"
+fi
+
+if [[ -f "${clojure_test_cpp}" ]]; then
+  echo "[emscripten-bundle] Found pre-compiled clojure.test: ${clojure_test_cpp}"
+  compiled_objects+=("${clojure_test_cpp}")
+fi
+
+if [[ -n "${jank_source}" ]]; then
+  if [[ ! -f "${jank_source}" ]]; then
+    echo "error: jank source file not found: ${jank_source}" >&2
+    exit 1
+  fi
+
+  if [[ ! -x "${native_jank}" ]]; then
+    echo "error: native jank compiler not found: ${native_jank}" >&2
+    echo "       Build the native compiler first with ./bin/compile" >&2
+    exit 1
+  fi
+
+  echo "[emscripten-bundle] Compiling jank source: ${jank_source}"
+
+  # Get the module name from the source file
+  jank_source_abs="$(cd "$(dirname "${jank_source}")" && pwd)/$(basename "${jank_source}")"
+  jank_source_dir="$(dirname "${jank_source_abs}")"
+  module_name="$(basename "${jank_source}" .jank)"
+  # Convert file name to jank module name (underscores -> hyphens)
+  jank_module_name="${module_name//_/-}"
+
+  # Read the jank source file for embedding (fallback mode)
+  jank_source_content=$(cat "${jank_source}")
+
+  # Use C++ codegen so we can compile with emscripten
+  # The native jank compiler generates C++ code that em++ can compile to WASM
+  cpp_output="${output_dir}/${module_name}_generated.cpp"
+
+  # Check if we need to regenerate C++ (source newer than generated, generated doesn't exist, native jank changed, or forced)
+  need_regenerate=false
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_regenerate=true
+    echo "[emscripten-bundle] Forcing C++ regeneration (--force-regenerate)..."
+  elif [[ ! -f "${cpp_output}" ]]; then
+    need_regenerate=true
+    echo "[emscripten-bundle] Generated C++ doesn't exist, need to generate..."
+  elif [[ "${jank_source}" -nt "${cpp_output}" ]]; then
+    need_regenerate=true
+    echo "[emscripten-bundle] Source changed, regenerating C++ from ${jank_source}..."
+  elif [[ "${native_jank}" -nt "${cpp_output}" ]]; then
+    need_regenerate=true
+    echo "[emscripten-bundle] Native jank compiler changed, regenerating C++ from ${jank_source}..."
+  fi
+
+  if [[ "${need_regenerate}" == "true" ]]; then
+    # Remove old generated file to start fresh (jank appends to file)
+    rm -f "${cpp_output}"
+  else
+    echo "[emscripten-bundle] Using cached C++ generation for ${jank_source}"
+  fi
+
+  if [[ "${need_regenerate}" == "true" ]]; then
+    echo "[emscripten-bundle] Attempting true AOT compilation with --codegen wasm-aot..."
+
+    # Build the jank command
+    # Note: -I flags are global options and must come BEFORE the subcommand
+    jank_cmd=("${native_jank}")
+
+    # Add include paths (global options go before subcommand)
+    if [[ ${#extra_include_paths[@]} -gt 0 ]]; then
+      for inc_path in "${extra_include_paths[@]}"; do
+        # Resolve to absolute path if relative
+        if [[ "${inc_path:0:1}" != "/" ]]; then
+          inc_path="$(cd "${inc_path}" 2>/dev/null && pwd || echo "${inc_path}")"
+        fi
+        jank_cmd+=(-I "${inc_path}")
+      done
+    fi
+
+    # Add native object files (for JIT during AOT compilation)
+    if [[ ${#native_obj_files[@]} -gt 0 ]]; then
+      for obj_file in "${native_obj_files[@]}"; do
+        # Resolve to absolute path if relative
+        if [[ "${obj_file:0:1}" != "/" ]]; then
+          obj_file="$(cd "$(dirname "${obj_file}")" 2>/dev/null && pwd)/$(basename "${obj_file}")"
+        fi
+        jank_cmd+=(--obj "${obj_file}")
+      done
+    fi
+
+    # Add native library directories (for JIT during AOT compilation)
+    if [[ ${#native_lib_dirs[@]} -gt 0 ]]; then
+      for lib_dir in "${native_lib_dirs[@]}"; do
+        # Resolve to absolute path if relative
+        if [[ "${lib_dir:0:1}" != "/" ]]; then
+          lib_dir="$(cd "${lib_dir}" 2>/dev/null && pwd || echo "${lib_dir}")"
+        fi
+        jank_cmd+=(-L "${lib_dir}")
+      done
+    fi
+
+    # Add native libraries (for JIT during AOT compilation)
+    # Uses --jit-lib to load dylibs for symbol resolution without creating link dependency
+    if [[ ${#native_libs[@]} -gt 0 ]]; then
+      for lib in "${native_libs[@]}"; do
+        jank_cmd+=(--jit-lib "${lib}")
+      done
+    fi
+
+    # Add global options first (before subcommand)
+    jank_cmd+=(
+      --module-path "${jank_source_dir}"
+      --codegen wasm-aot
+      --save-cpp
+      --save-cpp-path "${cpp_output}"
+    )
+
+    # Add the subcommand and its arguments
+    # Use compile-module instead of run to avoid evaluating top-level side effects
+    jank_cmd+=(
+      compile-module
+      "${jank_module_name}"
+    )
+
+    if [[ "${verbose}" == "true" ]]; then
+      echo "[emscripten-bundle] Running AOT compile command:"
+      echo "[emscripten-bundle]   ${jank_cmd[@]}"
+    fi
+
+    # Try to compile module with wasm-aot codegen using 'compile-module' command
+    # This avoids evaluating top-level side effects (like (-main) calls)
+    if "${jank_cmd[@]}" 2>&1; then
+      echo "[emscripten-bundle] AOT compilation successful!"
+      aot_mode=true
+    else
+      error "AOT compilation failed!"
+      exit 1
+    fi
+  else
+    # Using cached C++ generation, assume AOT mode
+    aot_mode=true
+  fi
+
+  if [[ "${aot_mode}" == "true" && -f "${cpp_output}" ]]; then
+    echo "[emscripten-bundle] Using pre-compiled C++: ${cpp_output}"
+    compiled_objects+=("${cpp_output}")
+
+    # Generate an entrypoint that calls the pre-compiled module init
+    entrypoint_cpp="${output_dir}/${module_name}_entry.cpp"
+
+    # Munge the module name for C++ symbol generation (replace - with _)
+    munged_module_name="${module_name//-/_}"
+
+    # Only regenerate entrypoint if it doesn't exist or if the generated module changed
+    # (which might indicate dependencies changed)
+    need_entrypoint_regen=false
+    if [[ ! -f "${entrypoint_cpp}" ]]; then
+      need_entrypoint_regen=true
+    elif [[ "${cpp_output}" -nt "${entrypoint_cpp}" ]]; then
+      need_entrypoint_regen=true
+    fi
+
+    if [[ "${need_entrypoint_regen}" == "true" ]]; then
+      echo "[emscripten-bundle] Generating entrypoint C++ for ${module_name}..."
+
+      # Detect dependencies from generated code (find all jank_load_* functions except the main one)
+      # These are dependencies that need to be loaded before the main module
+      deps_extern=""
+      deps_load=""
+
+      # Find all jank_load_X functions in the generated code that are module loaders
+      # These are defined as "void* jank_load_X()" at the top level
+      while IFS= read -r line; do
+        if [[ "$line" =~ ^[[:space:]]*void\*[[:space:]]+jank_load_([a-zA-Z_][a-zA-Z0-9_]*)\(\)[[:space:]]*\{ ]]; then
+          dep_func="jank_load_${BASH_REMATCH[1]}"
+          # Skip the main module itself
+          if [[ "$dep_func" != "jank_load_${munged_module_name}" ]]; then
+            # Convert underscores back to dots for display
+            dep_name="${BASH_REMATCH[1]//_/.}"
+            deps_extern+="  void* ${dep_func}();\\n"
+            deps_load+="  printf(\"[jank-wasm] Loading dependency: ${dep_name}...\\\\n\");\\n"
+            deps_load+="  ${dep_func}();\\n"
+          fi
+        fi
+      done < "${cpp_output}"
+
+      cat > "${entrypoint_cpp}" <<ENTRY_EOF
+// Auto-generated AOT entrypoint for ${module_name}
+// Uses pre-compiled jank code (no runtime evaluation needed!)
+#include <cstdio>
+#include <exception>
+#include <jank/runtime/context.hpp>
+#include <jank/runtime/core/to_string.hpp>
+#include <jank/runtime/behavior/callable.hpp>
+#include <jank/error.hpp>
+
+// jank C API
+extern "C" {
+  int jank_init(int argc, char const** argv, bool init_ctx, int (*fn)(int, char const**));
+  void* jank_load_clojure_core_native();
+  void* jank_load_core();
+  void* jank_load_set();
+  void* jank_load_string();
+  void* jank_load_walk();
+  void* jank_load_template__();  // 'template' is C++ keyword, gets munged
+  void* jank_load_test();
+  void* jank_setup_clojure_core_for_wasm();
+
+  // Dependency module init functions
+$(echo -e "${deps_extern}")
+  // Main module init function (returns void* which is an erased object_ref)
+  void* jank_load_${munged_module_name}();
+}
+
+static void* safe_load_module() {
+  using namespace jank;
+  using namespace jank::runtime;
+  try {
+    printf("[jank-wasm] Now calling the actual load function...\\n");
+    return jank_load_${munged_module_name}();
+  } catch(error_ref const& e) {
+    printf("[jank-wasm] jank error during load: %s\\n", e->message.c_str());
+    return nullptr;
+  } catch(oref<object> const& e) {
+    printf("[jank-wasm] jank oref exception during load: %s\\n", to_string(e).c_str());
+    return nullptr;
+  } catch(std::exception const& e) {
+    printf("[jank-wasm] C++ std::exception during load: %s\\n", e.what());
+    return nullptr;
+  } catch(...) {
+    printf("[jank-wasm] Unknown C++ exception during load\\n");
+    return nullptr;
+  }
+}
+
+static int jank_main(int argc, char const** argv) {
+  using namespace jank;
+  using namespace jank::runtime;
+  try {
+    printf("[jank-wasm] AOT mode: using pre-compiled code\\n");
+
+    // Load core native functions
+    printf("[jank-wasm] Loading clojure.core-native...\\n");
+    jank_load_clojure_core_native();
+    printf("[jank-wasm] Core native loaded!\\n");
+
+    // Set up clojure.core namespace by referring all vars from clojure.core-native
+    printf("[jank-wasm] Setting up clojure.core namespace...\\n");
+    jank_setup_clojure_core_for_wasm();
+    printf("[jank-wasm] clojure.core ready!\\n");
+
+    // Load full clojure.core from AOT-compiled jank code
+    printf("[jank-wasm] Loading clojure.core (WASM-compatible subset)...\\n");
+    jank_load_core();
+    __rt_ctx->module_loader.set_is_loaded("clojure.core");
+    printf("[jank-wasm] clojure.core loaded!\\n");
+
+    // Load clojure.set if available
+    printf("[jank-wasm] Loading clojure.set...\\n");
+    jank_load_set();
+    __rt_ctx->module_loader.set_is_loaded("clojure.set");
+    printf("[jank-wasm] clojure.set loaded!\\n");
+
+    // Load clojure.string if available
+    printf("[jank-wasm] Loading clojure.string...\\n");
+    jank_load_string();
+    __rt_ctx->module_loader.set_is_loaded("clojure.string");
+    printf("[jank-wasm] clojure.string loaded!\\n");
+
+    // Load clojure.walk if available
+    printf("[jank-wasm] Loading clojure.walk...\\n");
+    jank_load_walk();
+    __rt_ctx->module_loader.set_is_loaded("clojure.walk");
+    printf("[jank-wasm] clojure.walk loaded!\\n");
+
+    // Load clojure.template if available
+    printf("[jank-wasm] Loading clojure.template...\\n");
+    jank_load_template__();  // 'template' is C++ keyword, gets munged
+    __rt_ctx->module_loader.set_is_loaded("clojure.template");
+    printf("[jank-wasm] clojure.template loaded!\\n");
+
+    // Load clojure.test if available
+    printf("[jank-wasm] Loading clojure.test...\\n");
+    jank_load_test();
+    __rt_ctx->module_loader.set_is_loaded("clojure.test");
+    printf("[jank-wasm] clojure.test loaded!\\n");
+    printf("\\n");
+
+    // Load dependencies
+$(echo -e "${deps_load}")
+    // Call the pre-compiled module
+    printf("[jank-wasm] Executing pre-compiled module: ${module_name}\\n");
+    void* result = safe_load_module();
+    if(!result) {
+      printf("[jank-wasm] Module load failed!\\n");
+      return 1;
+    }
+    printf("[jank-wasm] Result: %p\\n", result);
+
+    // Call -main if it exists
+    printf("[jank-wasm] Looking for -main function...\\n");
+    auto const main_var = __rt_ctx->find_var("${jank_module_name}", "-main");
+    if(main_var.is_some()) {
+      printf("[jank-wasm] Found -main, calling it...\\n");
+      jank::runtime::dynamic_call(main_var->deref());
+      printf("[jank-wasm] -main completed!\\n");
+    } else {
+      printf("[jank-wasm] No -main function found (this is OK for library modules)\\n");
+    }
+
+    printf("\\n[jank-wasm] Done (AOT mode)!\\n");
+    return 0;
+  } catch(error_ref const& e) {
+    printf("[jank-wasm] jank error: %s\\n", e->message.c_str());
+    return 1;
+  } catch(object_ref const& e) {
+    printf("[jank-wasm] jank exception: %s\\n", to_string(e).c_str());
+    return 1;
+  } catch(std::exception const& e) {
+    printf("[jank-wasm] C++ exception: %s\\n", e.what());
+    return 1;
+  } catch(...) {
+    printf("[jank-wasm] Unknown C++ exception\\n");
+    return 1;
+  }
+}
+
+int main(int argc, char const** argv) {
+  printf("[jank-wasm] jank WebAssembly Runtime (AOT)\\n");
+  printf("[jank-wasm] Module: ${module_name}\\n");
+  printf("\\n");
+
+  printf("[jank-wasm] Calling jank_init...\\n");
+  return jank_init(argc, argv, true, jank_main);
+}
+ENTRY_EOF
+    else
+      echo "[emscripten-bundle] Using cached entrypoint: ${entrypoint_cpp}"
+    fi
+  else
+    # Fallback: embed source and evaluate at runtime (limited functionality in WASM)
+    echo "[emscripten-bundle] NOTE: jank WASM support is experimental."
+    echo "[emscripten-bundle] Falling back to runtime evaluation mode."
+    echo "[emscripten-bundle] Only parsing will work - full evaluation requires clojure.core."
+    echo ""
+
+    cat > "${cpp_output}" <<CPP_EOF
+// Placeholder for ${module_name} - runtime eval mode
+// Full AOT compilation requires clojure.core to be pre-compiled.
+#include <cstdio>
+
+extern "C" void jank_${module_name}_placeholder() {
+  printf("[jank-wasm] Module '${module_name}' using runtime eval mode\\n");
+}
+CPP_EOF
+
+    compiled_objects+=("${cpp_output}")
+
+    # Generate a simple entrypoint that initializes the jank runtime
+    entrypoint_cpp="${output_dir}/${module_name}_entry.cpp"
+
+    cat > "${entrypoint_cpp}" <<ENTRY_EOF
+// Auto-generated entrypoint for ${module_name}
+// Initializes the jank WASM runtime
+#include <cstdio>
+
+// Embedded jank source code (using raw string literal)
+static char const* const jank_source_code = R"JANK(${jank_source_content})JANK";
+
+// jank C API - defined in c_api_wasm.cpp
+extern "C" {
+  // Runtime initialization
+  int jank_init(int argc, char const** argv, bool init_ctx, int (*fn)(int, char const**));
+
+  // Core library loading
+  void* jank_load_clojure_core_native();
+
+  // Evaluate jank source and get result as string
+  char const* jank_eval_string_c(char const* s);
+
+  // Module placeholder
+  void jank_${module_name}_placeholder();
+}
+
+static int jank_main(int argc, char const** argv) {
+  printf("[jank-wasm] Inside jank_main, runtime context should be initialized\\n");
+
+  // Load core native functions
+  printf("[jank-wasm] Loading clojure.core-native...\\n");
+  jank_load_clojure_core_native();
+  printf("[jank-wasm] Core native loaded!\\n");
+  printf("\\n");
+
+  // Evaluate the embedded jank source
+  printf("[jank-wasm] Evaluating jank source...\\n");
+  printf("[jank-wasm] Source:\\n%s\\n\\n", jank_source_code);
+
+  char const* result = jank_eval_string_c(jank_source_code);
+  printf("[jank-wasm] Result: %s\\n", result);
+
+  printf("\\n[jank-wasm] Done!\\n");
+  return 0;
+}
+
+int main(int argc, char const** argv) {
+  printf("[jank-wasm] jank WebAssembly Runtime\\n");
+  printf("[jank-wasm] Module: ${module_name}\\n");
+  printf("\\n");
+
+  printf("[jank-wasm] Calling jank_init...\\n");
+  return jank_init(argc, argv, true, jank_main);
+}
+ENTRY_EOF
+  fi
+
+  echo "[emscripten-bundle] Generated entrypoint: ${entrypoint_cpp}"
+fi
+
+pushd "${repo_root}" >/dev/null
+
+if [[ "${skip_build}" != "true" ]]; then
+  configure_cmd=(
+    emcmake
+    cmake
+    -S
+    .
+    -B
+    "${build_dir}"
+    -Djank_target_wasm=on
+  )
+  if [[ ${#cmake_args[@]} -gt 0 ]]; then
+    configure_cmd+=("${cmake_args[@]}")
+  fi
+
+  run "${configure_cmd[@]}"
+
+  run cmake --build "${build_dir}"
+fi
+
+# --- Link step: generate .js/.wasm/.html ---
+echo "[emscripten-bundle] Linking into ${output_dir}/${output_name}.js ..."
+
+libjank="${build_dir}/libjank.a"
+libjankzip="${build_dir}/libjankzip.a"
+libgc="${build_dir}/third-party/bdwgc/libgc.a"
+
+for lib in "${libjank}" "${libjankzip}" "${libgc}"; do
+  if [[ ! -f "${lib}" ]]; then
+    echo "error: required library not found: ${lib}" >&2
+    echo "       Run without --skip-build first." >&2
+    exit 1
+  fi
+done
+
+# Emscripten linking flags
+# Note: jank wasm build is a library, not an executable, so we don't export main
+# Instead, we create a module that can be loaded and used via ccall/cwrap
+
+# Include paths for generated C++ that needs jank headers
+jank_include_flags=(
+  -I"${repo_root}/include/cpp"
+  -I"${repo_root}/third-party/immer"
+  -I"${repo_root}/third-party/bdwgc/include"
+  -I"${repo_root}/third-party/folly"
+  -I"${repo_root}/third-party/bpptree/include"
+  -I"${repo_root}/third-party/cli11/include"
+  -I"${repo_root}/third-party/boost-preprocessor/include"
+  -I"${repo_root}/third-party/boost-multiprecision/include"
+)
+
+# Add extra include paths from -I arguments
+if [[ ${#extra_include_paths[@]} -gt 0 ]]; then
+  for inc_path in "${extra_include_paths[@]}"; do
+    # Resolve to absolute path if relative
+    if [[ "${inc_path:0:1}" != "/" ]]; then
+      inc_path="$(cd "${inc_path}" 2>/dev/null && pwd || echo "${inc_path}")"
+    fi
+    jank_include_flags+=(-I"${inc_path}")
+    echo "[emscripten-bundle] Added include path: ${inc_path}"
+  done
+fi
+
+# Compiler flags for emscripten compatibility (must match CMakeLists.txt WASM build flags)
+jank_compile_flags=(
+  -std=c++20
+  -D_LIBCPP_HAS_NO_INCOMPLETE_FORMAT
+  -D_LIBCPP_HAS_NO_LOCALIZATION
+  -DIMMER_HAS_LIBGC=1
+  -DIMMER_TAGGED_NODE=0
+  -DHAVE_CXX14=1
+  -DFOLLY_HAVE_JEMALLOC=0
+  -DFOLLY_HAVE_TCMALLOC=0
+  -DFOLLY_ASSUME_NO_JEMALLOC=1
+  -DFOLLY_ASSUME_NO_TCMALLOC=1
+  -DJANK_TARGET_EMSCRIPTEN
+  -DJANK_TARGET_WASM=1
+  -Wno-invalid-constexpr
+)
+
+# Add debug flags in dev mode for source mapping
+if [[ "${RELEASE:-}" != "1" ]]; then
+  jank_compile_flags+=(-g3)
+fi
+
+em_link_cmd=(
+  em++
+  -o "${output_dir}/${output_name}.js"
+  "${libjank}"
+  "${libjankzip}"
+  "${libgc}"
+  "${jank_include_flags[@]}"
+  "${jank_compile_flags[@]}"
+)
+
+# Add extra libraries from --lib arguments
+if [[ ${#extra_libs[@]} -gt 0 ]]; then
+  for lib_path in "${extra_libs[@]}"; do
+    # Resolve to absolute path if relative
+    if [[ "${lib_path:0:1}" != "/" ]]; then
+      lib_path="$(cd "$(dirname "${lib_path}")" 2>/dev/null && pwd)/$(basename "${lib_path}")" || lib_path="${lib_path}"
+    fi
+    if [[ ! -f "${lib_path}" ]]; then
+      echo "error: extra library not found: ${lib_path}" >&2
+      exit 1
+    fi
+    em_link_cmd+=("${lib_path}")
+    echo "[emscripten-bundle] Added library: ${lib_path}"
+  done
+fi
+
+# Compile CPP files to object files first for caching
+compiled_object_files=()
+core_object_files=()  # Track core libs separately for prelinking
+user_object_files=()  # Track user code separately
+
+# Track native jank mtime for cache invalidation
+native_jank_mtime=""
+if [[ -n "${jank_source}" && -x "${native_jank}" ]]; then
+  native_jank_mtime=$(stat -f %m "${native_jank}" 2>/dev/null || stat -c %Y "${native_jank}" 2>/dev/null)
+fi
+
+for cpp_file in "${compiled_objects[@]}"; do
+  if [[ -f "${cpp_file}" ]]; then
+    obj_file="${cpp_file%.cpp}.o"
+
+    # Check if we need to recompile (source newer than object, object doesn't exist, or force regenerate)
+    need_recompile=false
+    if [[ "${force_regenerate}" == "true" ]]; then
+      need_recompile=true
+      echo "[emscripten-bundle] Forcing recompile of ${cpp_file} (--force-regenerate)..."
+    elif [[ ! -f "${obj_file}" ]]; then
+      need_recompile=true
+    elif [[ "${cpp_file}" -nt "${obj_file}" ]]; then
+      need_recompile=true
+      echo "[emscripten-bundle] C++ source changed, recompiling ${cpp_file}..."
+    elif [[ -n "${native_jank_mtime}" && -x "${native_jank}" && "${native_jank}" -nt "${obj_file}" ]]; then
+      need_recompile=true
+      echo "[emscripten-bundle] Native jank compiler changed, recompiling ${cpp_file}..."
+    fi
+
+    if [[ "${need_recompile}" == "true" ]]; then
+      echo "[emscripten-bundle] Compiling ${cpp_file} to ${obj_file}..."
+      em++ -c "${cpp_file}" -o "${obj_file}" \
+        "${jank_include_flags[@]}" \
+        "${jank_compile_flags[@]}"
+    else
+      echo "[emscripten-bundle] Using cached object file: ${obj_file}"
+    fi
+
+    compiled_object_files+=("${obj_file}")
+
+    # Categorize: core libs (clojure.core, clojure.set, clojure.string, clojure.walk, clojure.template, clojure.test) vs user code
+    # Note: Use exact filename matches to avoid matching user files like "test_clojure_test_generated.cpp"
+    basename_cpp=$(basename "${cpp_file}")
+    if [[ "${basename_cpp}" == "clojure_core_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_set_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_string_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_walk_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_template_generated.cpp" ]] || \
+       [[ "${basename_cpp}" == "clojure_test_generated.cpp" ]]; then
+      core_object_files+=("${obj_file}")
+    else
+      user_object_files+=("${obj_file}")
+    fi
+  fi
+done
+
+# EXPERIMENTAL: Prelinked runtime for fast iteration
+# Combine libjank.a + libgc.a + core libs into a single prelinked object
+# This dramatically speeds up linking when only user code changes
+prelinked_runtime="${build_dir}/jank_runtime_prelinked.o"
+need_prelink=false
+
+if [[ "${PRELINK_RUNTIME:-1}" == "1" ]]; then
+  # Check if prelinked runtime needs to be regenerated
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_prelink=true
+    echo "[emscripten-bundle] Forcing prelink regeneration (--force-regenerate)..."
+  elif [[ ! -f "${prelinked_runtime}" ]]; then
+    need_prelink=true
+    echo "[emscripten-bundle] Prelinked runtime doesn't exist, need to create..."
+  else
+    # Check if any dependencies are newer than prelinked runtime
+    if [[ "${libjank}" -nt "${prelinked_runtime}" ]] || \
+       [[ "${libjankzip}" -nt "${prelinked_runtime}" ]] || \
+       [[ "${libgc}" -nt "${prelinked_runtime}" ]]; then
+      need_prelink=true
+      echo "[emscripten-bundle] Static libraries changed, need to relink runtime..."
+    fi
+
+    # Check if native jank changed (affects generated code)
+    if [[ -n "${native_jank_mtime}" && -x "${native_jank}" && "${native_jank}" -nt "${prelinked_runtime}" ]]; then
+      need_prelink=true
+      echo "[emscripten-bundle] Native jank compiler changed, need to relink runtime..."
+    fi
+
+    # Check core object files
+    for core_obj in "${core_object_files[@]}"; do
+      if [[ -f "${core_obj}" && "${core_obj}" -nt "${prelinked_runtime}" ]]; then
+        need_prelink=true
+        echo "[emscripten-bundle] Core lib ${core_obj} changed, need to relink runtime..."
+        break
+      fi
+    done
+  fi
+
+  # Create or update prelinked runtime
+  if [[ "${need_prelink}" == "true" ]]; then
+    echo "[emscripten-bundle] Creating prelinked runtime (this is slow but only happens when core libs change)..."
+    echo "[emscripten-bundle] Combining: libjank.a + libjankzip.a + libgc.a + core object files..."
+
+    # Use em++ with -r flag to create a relocatable object file
+    # This combines all the core runtime components into one file
+    # Use --whole-archive to ensure all symbols from .a files are included
+    em++ -r -o "${prelinked_runtime}" \
+      -Wl,--whole-archive \
+      "${libjank}" \
+      "${libjankzip}" \
+      "${libgc}" \
+      -Wl,--no-whole-archive \
+      "${core_object_files[@]}" \
+      "${jank_include_flags[@]}" \
+      "${jank_compile_flags[@]}"
+
+    echo "[emscripten-bundle] Prelinked runtime created: ${prelinked_runtime}"
+  else
+    echo "[emscripten-bundle] Using cached prelinked runtime"
+  fi
+fi
+
+# Add inputs to link command (either prelinked runtime + user code, or all separately)
+if [[ "${PRELINK_RUNTIME:-1}" == "1" && -f "${prelinked_runtime}" ]]; then
+  # Fast path: Use prelinked runtime + user code only
+  echo "[emscripten-bundle] Using prelinked runtime for fast linking"
+  em_link_cmd=()
+  em_link_cmd=(
+    em++
+    -o "${output_dir}/${output_name}.js"
+    "${prelinked_runtime}"
+    "${jank_include_flags[@]}"
+    "${jank_compile_flags[@]}"
+  )
+
+  # Add only user object files (core libs are in prelinked runtime)
+  if [[ ${#user_object_files[@]} -gt 0 ]]; then
+    for obj in "${user_object_files[@]}"; do
+      if [[ -f "${obj}" ]]; then
+        em_link_cmd+=("${obj}")
+      fi
+    done
+  fi
+
+  # Add extra libraries from --lib arguments
+  if [[ ${#extra_libs[@]} -gt 0 ]]; then
+    for lib_path in "${extra_libs[@]}"; do
+      if [[ "${lib_path:0:1}" != "/" ]]; then
+        lib_path="$(cd "$(dirname "${lib_path}")" 2>/dev/null && pwd)/$(basename "${lib_path}")" || lib_path="${lib_path}"
+      fi
+      em_link_cmd+=("${lib_path}")
+    done
+  fi
+else
+  # Slow path: Link everything separately (original behavior)
+  for obj in "${compiled_object_files[@]}"; do
+    if [[ -f "${obj}" ]]; then
+      em_link_cmd+=("${obj}")
+    fi
+  done
+fi
+
+# Compile entrypoint to .o for caching (if we have one)
+entrypoint_obj=""
+if [[ -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
+  entrypoint_obj="${entrypoint_cpp%.cpp}.o"
+
+  # Check if we need to recompile entrypoint
+  need_entrypoint_recompile=false
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_entrypoint_recompile=true
+    echo "[emscripten-bundle] Forcing entrypoint recompile (--force-regenerate)..."
+  elif [[ ! -f "${entrypoint_obj}" ]]; then
+    need_entrypoint_recompile=true
+  elif [[ "${entrypoint_cpp}" -nt "${entrypoint_obj}" ]]; then
+    need_entrypoint_recompile=true
+  fi
+
+  if [[ "${need_entrypoint_recompile}" == "true" ]]; then
+    echo "[emscripten-bundle] Compiling entrypoint ${entrypoint_cpp} to ${entrypoint_obj}..."
+    em++ -c "${entrypoint_cpp}" -o "${entrypoint_obj}" \
+      "${jank_include_flags[@]}" \
+      "${jank_compile_flags[@]}"
+  else
+    echo "[emscripten-bundle] Using cached entrypoint object: ${entrypoint_obj}"
+  fi
+
+  em_link_cmd+=("${entrypoint_obj}")
+  
+  # Detect ^:export functions from generated C++ and add to EXPORTED_FUNCTIONS
+  # These are generated as jank_export_<munged_name> functions
+  exported_functions="_main"
+  for cpp_file in "${compiled_objects[@]}"; do
+    if [[ -f "${cpp_file}" ]]; then
+      # Find all jank_export_* functions in the generated C++
+      # Extract just the function name using grep -o
+      while IFS= read -r export_fn; do
+        if [[ -n "${export_fn}" ]]; then
+          exported_functions="${exported_functions},_${export_fn}"
+          echo "[emscripten-bundle] Found exported function: ${export_fn}"
+        fi
+      done < <(grep -oE 'jank_export_[a-zA-Z0-9_]+' "${cpp_file}" 2>/dev/null | sort -u)
+    fi
+  done
+  
+  # With entrypoint, we can export main and any ^:export functions
+  em_link_cmd+=(
+    -sEXPORTED_FUNCTIONS="${exported_functions}"
+  )
+else
+  # Without entrypoint, don't require main
+  em_link_cmd+=(
+    -sSTANDALONE_WASM=0
+    -sERROR_ON_UNDEFINED_SYMBOLS=0
+    -Wno-undefined
+  )
+fi
+
+em_link_cmd+=(
+  # Memory settings
+  -sALLOW_MEMORY_GROWTH=1
+  -sINITIAL_MEMORY=67108864
+  -sSTACK_SIZE=2097152  # 2MB stack for complex libraries like Flecs
+  # Enable C++ exceptions for better debugging
+  -fexceptions
+  # Export settings for JS interop
+  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8
+  # Module settings
+  -sMODULARIZE=1
+  -sEXPORT_NAME="${output_name}"
+  # Environment support
+  -sENVIRONMENT=web,node
+  # Error handling
+  -sABORTING_MALLOC=0
+  # Enable RTTI for exception handling
+  -frtti
+)
+
+# Development mode (default): Use -O0 for fast linking and readable output
+# Set RELEASE=1 for production builds with optimization and minification
+if [[ "${RELEASE:-}" == "1" ]]; then
+  echo "[emscripten-bundle] RELEASE MODE: Using -O2 for optimized, minified output"
+  em_link_cmd+=(-O2)
+else
+  # Development (default): Fast linking, readable output, full debugging
+  echo "[emscripten-bundle] DEV MODE: Using -O0 for fast linking (no optimization, non-minified)"
+  em_link_cmd+=(
+    -O0
+    -g3
+    --minify 0
+    -sASSERTIONS=2
+    -gsource-map
+    --source-map-base ./
+  )
+fi
+
+# ES6 module exports for browser compatibility
+# This generates proper ES module exports that work with dynamic import()
+em_link_cmd+=(
+  -sEXPORT_ES6=1
+)
+
+# Add extra em++ flags from --em-flag arguments
+if [[ ${#em_flags[@]} -gt 0 ]]; then
+  for em_flag in "${em_flags[@]}"; do
+    em_link_cmd+=("${em_flag}")
+    echo "[emscripten-bundle] Added em++ flag: ${em_flag}"
+  done
+fi
+
+# Experimental: Incremental linking support (not compatible with libgc)
+# Set INCREMENTAL_LINK=1 to try Emscripten's experimental incremental linker
+if [[ "${INCREMENTAL_LINK:-}" == "1" ]]; then
+  echo "[emscripten-bundle] EXPERIMENTAL: Enabling incremental linking (-sLINKABLE=1)"
+  em_link_cmd+=(
+    -sLINKABLE=1
+    -sEXPORT_ALL=1
+    -sMAIN_MODULE=2
+  )
+fi
+
+# Check if shell file exists for HTML generation
+shell_file="${repo_root}/doc/jank-shell.html"
+generate_html=false
+
+if [[ -f "${shell_file}" ]]; then
+  generate_html=true
+  # Also generate HTML output
+  em_html_cmd=(
+    em++
+    -o "${output_dir}/${output_name}.html"
+    "${libjank}"
+    "${libjankzip}"
+    "${libgc}"
+    "${jank_include_flags[@]}"
+    "${jank_compile_flags[@]}"
+  )
+
+  # Add compiled object files (already compiled above)
+  for obj in "${compiled_object_files[@]}"; do
+    if [[ -f "${obj}" ]]; then
+      em_html_cmd+=("${obj}")
+    fi
+  done
+
+  # Add entrypoint if we have one
+  if [[ -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
+    em_html_cmd+=("${entrypoint_cpp}")
+    em_html_cmd+=(-sEXPORTED_FUNCTIONS=_main)
+  else
+    em_html_cmd+=(
+      -sSTANDALONE_WASM=0
+      -sERROR_ON_UNDEFINED_SYMBOLS=0
+      -Wno-undefined
+    )
+  fi
+
+  em_html_cmd+=(
+    -sALLOW_MEMORY_GROWTH=1
+    -sINITIAL_MEMORY=67108864
+    -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8
+    -sENVIRONMENT=web,node
+    -sABORTING_MALLOC=0
+    -sEXPORT_ES6=1
+    --shell-file "${shell_file}"
+  )
+
+  # Add debug/optimization flags to HTML build (same as JS build)
+  if [[ "${RELEASE:-}" == "1" ]]; then
+    em_html_cmd+=(-O2)
+  else
+    em_html_cmd+=(
+      -O0
+      -g3
+      --minify 0
+      -sASSERTIONS=2
+    )
+  fi
+fi
+
+# Check if we need to relink (link caching)
+need_relink=false
+output_wasm="${output_dir}/${output_name}.wasm"
+
+# Check if FAST_LINK environment variable is set for development mode
+if [[ "${FAST_LINK:-}" == "1" ]]; then
+  echo "[emscripten-bundle] FAST_LINK mode: Skipping link (using existing WASM)"
+  need_relink=false
+elif [[ "${force_regenerate}" == "true" ]]; then
+  need_relink=true
+  echo "[emscripten-bundle] Forcing relink (--force-regenerate)..."
+elif [[ ! -f "${output_wasm}" ]]; then
+  need_relink=true
+  echo "[emscripten-bundle] Output WASM doesn't exist, need to link..."
+else
+  # Check if any input files are newer than output
+  for obj in "${compiled_object_files[@]}"; do
+    if [[ -f "${obj}" && "${obj}" -nt "${output_wasm}" ]]; then
+      need_relink=true
+      echo "[emscripten-bundle] Object file ${obj} changed, need to relink..."
+      break
+    fi
+  done
+
+  # Check entrypoint object file
+  if [[ "${need_relink}" == "false" && -n "${entrypoint_obj}" && -f "${entrypoint_obj}" ]]; then
+    if [[ "${entrypoint_obj}" -nt "${output_wasm}" ]]; then
+      need_relink=true
+      echo "[emscripten-bundle] Entrypoint object changed, need to relink..."
+    fi
+  fi
+
+  # Check static libraries (only if not using prelinked runtime)
+  # If using prelinked runtime, these are already checked in the prelink step
+  if [[ "${need_relink}" == "false" && "${PRELINK_RUNTIME:-1}" != "1" ]]; then
+    if [[ "${libjank}" -nt "${output_wasm}" ]] || \
+       [[ "${libjankzip}" -nt "${output_wasm}" ]] || \
+       [[ "${libgc}" -nt "${output_wasm}" ]]; then
+      need_relink=true
+      echo "[emscripten-bundle] Static library changed, need to relink..."
+    fi
+  fi
+
+  # Check prelinked runtime if we're using it
+  if [[ "${need_relink}" == "false" && "${PRELINK_RUNTIME:-1}" == "1" && -f "${prelinked_runtime}" ]]; then
+    if [[ "${prelinked_runtime}" -nt "${output_wasm}" ]]; then
+      need_relink=true
+      echo "[emscripten-bundle] Prelinked runtime changed, need to relink..."
+    fi
+  fi
+
+  if [[ "${need_relink}" == "false" ]]; then
+    echo "[emscripten-bundle] Using cached link (no changes detected)"
+  fi
+fi
+
+# Run the JS/WASM generation only if needed
+if [[ "${need_relink}" == "true" ]]; then
+  run "${em_link_cmd[@]}"
+fi
+
+# Optionally generate HTML too (separate file for browser testing)
+if [[ "${generate_html}" == "true" ]]; then
+  run "${em_html_cmd[@]}"
+  echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.html"
+fi
+
+echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.js"
+echo "[emscripten-bundle] Generated: ${output_dir}/${output_name}.wasm"
+
+# --- Copy jank source files for source mapping (dev mode only) ---
+if [[ "${RELEASE:-}" != "1" ]]; then
+  # Copy user's jank source file if provided
+  if [[ -n "${jank_source}" && -f "${jank_source}" ]]; then
+    # Get the absolute path that the #line directives will reference
+    jank_source_abs="$(cd "$(dirname "${jank_source}")" && pwd)/$(basename "${jank_source}")"
+    dest_file="${output_dir}/$(basename "${jank_source}")"
+    # Only copy if source and destination are different files
+    if [[ ! "${jank_source}" -ef "${dest_file}" ]]; then
+      cp "${jank_source}" "${output_dir}/"
+      echo "[emscripten-bundle] Copied source for debugging: ${dest_file}"
+    fi
+  fi
+
+  # Copy clojure.core and other standard library sources
+  for lib_jank in "${repo_root}/src/jank/clojure/core.jank" \
+                  "${repo_root}/src/jank/clojure/set.jank" \
+                  "${repo_root}/src/jank/clojure/string.jank" \
+                  "${repo_root}/src/jank/clojure/walk.jank" \
+                  "${repo_root}/src/jank/clojure/template.jank" \
+                  "${repo_root}/src/jank/clojure/test.jank"; do
+    if [[ -f "${lib_jank}" ]]; then
+      lib_dir="${output_dir}/$(dirname "${lib_jank#${repo_root}/}")"
+      mkdir -p "${lib_dir}"
+      cp "${lib_jank}" "${lib_dir}/"
+    fi
+  done
+  echo "[emscripten-bundle] Copied standard library sources for debugging"
+fi
+
+# --- Generate simple HTML wrapper for browser testing ---
+html_file="${output_dir}/${output_name}.html"
+cat > "${html_file}" <<'HTML_EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jank WASM - OUTPUT_NAME_PLACEHOLDER</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 {
+            color: #4fc3f7;
+            border-bottom: 2px solid #4fc3f7;
+            padding-bottom: 10px;
+        }
+        #status {
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+            background: #2d2d2d;
+            border-left: 4px solid #4fc3f7;
+        }
+        #output {
+            background: #0d0d0d;
+            border: 1px solid #3d3d3d;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            min-height: 200px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .success { color: #4caf50; }
+        .error { color: #f44336; }
+        .info { color: #2196f3; }
+        #controls {
+            margin: 20px 0;
+        }
+        button {
+            background: #4fc3f7;
+            color: #1e1e1e;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #29b6f6;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        .input-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #3d3d3d;
+        }
+        .input-group label {
+            color: #9e9e9e;
+        }
+        .input-group input {
+            background: #0d0d0d;
+            border: 1px solid #3d3d3d;
+            border-radius: 5px;
+            padding: 8px 12px;
+            color: #d4d4d4;
+            font-size: 14px;
+            width: 120px;
+        }
+        .input-group input:focus {
+            outline: none;
+            border-color: #4fc3f7;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 Jank WASM Runtime</h1>
+    <div id="status">
+        <strong>Status:</strong> <span id="status-text">Initializing...</span>
+    </div>
+
+    <div id="controls">
+        <button id="run-btn" disabled>Run Program</button>
+        <button id="clear-btn">Clear Output</button>
+        <div class="input-group">
+            <label for="fn-name">Function:</label>
+            <input type="text" id="fn-name" placeholder="my-func" value="">
+            <label for="fn-arg">Arg:</label>
+            <input type="number" id="fn-arg" placeholder="42" value="42">
+            <button id="call-btn" disabled>Call Function</button>
+        </div>
+    </div>
+
+    <h2>Output</h2>
+    <div id="output"></div>
+
+    <script type="module">
+        const statusText = document.getElementById('status-text');
+        const outputDiv = document.getElementById('output');
+        const runBtn = document.getElementById('run-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const callBtn = document.getElementById('call-btn');
+        const fnNameInput = document.getElementById('fn-name');
+        const fnArgInput = document.getElementById('fn-arg');
+
+        let moduleInstance = null;
+        let hasRun = false;
+
+        // Capture console output
+        const originalLog = console.log;
+        const originalError = console.error;
+
+        function appendOutput(text, type = 'info') {
+            const line = document.createElement('div');
+            line.className = type;
+            line.textContent = text;
+            outputDiv.appendChild(line);
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        }
+
+        console.log = function(...args) {
+            originalLog.apply(console, args);
+            appendOutput(args.join(' '), 'info');
+        };
+
+        console.error = function(...args) {
+            originalError.apply(console, args);
+            appendOutput('ERROR: ' + args.join(' '), 'error');
+        };
+
+        // Load the WASM module
+        statusText.textContent = 'Loading WASM module...';
+        appendOutput('Loading Jank WASM module...', 'info');
+
+        // Import the generated JS file (which loads the WASM)
+        import('./OUTPUT_NAME_PLACEHOLDER.js')
+            .then(Module => {
+                statusText.textContent = 'Initializing module...';
+                appendOutput('Module loaded, initializing...', 'success');
+
+                // Initialize the module (Module.default for ES modules, Module for direct export)
+                const initFn = Module.default || Module;
+                return initFn({
+                    print: (text) => {
+                        originalLog(text);
+                        appendOutput(text, 'info');
+                    },
+                    printErr: (text) => {
+                        originalError(text);
+                        appendOutput('ERROR: ' + text, 'error');
+                    }
+                });
+            })
+            .then(instance => {
+                moduleInstance = instance;
+                statusText.textContent = 'Ready! Click "Run Program" to execute.';
+                appendOutput('Module initialized successfully!', 'success');
+                appendOutput('Click "Run Program" to execute the jank code.', 'info');
+                appendOutput('Use "Call Function" to invoke a specific function with a number argument.', 'info');
+                runBtn.disabled = false;
+                callBtn.disabled = false;
+            })
+            .catch(err => {
+                statusText.textContent = 'Error loading module';
+                appendOutput('Failed to load module: ' + err.message, 'error');
+                console.error('Module loading error:', err);
+            });
+
+        runBtn.addEventListener('click', () => {
+            if (!moduleInstance) return;
+
+            if (hasRun) {
+                appendOutput('\n--- Running again ---\n', 'info');
+            }
+
+            statusText.textContent = 'Running...';
+            runBtn.disabled = true;
+
+            try {
+                // Call the main function (if it exists and hasn't run yet)
+                if (moduleInstance._main && typeof moduleInstance._main === 'function') {
+                    appendOutput('Calling main()...', 'info');
+                    const result = moduleInstance._main();
+                    appendOutput(`Program exited with code: ${result}`, result === 0 ? 'success' : 'error');
+                } else {
+                    appendOutput('No main() function found in module', 'error');
+                }
+
+                statusText.textContent = 'Execution complete';
+                hasRun = true;
+            } catch (err) {
+                statusText.textContent = 'Execution error';
+                appendOutput('Runtime error: ' + err.message, 'error');
+                console.error('Runtime error:', err);
+            } finally {
+                runBtn.disabled = false;
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            outputDiv.innerHTML = '';
+            appendOutput('Output cleared', 'info');
+        });
+
+        callBtn.addEventListener('click', () => {
+            if (!moduleInstance) return;
+
+            const fnName = fnNameInput.value.trim();
+            const argValue = parseFloat(fnArgInput.value);
+
+            if (!fnName) {
+                appendOutput('Please enter a function name', 'error');
+                return;
+            }
+
+            if (isNaN(argValue)) {
+                appendOutput('Please enter a valid number', 'error');
+                return;
+            }
+
+            appendOutput(`\n--- Calling ${fnName}(${argValue}) ---`, 'info');
+            statusText.textContent = 'Calling function...';
+            callBtn.disabled = true;
+
+            try {
+                // Convert jank function name to C symbol name
+                // jank uses munged names: - becomes _, ? becomes _QMARK_, etc.
+                let cFnName = fnName
+                    .replace(/-/g, '_')
+                    .replace(/\?/g, '_QMARK_')
+                    .replace(/!/g, '_BANG_')
+                    .replace(/\*/g, '_STAR_')
+                    .replace(/\+/g, '_PLUS_')
+                    .replace(/</g, '_LT_')
+                    .replace(/>/g, '_GT_')
+                    .replace(/=/g, '_EQ_');
+
+                // Try different function name patterns
+                const patterns = [
+                    `_jank_user_${cFnName}`,           // User namespace function
+                    `_jank_export_${cFnName}`,        
+                    `jank_export_${cFnName}`,          
+                    `_jank_call_${cFnName}`,           // Call wrapper
+                    `_${cFnName}`,                      // Direct C name
+                    `jank_user_${cFnName}`,            // Without underscore prefix
+                    `jank_call_${cFnName}`,
+                    cFnName
+                ];
+
+                let called = false;
+                for (const pattern of patterns) {
+                    const fn = moduleInstance[pattern];
+                    if (typeof fn === 'function') {
+                        appendOutput(`Found function: ${pattern}`, 'info');
+                        const result = fn(argValue);
+                        appendOutput(`Result: ${result}`, 'success');
+                        called = true;
+                        break;
+                    }
+                }
+
+                if (!called) {
+                    // Try using ccall if available
+                    if (moduleInstance.ccall) {
+                        appendOutput('Trying ccall...', 'info');
+                        try {
+                            const result = moduleInstance.ccall(
+                                `jank_user_${cFnName}`,
+                                'number',
+                                ['number'],
+                                [argValue]
+                            );
+                            appendOutput(`Result (via ccall): ${result}`, 'success');
+                            called = true;
+                        } catch (ccallErr) {
+                            appendOutput(`ccall failed: ${ccallErr.message}`, 'error');
+                        }
+                    }
+                }
+
+                if (!called) {
+                    appendOutput(`Function '${fnName}' not found. Available exports:`, 'error');
+                    const exports = Object.keys(moduleInstance).filter(k => 
+                        typeof moduleInstance[k] === 'function' && 
+                        !k.startsWith('_') || k.includes('jank')
+                    ).slice(0, 20);
+                    appendOutput(exports.join(', ') || '(none)', 'info');
+                }
+
+                statusText.textContent = 'Function call complete';
+            } catch (err) {
+                statusText.textContent = 'Function call error';
+                appendOutput(`Error calling ${fnName}: ${err.message}`, 'error');
+                console.error('Function call error:', err);
+            } finally {
+                callBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
+HTML_EOF
+
+# Replace placeholders with actual output name
+sed -i.bak "s/OUTPUT_NAME_PLACEHOLDER/${output_name}/g" "${html_file}"
+rm -f "${html_file}.bak"
+
+echo "[emscripten-bundle] Generated: ${html_file}"
+echo "[emscripten-bundle] → Open in browser: file://${html_file}"
+
+# --- Run step (optional) ---
+if [[ "${run_after}" == "true" ]]; then
+  echo "[emscripten-bundle] Running with Node.js..."
+
+  # The generated .js file uses ES6 module format (EXPORT_ES6=1)
+  # Copy it to .mjs so Node.js treats it as an ES module
+  js_as_mjs="${output_dir}/${output_name}.mjs"
+  cp "${output_dir}/${output_name}.js" "${js_as_mjs}"
+
+  # Use dynamic import() which works in both CommonJS and ES modules
+  # Use ANSI codes for red error output
+  runner_code=$(cat <<EOF
+const RED = '\x1b[31m';
+const NC = '\x1b[0m';
+import('${js_as_mjs}').then(module => {
+  console.log('[jank-runner] Loading WASM module...');
+  const moduleFactory = module.default;
+  return moduleFactory();
+}).then((Module) => {
+  // Check the exit status from the WASM main() function
+  const exitStatus = Module.EXITSTATUS !== undefined ? Module.EXITSTATUS : 0;
+  if (exitStatus !== 0) {
+    console.error(RED + '[jank-runner] ERROR: Module exited with code ' + exitStatus + NC);
+    process.exit(exitStatus);
+  }
+  console.log('[jank-runner] Module executed successfully');
+}).catch(e => {
+  console.error(RED + '[jank-runner] ERROR: ' + e + NC);
+  process.exit(1);
+});
+EOF
+)
+
+  node_cmd=(node --input-type=module --eval "${runner_code}")
+  if [[ ${#node_args[@]} -gt 0 ]]; then
+    # Insert node args before --eval
+    node_cmd=(node "${node_args[@]}" --input-type=module --eval "${runner_code}")
+  fi
+  run "${node_cmd[@]}"
+fi
+
+cat <<EOF
+[emscripten-bundle] Build complete!
+
+Generated files:
+  - ${output_dir}/${output_name}.js    (ES module loader)
+  - ${output_dir}/${output_name}.wasm  (WebAssembly binary)
+EOF
+
+if [[ "${generate_html}" == "true" ]]; then
+  cat <<EOF
+  - ${output_dir}/${output_name}.html  (Browser test page)
+
+To test in browser:
+  emrun ${output_dir}/${output_name}.html
+  # or
+  python3 -m http.server -d ${output_dir} 8080
+  # then open http://localhost:8080/${output_name}.html
+EOF
+fi
+
+cat <<EOF
+
+To run with Node.js:
+  node --experimental-vm-modules -e "import('${output_dir}/${output_name}.js').then(m => m.default())"
+  # or
+  $0 --skip-build --run
+EOF
+
+popd >/dev/null

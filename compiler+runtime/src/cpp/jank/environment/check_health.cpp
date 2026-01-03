@@ -27,6 +27,7 @@
 #ifdef JANK_PHASE_2
 extern "C" void jank_load_clojure_core();
 #endif
+extern "C" void jank_load_jank_nrepl_server_asio();
 
 namespace jank::environment
 {
@@ -399,6 +400,7 @@ namespace jank::environment
 #else
       runtime::__rt_ctx->load_module("/clojure.core", runtime::module::origin::latest).expect_ok();
 #endif
+      jank_load_jank_nrepl_server_asio();
       runtime::__rt_ctx->module_loader.add_path(path_tmp);
       runtime::__rt_ctx->compile_module(util::cli::opts.target_module).expect_ok();
 

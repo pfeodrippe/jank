@@ -5,6 +5,12 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -w")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
 
+  # Add -fPIC for WASM/iOS builds
+  if(jank_target_wasm OR jank_target_ios)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+  endif()
+
   set(CMAKE_CXX_CLANG_TIDY "")
   set(GC_BUILD_SHARED_LIBS OFF)
 
@@ -20,9 +26,26 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   set(enable_cplusplus ON CACHE BOOL "Enable C++")
   set(build_cord OFF CACHE BOOL "Build cord")
   set(enable_docs OFF CACHE BOOL "Enable docs")
-  set(enable_threads ON CACHE BOOL "Enable multi-threading support")
+  if(jank_target_wasm)
+    # Disable threads for WASM - emscripten doesn't support bdwgc's threading model
+    set(enable_threads OFF CACHE BOOL "Enable multi-threading support")
+  elseif(jank_target_ios)
+    # iOS supports threads
+    set(enable_threads ON CACHE BOOL "Enable multi-threading support")
+  else()
+    set(enable_threads ON CACHE BOOL "Enable multi-threading support")
+  endif()
   set(enable_large_config ON CACHE BOOL "Optimize for large heap or root set")
-  set(enable_throw_bad_alloc_library ON CACHE BOOL "Enable C++ gctba library build")
+  # Enable thread-local allocation buffers (TLABs) for fast bump-pointer allocation
+  set(enable_thread_local_alloc ON CACHE BOOL "Enable thread-local allocation optimization")
+  # Enable parallel marking for faster GC
+  set(enable_parallel_mark ON CACHE BOOL "Parallelize marking and free list construction")
+  if(jank_target_wasm OR jank_target_ios)
+    # Skip gctba for wasm/ios to avoid C++ header issues
+    set(enable_throw_bad_alloc_library OFF CACHE BOOL "Enable C++ gctba library build")
+  else()
+    set(enable_throw_bad_alloc_library ON CACHE BOOL "Enable C++ gctba library build")
+  endif()
   set(enable_gc_debug OFF CACHE BOOL "Support for pointer back-tracing")
 
   if(jank_profile_gc)
@@ -45,6 +68,8 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
   unset(enable_docs)
   unset(enable_threads)
   unset(enable_large_config)
+  unset(enable_thread_local_alloc)
+  unset(enable_parallel_mark)
   unset(enable_throw_bad_alloc_library)
   unset(enable_valgrind_tracking)
   unset(enable_gc_debug)

@@ -2,9 +2,9 @@
   (:refer-clojure :exclude [run!])
   (:require [babashka.process :as ps]
             [babashka.fs :as b.f]
+            [clojure.java.io :as io]
             [clojure.pprint :as pp]
             [clojure.string :as string]
-            [leiningen.core.project :as p]
             [leiningen.core.classpath :as lcp]
             [leiningen.core.main :as lmain])
   (:import [java.io File]))
@@ -14,9 +14,8 @@
 (defn build-declarative-flag [flag value]
   (case flag
     :direct-call
-    (if value
-      "--direct-call"
-      "")
+    (when value
+      "--direct-call")
 
     :optimization-level
     ; TODO: Validate.
@@ -31,6 +30,9 @@
     :include-dirs
     (map (fn [v] (str "-I" v)) value)
 
+    :include-paths
+    (map (fn [v] (str "-I" v)) value)
+
     :library-dirs
     (map (fn [v] (str "-L" v)) value)
 
@@ -40,22 +42,100 @@
     (lmain/warn (str "Unknown flag " flag))))
 
 (defn build-declarative-flags [project]
-  (flatten (map (fn [[flag value]]
-                  (build-declarative-flag flag value))
-                (:jank project))))
+  (->> (:jank project)
+       (mapcat (fn [[flag value]]
+                 (let [result (build-declarative-flag flag value)]
+                   (cond
+                     (nil? result) []
+                     (string? result) [result]
+                     (sequential? result) result
+                     :else [result]))))))
 
+<<<<<<< HEAD
+
+(defn- absolutize-if-file [path]
+  (when path
+    (let [p (b.f/path path)]
+      (when (and (b.f/exists? p)
+                 (not (b.f/directory? p)))
+        (str (b.f/absolutize p))))))
+
+(defn- existing-dir [path]
+  (when path
+    (let [f (io/file path)]
+      (when (.isDirectory f)
+        (.getAbsolutePath (.getCanonicalFile f))))))
+
+(defn- discover-include-paths []
+  (->> [(System/getenv "BOOST_INCLUDEDIR")
+        (some-> (System/getenv "HOMEBREW_PREFIX") (str "/include"))
+        "/opt/homebrew/include"
+        "/usr/local/include"
+        "/usr/include"]
+       (map existing-dir)
+       (remove nil?)
+       distinct
+       vec))
+
+(defn- windows? []
+  (.startsWith (System/getProperty "os.name") "Windows"))
+
+(defn- collect-parents [path]
+  (loop [current path
+         acc []]
+    (if current
+      (recur (b.f/parent current)
+             (conj acc current))
+      acc)))
+
+(defn- discover-jank-executable [project]
+  (let [env-jank (some-> (System/getenv "JANK_BIN") not-empty)
+        configured-jank (:jank-bin project)
+        os-exec (if (windows?) "jank.exe" "jank")
+        project-root (some-> (:root project) b.f/path b.f/absolutize)
+        parent-roots (if project-root
+                       (collect-parents project-root)
+                       [])
+        repo-local-paths (map #(b.f/path % "compiler+runtime" "build" os-exec)
+                               parent-roots)
+        candidates (concat [(b.f/which "jank") env-jank configured-jank]
+                            repo-local-paths)]
+    (some absolutize-if-file candidates)))
+
+=======
+>>>>>>> origin/main
 (defn shell-out! [project classpath command compiler-args runtime-args]
-  (let [jank (b.f/which "jank")
-        env (System/getenv)
-        args (concat [jank command "--module-path" classpath]
-                     (build-declarative-flags project)
-                     compiler-args
-                     ["--"]
-                     runtime-args)
+  (let [jank (discover-jank-executable project)
         ; TODO: Better error handling.
+<<<<<<< HEAD
+        _ (when-not jank
+            (lmain/warn "Unable to locate the `jank` executable. Did you run ./bin/compile under compiler+runtime, or add build/jank to your PATH?")
+            (lmain/warn "Set JANK_BIN or :jank-bin in project.clj if you need a custom location.")
+            (lmain/exit 1))
+          include-paths (seq (get-in project [:jank :include-paths]))
+          inferred-includes (when-not include-paths (discover-include-paths))
+          project (if (and (not include-paths) (seq inferred-includes))
+                    (assoc-in project [:jank :include-paths] inferred-includes)
+                    project)
+          env (System/getenv)
+          compiler-args (map str compiler-args)
+          runtime-args (map str runtime-args)
+          flags (vec (build-declarative-flags project))
+          raw-args (concat [jank "--module-path" classpath]
+                            flags
+                            [command]
+                            compiler-args
+                            (if (seq runtime-args)
+                              (concat ["--"] runtime-args)
+                              []))
+          args (->> raw-args
+                     (map str)
+                     vec)
+=======
         _ (assert (some? jank))
         _ (when @verbose?
             (println ">" (clojure.string/join " " args)))
+>>>>>>> origin/main
         proc (apply ps/shell
                     {:continue true
                      :dir (:root project)

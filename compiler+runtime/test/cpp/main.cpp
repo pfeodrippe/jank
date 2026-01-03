@@ -15,6 +15,9 @@
 #include <jank/util/fmt/print.hpp>
 #include <jank/error/report.hpp>
 #include <clojure/core_native.hpp>
+#include <jank/compiler_native.hpp>
+#include <jank/arena_native.hpp>
+#include <jank/debug_allocator_native.hpp>
 
 #ifdef JANK_PHASE_2
 extern "C" void jank_load_clojure_core();
@@ -30,11 +33,16 @@ try
     context.setOption("no-breaks", true);
 
     jank_load_clojure_core_native();
+    jank_load_jank_compiler_native();
+    jank_load_jank_arena_native();
+    jank_load_jank_debug_allocator_native();
 
 #ifdef JANK_PHASE_2
     jank_load_clojure_core();
     jank::runtime::__rt_ctx->module_loader.set_is_loaded("/clojure.core");
 #else
+    /* We're loading from source always due to a bug in how we generate symbols which is
+     * leading to duplicate symbols being generated. */
     jank::runtime::__rt_ctx->load_module("/clojure.core", jank::runtime::module::origin::latest)
       .expect_ok();
 #endif
@@ -50,6 +58,11 @@ try
 }
 /* Most exceptions are being caught in `jank_init`.
  * This piece here catches rest of them. */
+catch(std::exception const &e)
+{
+  jank::util::println("Exception: {}", e.what());
+  return 1;
+}
 catch(...)
 {
   jank::util::println("Unknown exception thrown");

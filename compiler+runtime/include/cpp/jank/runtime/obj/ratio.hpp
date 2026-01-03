@@ -8,7 +8,10 @@ namespace jank::runtime::obj
   struct ratio_data
   {
     ratio_data(i64 const, i64 const);
+#ifndef JANK_TARGET_EMSCRIPTEN
+    // Only needed when native_big_integer != i64 (boost::multiprecision)
     ratio_data(native_big_integer const &, native_big_integer const &);
+#endif
     ratio_data(big_integer const &, big_integer const &);
     ratio_data(object_ref const, object_ref const);
     ratio_data(ratio_data const &) = default;
@@ -34,7 +37,10 @@ namespace jank::runtime::obj
     ratio(ratio_data const &);
 
     static object_ref create(i64 const, i64 const);
+#ifndef JANK_TARGET_EMSCRIPTEN
+    // Only needed when native_big_integer != i64 (boost::multiprecision)
     static object_ref create(native_big_integer const &, native_big_integer const &);
+#endif
 
     /* behavior::object_like */
     bool equal(object const &) const;
@@ -142,6 +148,8 @@ namespace jank::runtime::obj
   bool operator>=(f64 l, ratio_data const &r);
   bool operator>=(ratio_data const &l, i64 r);
   bool operator>=(i64 l, ratio_data const &r);
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Only needed when native_big_integer != i64 (boost::multiprecision)
   ratio_ref operator+(native_big_integer const &l, ratio_data const &r);
   ratio_ref operator+(ratio_data const &l, native_big_integer const &r);
   ratio_ref operator-(native_big_integer const &l, ratio_data const &r);
@@ -162,6 +170,7 @@ namespace jank::runtime::obj
   bool operator>(ratio_data const &l, native_big_integer const &r);
   bool operator>=(native_big_integer const &l, ratio_data const &r);
   bool operator>=(ratio_data const &l, native_big_integer const &r);
+  // Only needed when native_big_decimal != f64 (boost::multiprecision)
   native_big_decimal operator+(native_big_decimal const &l, ratio_data const &r);
   native_big_decimal operator+(ratio_data const &l, native_big_decimal const &r);
   native_big_decimal operator-(native_big_decimal const &l, ratio_data const &r);
@@ -182,4 +191,5 @@ namespace jank::runtime::obj
   bool operator>(ratio_data const &l, native_big_decimal const &r);
   bool operator>=(native_big_decimal const &l, ratio_data const &r);
   bool operator>=(ratio_data const &l, native_big_decimal const &r);
+#endif
 }

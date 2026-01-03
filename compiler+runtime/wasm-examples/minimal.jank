@@ -1,0 +1,3 @@
+; Minimal test - no ns form
+(def x 42)
+(println "x =" x)

@@ -1,0 +1,107 @@
+- [x] compile it to a standalone and check the nREPL server
+  - [x] compile
+- [x] wasm
+  - [x] compile
+  - [x] source mapping to cpp
+  - [x] source mapping to jank
+  - [x] cpp/raw
+- [x] cpp integration
+  - [x] :as
+  - [x] :refer
+  - [x] autocompletion
+  - [x] if a function has a docstring, can we show it?
+- [x] add flecs to something as a test
+  - [x] include
+    - (cpp/raw "#include <flecs.h>")
+  - [x] call `ecs_init`
+  - [x] static
+  - [x] autocompletion
+    - [x] global
+    - [x] nested
+    - [x] (require '["flecs.h" :as fw :scope "flecs.world"])
+- [x] when native and external header, get info about the location
+- [x] raylib
+  - [x] static
+  - [x] autocompletion
+  - [x] would we be able to get macros?? (e.g. RAYWHITE)
+  - [x] wasm fix
+  - [x] start on the first thread for the nREPL ?
+- [x] jolt
+  - [x] native
+  - [x] wasm
+- [x] imgui
+  - [x] native
+  - [x] wasm
+- [ ] flecs
+  - [x] ecs_entity_desc_t autocomplete
+  - [x] defcomp
+    - [x] could we use flecs (YES)
+  - [x] would should be a map as well
+- [x] arena
+- [ ] merge with origin/main
+  - [ ] compile
+  - [ ] tests
+  - [ ] ios sims
+  - [ ] fix ci
+- [ ] integrate raylib + flecs + imgui + jolt
+  - [x] raylib + imgui + jolt
+  - [x] + flecs
+  - [x] wasm
+  - [x] convert more things to jank instead of using cpp/raw
+    - [ ] imgui
+      - [x] native-draw-imgui-panel
+        - [x] "Paused" checbox automatic unboxing
+        - [x] jolt_world_get_num_bodies
+    - [ ] raylib
+  - [ ] nREPL
+    - [x] native
+    - [ ] wasm
+  - [x] fix nREPL goto info
+- [ ] jank issues
+  - [x] when we eval any form, state is lost (is-paused)
+    - use cpp/new (GC-allocated) instead of, for example, cpp/bool. (which is stack-allocated)
+  - [ ] create cpp/box2 for smart boxing
+  - [ ] automatically type hinting for boxes (automatic boxing?)
+  - [ ] make bean work
+  - [ ] should work with `.at` instead of just `cpp.at` ?
+    - [ ] also, autocompletion (for whatever case) could be done using context ?
+  - [ ] add docstring/metadata support to ns forms
+  - [ ] we need to get a way to get rid of almost all of the cpp/... we should be able to do `.-Data` instead of `cpp/.-Data`
+  - [ ] deref (@) could be used in lieu of cpp/*
+  - [ ] improve perf (jank-phase-1 takes a long time!)
+- nREPL
+  - [x] autocompletion for ns
+  - [x] switch to a ns automatically when evaluating from there
+  - [ ] find some way to search, for a given `cpp/thing`, where `thing` is located (so we can later require the file and use alias)
+  - [ ] improve error location
+- [ ] vybe
+- [ ] wasm
+  - [x] no require
+  - [x] with require (do the AOT instead of JIT when generating code for WASM)
+  - [ ] export symbols automatically using malli schema-like format
+- [ ] fix tests at `./bin/compile && bin/jank/compiler+runtime/bash_test.clj > grep -v "missing from root"`
+- [ ] use it to hotreload in SC
+  - [x] dylib from SC
+  - [x] ability to export symbol from jank
+  - [x] ability to receive, return pointers
+  - [-] test dynamic symbol
+  - [ ] call my_multiplier
+    - [ ] create a way to read/parse plugin_interface, making it available into jank
+- [ ] create a way to autocomplete `cpp/` (static gathering? at least for core)
+  - [x] get globals defined from cpp/raw
+  - [x] list globals in nREPL
+  - [ ] get existing globals ?
+- [ ] accept/return structs ?
+- [ ] combine the entities in the root level namespaces (and the functions without a ns)
+  - functions, namespaces
+  - [ ] gather
+  - [ ] complain if trying to use something ambiguous (e.g. aliasing or refering to a fn that has the same name in 2 namespaces)
+- [ ] jank bootstrapping ?
+- [ ] Fix `This function is returning a native object of type 'flecs::world', which is not convertible to a jank runtime object.`
+- [ ] Fix implicit conversion
+  - Unknown implicit conversion from ecs_world_t * to jank::runtime::object *. {:jank/error-kind "internal/analysis-failure" :jank/error-message "Unknown implicit conversion from ecs_world_t * to jank::runtime::object *."}
+- [ ] overtone-like
+- [ ] if a native function requires a given type, unbox it automatically
+- [ ] ios test
+- [ ] ability to alias cpp/raw using the ns itself
+- [ ] goto native could go to the implementation instead of the header (when these 2 are different)

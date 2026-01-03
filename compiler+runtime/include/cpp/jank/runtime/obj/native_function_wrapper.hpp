@@ -1,6 +1,7 @@
 #pragma once
 
 #include <any>
+#include <iostream>
 
 #include <jank/runtime/object.hpp>
 #include <jank/runtime/behavior/callable.hpp>
@@ -142,6 +143,7 @@ namespace jank::runtime
       object base{ obj_type };
       obj::detail::function_type data{};
       jtl::option<object_ref> meta;
+      void *native_callback_ptr{ nullptr };
     };
   }
 }

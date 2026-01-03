@@ -89,6 +89,10 @@ namespace jank::codegen
     processor(analyze::expr::function_ref const expr,
               jtl::immutable_string const &module,
               compilation_target target);
+    processor(analyze::expr::function_ref const expr,
+              jtl::immutable_string const &module,
+              compilation_target target,
+              compilation_target owner_target);
     processor(processor const &) = delete;
     processor(processor &&) noexcept = delete;
 
@@ -154,6 +158,9 @@ namespace jank::codegen
     void build_footer();
     jtl::immutable_string expression_str();
 
+    jtl::immutable_string module_init_str(jtl::immutable_string const &module);
+    void emit_native_header_includes();
+
     void format_elided_var(jtl::immutable_string const &start,
                            jtl::immutable_string const &end,
                            jtl::immutable_string const &ret_tmp,
@@ -173,6 +180,7 @@ namespace jank::codegen
     jtl::immutable_string module;
 
     compilation_target target{};
+    compilation_target owner_target{};
     jtl::immutable_string struct_name;
     jtl::string_builder cpp_raw_buffer;
     jtl::string_builder module_header_buffer;
@@ -198,5 +206,11 @@ namespace jank::codegen
       lifted_constants;
     bool generated_declaration{};
     bool generated_expression{};
+    native_set<jtl::immutable_string> emitted_function_codes;
+
+    /* CSE cache for cpp/unbox operations.
+     * Key: type_name + "|" + value_expression_string
+     * Value: cached temporary variable name */
+    std::map<native_transient_string, jtl::immutable_string> unbox_cache;
   };
 }

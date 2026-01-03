@@ -4,6 +4,8 @@
 #include <jank/runtime/obj/nil.hpp>
 #include <jank/util/fmt.hpp>
 
+#include <iostream>
+
 namespace jank::runtime::obj
 {
   transient_hash_set::transient_hash_set(runtime::detail::native_persistent_hash_set &&d)

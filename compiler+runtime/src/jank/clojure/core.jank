@@ -58,7 +58,6 @@
   ^{:doc "Bound to true in a repl thread"}
   *repl* false)
 
-
 (cpp/raw "#include <fstream>")
 (cpp/raw "#include <sstream>")
 (cpp/raw "#include <filesystem>")
@@ -69,20 +68,26 @@
 (cpp/raw "#include <jank/runtime/obj/repeat.hpp>")
 
 ; Syntax quoting.
-(def unquote
+(def ^{:arglists '([_])}
+  unquote
   (fn* unquote [_]
     (throw "~ cannot be used outside of syntax quote")))
-(def unquote-splicing
+(def ^{:arglists '([_])}
+  unquote-splicing
   (fn* unquote-splicing [_]
     (throw "~@ cannot be used outside of syntax quote")))
 
-(def type (fn* type [o]
-            (cpp/jank.runtime.object_type_str (cpp/.-type o))))
+(def ^{:arglists '([o])}
+  type
+  (fn* type [o]
+    (cpp/jank.runtime.object_type_str (cpp/.-type o))))
 
 ; Exceptions
-(def ex-info
-  "Create an instance of ExceptionInfo, a RuntimeException subclass
-   that carries a map of additional data."
+(def ^{:arglists '([msg map]
+                   [msg map cause])
+       :doc "Create an instance of ExceptionInfo, a RuntimeException subclass
+   that carries a map of additional data."}
+  ex-info
   (fn* ex-info
     ([msg map]
      {:error msg
@@ -109,107 +114,135 @@
 
 ; Relations.
 ;; Miscellaneous.
-(def nil?
-  "Returns true if x is nil, false otherwise."
+(def ^{:arglists '([o])
+       :doc "Returns true if x is nil, false otherwise."}
+  nil?
   (fn* nil? [o]
     (cpp/== (cpp/.-type o) cpp/jank.runtime.object_type.nil)))
 
-(def identical?
-  "Tests if 2 arguments are the same object, meaning the same pointer address."
+(def ^{:arglists '([lhs rhs])
+       :doc "Tests if 2 arguments are the same object, meaning the same pointer address."}
+  identical?
   (fn* identical? [lhs rhs]
     (cpp/== lhs rhs)))
 
 ; Collections.
-(def empty?
-  "Returns true if coll has no items - same as (not (seq coll))."
+(def ^{:arglists '([o])
+       :doc "Returns true if coll has no items - same as (not (seq coll))."}
+  empty?
   (fn* empty? [o]
     (cpp/jank.runtime.is_empty o)))
-(def empty
-  "Returns an empty collection of the same category as coll, or nil"
+(def ^{:arglists '([o])
+       :doc "Returns an empty collection of the same category as coll, or nil"}
+  empty
   (fn* empty [o]
     (cpp/jank.runtime.empty o)))
-(def count
-  "Returns the number of items in the collection. (count nil) returns
-   0.  Also works on strings, arrays, and Java Collections and Maps"
+(def ^{:arglists '([coll])
+       :doc "Returns the number of items in the collection. (count nil) returns
+   0.  Also works on strings, arrays, and Java Collections and Maps"}
+  count
   (fn* [coll]
     (cpp/jank.runtime.sequence_length coll)))
 
 ; Numbers.
-(def boolean
-  "Coerce to boolean"
+(def ^{:arglists '([o])
+       :doc "Coerce to boolean"}
+  boolean
   (fn* boolean [o]
     (cpp/jank.runtime.truthy o)))
-(def int
-  "Coerce to int"
+(def ^{:arglists '([])
+       :doc "Returns the version string for the running jank runtime."}
+  jank-version
+  (fn* jank-version []
+    (cpp/clojure.core_native.jank_version)))
+(def ^{:arglists '([o])
+       :doc "Coerce to int"}
+  int
   (fn* int [o]
     (cpp/jank.runtime.to_int o)))
-(def float
-  "Coerce to float"
+(def ^{:arglists '([o])
+       :doc "Coerce to float"}
+  float
   (fn* real [o]
-    (cpp/jank.runtime.to_real o)))
+    (cpp/jank.runtime.to_float o)))
 
 ;; Sequences.
-(def seq
-  "Returns a seq on the collection. If the collection is
+(def ^{:arglists '([o])
+       :doc "Returns a seq on the collection. If the collection is
    empty, returns nil.  (seq nil) returns nil. seq also works on
    Strings, native Java arrays (of reference types) and any objects
    that implement Iterable. Note that seqs cache values, thus seq
    should not be used on any Iterable whose iterator repeatedly
-   returns the same mutable object."
+   returns the same mutable object."}
+  seq
   (fn* seq [o]
     (cpp/jank.runtime.seq o)))
-(def fresh-seq
+(def ^{:arglists '([o])}
+  fresh-seq
   (fn* fresh-seq [o]
     (cpp/jank.runtime.fresh_seq o)))
-(def first
-  "Returns the first item in the collection. Calls seq on its
-   argument. If coll is nil, returns nil."
+(def ^{:arglists '([o])
+       :doc "Returns the first item in the collection. Calls seq on its
+   argument. If coll is nil, returns nil."}
+  first
   (fn* first [o]
     (cpp/jank.runtime.first o)))
-(def ffirst
-  "Same as (first (first x))"
+(def ^{:arglists '([o])
+       :doc "Same as (first (first x))"}
+  ffirst
   (fn* ffirst [o]
     (first (first o))))
-(def next
-  "Returns a seq of the items after the first. Calls seq on its
-   argument.  If there are no more items, returns nil."
+(def ^{:arglists '([o])
+       :doc "Returns a seq of the items after the first. Calls seq on its
+   argument.  If there are no more items, returns nil."}
+  next
   (fn* next [o]
     (cpp/jank.runtime.next o)))
-(def next-in-place
+(def ^{:arglists '([o])}
+  next-in-place
   (fn* next-in-place [o]
     (cpp/jank.runtime.next_in_place o)))
-(def nnext
-  "Same as (next (next x))"
+(def ^{:arglists '([o])
+       :doc "Same as (next (next x))"}
+  nnext
   (fn* nnext [o]
     (next (next o))))
-(def second
-  "Same as (first (next x))"
+(def ^{:arglists '([o])
+       :doc "Same as (first (next x))"}
+  second
   (fn* second [o]
     (cpp/jank.runtime.second o)))
-(def rest
-  "Returns a possibly empty seq of the items after the first. Calls seq on its
-   argument."
+(def ^{:arglists '([o])
+       :doc "Returns a possibly empty seq of the items after the first. Calls seq on its
+   argument."}
+  rest
   (fn* rest [o]
     (cpp/jank.runtime.rest o)))
-(def cons
-  "Returns a new seq where x is the first element and seq is
-   the rest."
+(def ^{:arglists '([head tail])
+       :doc "Returns a new seq where x is the first element and seq is
+   the rest."}
+  cons
   (fn* cons [head tail]
     (cpp/jank.runtime.cons head tail)))
-(def coll?
-  "Returns true if x implements IPersistentCollection"
+(def ^{:arglists '([o])
+       :doc "Returns true if x implements IPersistentCollection"}
+  coll?
   (fn* coll? [o]
     (cpp/jank.runtime.is_collection o)))
-(def seq?
-  "Return true if x implements ISeq"
+(def ^{:arglists '([o])
+       :doc "Return true if x implements ISeq"}
+  seq?
   (fn* seq? [o]
     (cpp/jank.runtime.is_seq o)))
-(def seqable?
-  "Return true if the seq function is supported for x"
+(def ^{:arglists '([o])
+       :doc "Return true if the seq function is supported for x"}
+  seqable?
   (fn* seqable? [o]
     (cpp/jank.runtime.is_seqable o)))
 
-(def ^:private reverse*
+(def ^{:private true
+       :arglists '([coll])}
+  reverse*
   (fn* reverse* [coll]
     (loop* [acc '()
             coll (seq coll)]
@@ -219,7 +252,12 @@
                (rest coll))))))
 
 ; XXX: The real concat will be defined later on, to be lazy.
-(def ^:private concat*
+(def ^{:private true
+       :arglists '([]
+                    [x]
+                    [x y]
+                    [x y & zs])}
+  concat*
   (fn* concat*
     ([]
      '())
@@ -239,44 +277,54 @@
          (recur r (first zs) (rest zs)))))))
 
 ; Lists.
-(def list?
-  "Returns true if x implements IPersistentList"
+(def ^{:arglists '([o])
+       :doc "Returns true if x implements IPersistentList"}
+  list?
   (fn* list? [o]
     (cpp/jank.runtime.is_list o)))
-(def list
-  "Creates a new list containing the items."
+(def ^{:arglists '([& args])
+       :doc "Creates a new list containing the items."}
+  list
   (fn* list [& args]
     (cpp/jank.runtime.list args)))
 
 ;; Vectors.
-(def vector?
-  "Return true if x implements IPersistentVector"
+(def ^{:arglists '([o])
+       :doc "Return true if x implements IPersistentVector"}
+  vector?
   (fn* vector? [o]
     (cpp/jank.runtime.is_vector o)))
-(def vec
-  "Creates a new vector containing the contents of coll. Java arrays
-   will be aliased and should not be modified."
+(def ^{:arglists '([o])
+       :doc "Creates a new vector containing the contents of coll. Java arrays
+   will be aliased and should not be modified."}
+  vec
   (fn* vec [o]
     (cpp/jank.runtime.vec o)))
 
-(def subvec
-  "Returns a persistent vector of the items in vector from
+(def ^{:arglists '([v start]
+                    [v start end])
+       :doc "Returns a persistent vector of the items in vector from
    start (inclusive) to end (exclusive).  If end is not supplied,
    defaults to (count vector). This operation is O(1) and very fast, as
    the resulting vector shares structure with the original and no
-   trimming is done."
+   trimming is done."}
+  subvec
   (fn* subvec
     ([v start]
      (subvec v start (count v)))
     ([v start end]
      (cpp/jank.runtime.subvec v start end))))
 
-(def conj
-  "conj[oin]. Returns a new collection with the xs
+(def ^{:arglists '([]
+                    [coll]
+                    [coll x]
+                    [coll x & args])
+       :doc "conj[oin]. Returns a new collection with the xs
    'added'. (conj nil item) returns (item).
    (conj coll) returns coll. (conj) returns [].
    The 'addition' may happen at different 'places' depending
-   on the concrete type."
+   on the concrete type."}
+  conj
   (fn* conj
     ([]
      [])
@@ -290,15 +338,17 @@
          res
          (recur res (first args) (next args)))))))
 
-(def last
-  "Return the last item in coll, in linear time."
+(def ^{:arglists '([s])
+       :doc "Return the last item in coll, in linear time."}
+  last
   (fn* last [s]
     (if (next s)
       (recur (next s))
       (first s))))
 
-(def butlast
-  "Return a seq of all but the last item in coll, in linear time."
+(def ^{:arglists '([s])
+       :doc "Return a seq of all but the last item in coll, in linear time."}
+  butlast
   (fn* butlast [s]
     (loop* [ret []
             s s]
@@ -307,39 +357,47 @@
              (seq ret)))))
 
 ;; Maps.
-(def hash-map
-  "keyval => key val
+(def ^{:arglists '([]
+                    [& keyvals])
+       :doc "keyval => key val
    Returns a new hash map with supplied mappings. If any keys are
-   equal, they are handled as if by repeated uses of assoc."
+   equal, they are handled as if by repeated uses of assoc."}
+  hash-map
   (fn* hash-map
     ([] (cpp/jank.runtime.obj.persistent_hash_map.empty))
     ([& keyvals]
      (cpp/jank.runtime.obj.persistent_hash_map.create_from_seq keyvals))))
 
-(def sorted-map
-  "keyval => key val
+(def ^{:arglists '([]
+                    [& keyvals])
+       :doc "keyval => key val
    Returns a new sorted map with supplied mappings. If any keys are
-   equal, they are handled as if by repeated uses of assoc."
+   equal, they are handled as if by repeated uses of assoc."}
+  sorted-map
   (fn* sorted-map
     ([] (cpp/jank.runtime.obj.persistent_sorted_map.empty))
     ([& keyvals]
      (cpp/jank.runtime.obj.persistent_sorted_map.create_from_seq keyvals))))
 
-(def map?
-  "Return true if x implements IPersistentMap"
+(def ^{:arglists '([o])
+       :doc "Return true if x implements IPersistentMap"}
+  map?
   (fn* map? [o]
     (cpp/jank.runtime.is_map o)))
 
-(def associative?
- "Returns true if coll implements Associative"
+(def ^{:arglists '([o])
+       :doc "Returns true if coll implements Associative"}
+  associative?
   (fn* associative? [o]
     (cpp/jank.runtime.is_associative o)))
 
-(def assoc
-  "assoc[iate]. When applied to a map, returns a new map of the
+(def ^{:arglists '([map key val]
+                    [map key val & kvs])
+       :doc "assoc[iate]. When applied to a map, returns a new map of the
    same (hashed/sorted) type, that contains the mapping of key(s) to
    val(s). When applied to a vector, returns a new vector that
-   contains val at index. Note - index must be <= (count vector)."
+   contains val at index. Note - index must be <= (count vector)."}
+  assoc
   (fn* assoc
     ([map key val]
      (cpp/jank.runtime.assoc map key val))
@@ -352,20 +410,25 @@
          res)))))
 
 ;; Strings.
-(def string?
-  "Return true if x is a String"
+(def ^{:arglists '([o])
+       :doc "Return true if x is a String"}
+  string?
   (fn* string? [o]
     (cpp/jank.runtime.is_string o)))
 
-(def char?
-  "Return true if x is a Character"
+(def ^{:arglists '([o])
+       :doc "Return true if x is a Character"}
+  char?
   (fn* char? [o]
     (cpp/jank.runtime.is_char o)))
 
-(def str
-  "With no args, returns the empty string. With one arg x, returns
+(def ^{:arglists '([]
+                    [o]
+                    [o & args])
+       :doc "With no args, returns the empty string. With one arg x, returns
    x.toString().  (str nil) returns the empty string. With more than
-   one arg, returns the concatenation of the str values of the args."
+   one arg, returns the concatenation of the str values of the args."}
+  str
   (fn* str
     ([]
      "")
@@ -377,14 +440,16 @@
      (cpp/jank.runtime.str o args))))
 
 ;; Symbols.
-(def symbol?
-  "Return true if x is a Symbol"
+(def ^{:arglists '([o])
+       :doc "Return true if x is a Symbol"}
+  symbol?
   (fn* symbol? [o]
     (cpp/jank.runtime.is_symbol o)))
-(def
+(def ^{:arglists '([o]
+                    [ns o])
+       :doc "Returns a Symbol with the given namespace and name. Arity-1 works
+   on strings, keywords, and vars."}
   symbol
-  "Returns a Symbol with the given namespace and name. Arity-1 works
-   on strings, keywords, and vars."
   (fn* symbol
     ([o]
      (cpp/jank.runtime.to_unqualified_symbol o))
@@ -392,72 +457,86 @@
      (if (nil? ns)
        (symbol o)
        (cpp/jank.runtime.to_qualified_symbol ns o)))))
-(def simple-symbol?
-  "Return true if x is a symbol without a namespace"
+(def ^{:arglists '([x])
+       :doc "Return true if x is a symbol without a namespace"}
+  simple-symbol?
   (fn* simple-symbol? [x]
     (cpp/jank.runtime.is_simple_symbol x)))
-(def qualified-symbol?
-  "Return true if x is a symbol with a namespace"
+(def ^{:arglists '([x])
+       :doc "Return true if x is a symbol with a namespace"}
+  qualified-symbol?
   (fn* qualified-symbol? [x]
     (cpp/jank.runtime.is_qualified_symbol x)))
 
 ; Relations.
 ;; Miscellaneous.
-(def true?
-  "Returns true if x is the value true, false otherwise."
+(def ^{:arglists '([x])
+       :doc "Returns true if x is the value true, false otherwise."}
+  true?
   (fn* true? [x]
     (cpp/jank.runtime.is_true x)))
-(def false?
-  "Returns true if x is the value false, false otherwise."
+(def ^{:arglists '([x])
+       :doc "Returns true if x is the value false, false otherwise."}
+  false?
   (fn* false? [x]
     (cpp/jank.runtime.is_false x)))
-(def not
-  "Returns true if x is logical false, false otherwise."
+(def ^{:arglists '([x])
+       :doc "Returns true if x is logical false, false otherwise."}
+  not
   (fn* not [x]
     (cpp/clojure.core_native.not_ x)))
-(def some?
-  "Returns true if x is not nil, false otherwise."
+(def ^{:arglists '([x])
+       :doc "Returns true if x is not nil, false otherwise."}
+  some?
   (fn* some? [x]
     (cpp/jank.runtime.is_some x)))
 
 ;; Metadata.
-(def meta
-  "Returns the metadata of obj, returns nil if there is no metadata."
+(def ^{:arglists '([obj])
+       :doc "Returns the metadata of obj, returns nil if there is no metadata."}
+  meta
   (fn* meta [obj]
     (cpp/jank.runtime.meta obj)))
-(def with-meta
-  "Returns an object of the same type and value as obj, with
-   map m as its metadata."
-   (fn* with-meta [obj m]
-     (cpp/jank.runtime.with_meta obj m)))
-(def reset-meta!
-  "Atomically resets the metadata for a namespace/var/ref/agent/atom"
+(def ^{:arglists '([obj m])
+       :doc "Returns an object of the same type and value as obj, with
+   map m as its metadata."}
+  with-meta
+  (fn* with-meta [obj m]
+    (cpp/jank.runtime.with_meta obj m)))
+(def ^{:arglists '([iref metadata-map])
+       :doc "Atomically resets the metadata for a namespace/var/ref/agent/atom"}
+  reset-meta!
   (fn* [iref metadata-map]
     (cpp/jank.runtime.reset_meta iref metadata-map)))
 
 ;; Input/output.
-(def print
-  "Prints the object(s) to the output stream that is the current value
-   of *out*.  print and println produce output for human consumption."
+(def ^{:arglists '([& more])
+       :doc "Prints the object(s) to the output stream that is the current value
+   of *out*.  print and println produce output for human consumption."}
+  print
   (fn* print [& more]
     (cpp/jank.runtime.print more)))
-(def println
-  "Same as print followed by (newline)"
+(def ^{:arglists '([& more])
+       :doc "Same as print followed by (newline)"}
+  println
   (fn* println [& more]
     (cpp/jank.runtime.println more)))
-(def pr
-  "Prints the object(s) to the output stream that is the current value
+(def ^{:arglists '([& more])
+       :doc "Prints the object(s) to the output stream that is the current value
    of *out*.  Prints the object(s), separated by spaces if there is
    more than one.  By default, pr and prn print in a way that objects
-   can be read by the reader"
-   (fn* pr [& more]
-     (cpp/jank.runtime.pr more)))
-(def prn
-  "Same as pr followed by (newline). Observes *flush-on-newline*"
+   can be read by the reader"}
+  pr
+  (fn* pr [& more]
+    (cpp/jank.runtime.pr more)))
+(def ^{:arglists '([& more])
+       :doc "Same as pr followed by (newline). Observes *flush-on-newline*"}
+  prn
   (fn* prn [& more]
     (cpp/jank.runtime.prn more)))
-(def pr-str
-  "pr to a string, returning it"
+(def ^{:arglists '([x])
+       :doc "pr to a string, returning it"}
+  pr-str
   ;; TODO: support multiple parameters, preserving current behavior
   (fn* pr-str [x]
     (cpp/jank.runtime.to_code_string x)))
@@ -467,27 +546,38 @@
 ; all of its arities. This version of apply* is used by the parser for syntax quoting.
 ; This allows us to use syntax quoting sooner and also have more easily inlinable
 ; syntax quoting code, since this version of apply is lighter than the full version.
-(def ^:private apply*
+(def ^{:private true
+       :arglists '([source args])}
+  apply*
   (fn* apply* [source args]
     (cpp/jank.runtime.apply_to source args)))
 
-(def ^{:macro true} let
+(def ^{:macro true
+       :arglists '([&form &env & decl])}
+  let
   (fn* let [&form &env & decl]
     `(let* ~@decl)))
 
-(def ^{:macro true} loop
+(def ^{:macro true
+       :arglists '([&form &env & decl])}
+  loop
   (fn* loop [&form &env & decl]
     `(loop* ~@decl)))
 
-(def ^{:macro true} fn
+(def ^{:macro true
+       :arglists '([&form &env & decl])}
+  fn
   (fn* fn [&form &env & decl]
     (with-meta `(fn* ~@decl) (meta &form))))
 
-(def =
-  "Equality. Returns true if x equals y, false if not. It also works
+(def ^{:arglists '([x]
+                    [x y]
+                    [x y & more])
+       :doc "Equality. Returns true if x equals y, false if not. It also works
    for nil and compares numbers and collections in a type-independent
    manner. Clojure's immutable data structures define equals() (and
-   thus =) as a value, not an identity, comparison."
+   thus =) as a value, not an identity, comparison."}
+  =
   (fn* =
     ([x] true)
     ([x y]
@@ -499,9 +589,12 @@
          (cpp/jank.runtime.equal y (first more)))
        false))))
 
-(def ==
-  "Returns non-nil if nums all have the equivalent
-   value (type-independent), otherwise false"
+(def ^{:arglists '([x]
+                    [x y]
+                    [x y & more])
+       :doc "Returns non-nil if nums all have the equivalent
+   value (type-independent), otherwise false"}
+  ==
   (fn* ==
     ([x] true)
     ([x y]
@@ -513,7 +606,9 @@
          (cpp/jank.runtime.is_equiv y (first more)))
        false))))
 
-(def ^:private sigs
+(def ^{:private true
+       :arglists '([fdecl])}
+  sigs
   (fn* sigs [fdecl]
     (let* [asig (fn* asig [fdecl]
                   (let* [arglist (first fdecl)
@@ -539,11 +634,14 @@
         (list (asig fdecl))))))
 
 ; Macros.
-(def ^{:macro true
-       :doc "Same as (def name (fn [params* ] exprs*)) or (def
-             name (fn ([params* ] exprs*)+)) with any doc-string or attrs added
-             to the var metadata. prepost-map defines a map with optional keys
-             :pre and :post that contain collections of pre or post conditions."}
+(def
+  ^{:macro true
+    :arglists '([name doc-string? attr-map? [params*] prepost-map? body]
+                [name doc-string? attr-map? ([params*] prepost-map? body) + attr-map?])
+    :doc "Same as (def name (fn [params* ] exprs*)) or (def
+     name (fn ([params* ] exprs*)+)) with any doc-string or attrs added
+     to the var metadata. prepost-map defines a map with optional keys
+     :pre and :post that contain collections of pre or post conditions."}
   defn
   (fn* defn [&form &env name & fdecl]
     ;; Note: Cannot delegate this check to def because of the call to (with-meta name ..)
@@ -3793,17 +3891,21 @@
    then expressions. Returns a tuple of [shift mask case-map] where
    case-map is a map of int case values to [test then] tuples"
   [expr-sym default tests thens]
-  (if (fits-table? tests)
-    ; compact case ints, no shift-mask
-    [0 0 (case-map expr-sym default int int tests thens #{})]
-    (let [[shift mask] (or (maybe-min-hash (map int tests)) [0 0])]
-      (if (zero? mask)
-        ; sparse case ints, no shift-mask
-        [0 0 (case-map expr-sym default int int tests thens #{})]
-        ; compact case ints, with shift-mask
-        [shift
-         mask
-         (case-map expr-sym default #(shift-mask shift mask (int %)) int tests thens #{})]))))
+  #?(:wasm
+     ; WASM: Always use simple dispatch (no shift-mask optimization)
+     [0 0 (case-map expr-sym default int int tests thens #{})]
+     :jank
+     (if (fits-table? tests)
+       ; compact case ints, no shift-mask
+       [0 0 (case-map expr-sym default int int tests thens #{})]
+       (let [[shift mask] (or (maybe-min-hash (map int tests)) [0 0])]
+         (if (zero? mask)
+           ; sparse case ints, no shift-mask
+           [0 0 (case-map expr-sym default int int tests thens #{})]
+           ; compact case ints, with shift-mask
+           [shift
+            mask
+            (case-map expr-sym default #(shift-mask shift mask (int %)) int tests thens #{})])))))
 
 (defn- merge-hash-collisions
   "Takes a case expression, default expression, and a sequence of test constants
@@ -3854,30 +3956,34 @@
    expressions. Returns a tuple of [shift mask case-map]
    where case-map is a map of int case values to [test then] tuples."
   [expr-sym default tests thens skip-check]
-  (let [hashes (into #{} (map case-hash tests))]
-    (if (== (count tests) (count hashes))
-      (if (fits-table? hashes)
-        ; compact case ints, no shift-mask
-        [0 0
-         (case-map expr-sym default case-hash identity tests thens skip-check)]
-        (let [[shift mask] (or (maybe-min-hash hashes) [0 0])]
-          (if (zero? mask)
-            ; sparse case ints, no shift-mask
-            [0 0
-             (case-map expr-sym default case-hash identity tests thens skip-check)]
-            ; compact case ints, with shift-mask
-            [shift mask
-             (case-map expr-sym default #(shift-mask shift mask (case-hash %)) identity tests thens skip-check)])))
-      ; resolve hash collisions and try again
-      (let [[tests thens skip-check]
-            (merge-hash-collisions expr-sym default tests thens)
-            [shift mask case-map]
-            (prep-hashes expr-sym default tests thens skip-check)
-            skip-check
-            (if (zero? mask)
-              skip-check
-              (into #{} (map #(shift-mask shift mask %) skip-check)))]
-        [shift mask case-map]))))
+  #?(:wasm
+     ; WASM: Always use simple dispatch (no shift-mask optimization)
+     [0 0 (case-map expr-sym default case-hash identity tests thens skip-check)]
+     :jank
+     (let [hashes (into #{} (map case-hash tests))]
+       (if (== (count tests) (count hashes))
+         (if (fits-table? hashes)
+           ; compact case ints, no shift-mask
+           [0 0
+            (case-map expr-sym default case-hash identity tests thens skip-check)]
+           (let [[shift mask] (or (maybe-min-hash hashes) [0 0])]
+             (if (zero? mask)
+               ; sparse case ints, no shift-mask
+               [0 0
+                (case-map expr-sym default case-hash identity tests thens skip-check)]
+               ; compact case ints, with shift-mask
+               [shift mask
+                (case-map expr-sym default #(shift-mask shift mask (case-hash %)) identity tests thens skip-check)])))
+         ; resolve hash collisions and try again
+         (let [[tests thens skip-check]
+               (merge-hash-collisions expr-sym default tests thens)
+               [shift mask case-map]
+               (prep-hashes expr-sym default tests thens skip-check)
+               skip-check
+               (if (zero? mask)
+                 skip-check
+                 (into #{} (map #(shift-mask shift mask %) skip-check)))]
+           [shift mask case-map])))))
 
 (defmacro case
   "Takes an expression, and a set of clauses.
@@ -3971,6 +4077,29 @@
          end# (current-time)]
      (println (str "Elapsed time: " (/ (- end# start#) 1000000.0) " ms"))
      ret#))
+
+(defn- profile-enter [label]
+  (cpp/clojure.core_native.profile_enter label))
+
+(defn- profile-exit [label]
+  (cpp/clojure.core_native.profile_exit label))
+
+(defn profile-enabled? []
+  (cpp/clojure.core_native.profile_enabled))
+
+(defmacro profile
+  "Profiles expr with the given label. When profiling is enabled (--profile flag),
+   the timing will appear in the profile output file. Returns the value of expr.
+
+   Usage: (profile \"my-operation\" (do-something))"
+  [label expr]
+  `(if (profile-enabled?)
+     (do
+       (profile-enter ~label)
+       (let [ret# ~expr]
+         (profile-exit ~label)
+         ret#))
+     ~expr))
 
 (defn with-redefs-fn
   "Temporarily redefines Vars during a call to func. Each val of
@@ -4073,9 +4202,9 @@
     (reduce (fn [acc kv]
               (let [k (first kv)
                     v (second kv)]
-                ; TODO: Check for visibility.
                 (if (var? v)
-                  (if (= ns (cpp/clojure.core_native.var_ns v))
+                  (if (and (= ns (cpp/clojure.core_native.var_ns v))
+                           (not (:private (meta v))))
                     (assoc acc k v)
                     acc)
                   acc)))
@@ -4106,6 +4235,165 @@
            (or (nil? (second x))
                (keyword? (second x))))))
 
+(defn- throw-if [pred msg]
+  (when pred
+    (throw (ex-info :assertion-failure {:msg msg}))))
+
+(defn- native-header-libspec?
+  "True when the libspec refers to a native C++ header."
+  [x]
+  (and (vector? x)
+       (string? (first x))))
+
+(defn- drop-extension [s]
+  (loop* [idx (dec (count s))]
+    (cond
+      (neg? idx) s
+      (= (nth s idx) \.) (subs s 0 idx)
+      :else (recur (dec idx)))))
+
+(defn- path->cpp-scope [path]
+  (let [base (drop-extension path)
+        ; Replace path separators with dotted scope segments.
+        scope (apply str (map (fn [ch]
+                                (if (= ch \/) \.
+                                    ch))
+                              base))]
+    (throw-if (empty? scope)
+              (str "Cannot derive native scope from header path: " path))
+    scope))
+
+(defn- ensure-string [value field]
+  (cond
+    (string? value) value
+    (symbol? value) (name value)
+    (nil? value) nil
+    :else (throw (ex-info :invalid-native-libspec
+                          {:msg (str "Expected " field " to be string or symbol, got "
+                                     (type value))}))))
+
+(defn- ensure-symbol [value field]
+  (cond
+    (symbol? value) value
+    (string? value) (symbol value)
+    :else (throw (ex-info :invalid-native-libspec
+                          {:msg (str "Expected " field " to be symbol or string, got "
+                                     (type value))}))))
+
+(defn- normalize-native-rename [rename]
+  (when rename
+    (throw-if (not (map? rename))
+              "Native header :rename expects a map of symbol to symbol")
+    (reduce (fn [ret [from to]]
+              (assoc ret
+                     (ensure-symbol from :rename-key)
+                     (ensure-symbol to :rename-val)))
+            {}
+            rename)))
+
+(defn- normalize-native-refers [refer rename]
+  (when refer
+    (throw-if (= :all refer)
+              "Native header libspec does not support :refer :all")
+    (let [items (cond
+                  (or (sequential? refer)
+                      (set? refer)) refer
+                  :else (throw (ex-info :invalid-native-libspec
+                                        {:msg (str "Native header :refer expects a collection of symbols, got "
+                                                   (type refer))})))
+          rename-map (or rename {})
+          refer-specs (mapv (fn [sym]
+                              (let [remote (ensure-symbol sym :refer)
+                                    local (or (rename-map remote) remote)]
+                                {:local local
+                                 :member remote}))
+                            items)
+          duplicates (->> refer-specs
+                          (map :local)
+                          (frequencies)
+                          (filter (fn [[_ cnt]] (> cnt 1)))
+                          (map first))]
+      (throw-if (seq duplicates)
+                (str "Duplicate native refer targets: " duplicates))
+      refer-specs)))
+
+(defn- format-include-arg [header include]
+  (let [explicit (ensure-string include :include)
+        candidate (str (or explicit header))
+        trimmed candidate]
+    (if (and (> (count trimmed) 1)
+             (let [first-ch (first trimmed)
+                   last-ch (last trimmed)]
+               (or (and (= first-ch \<) (= last-ch \>))
+                   (and (= first-ch \") (= last-ch \")))))
+      trimmed
+      (str "<" candidate ">"))))
+
+(defn- normalize-native-libspec [spec]
+  (let [header (first spec)
+        _ (throw-if (not (string? header))
+                    (str "Native header libspec must begin with a string path, got "
+                         (type header)))
+        option-data (rest spec)
+        _ (throw-if (odd? (count option-data))
+                    "Native header libspec options must be key/value pairs")
+        opts (apply hash-map option-data)
+        supported #{:as :scope :include :refer :rename}
+        unsupported (seq (remove supported (keys opts)))
+        _ (throw-if unsupported
+                    (str "Unsupported native header option(s): " unsupported))
+        alias-opt (:as opts)
+        refer-opt (:refer opts)
+        _ (throw-if (and alias-opt (not (symbol? alias-opt)))
+                    "Native header libspec :as requires a symbol alias")
+        _ (throw-if (and (not alias-opt) (not refer-opt))
+                    "Native header libspec requires at least one of :as or :refer")
+        ;; If no :as is provided but :refer is, generate a deterministic internal alias
+        ;; based on the header name so that multiple requires of the same header work
+        alias (or alias-opt
+                  (when refer-opt
+                    (symbol (str "native-header-" header))))
+        rename (normalize-native-rename (:rename opts))
+        refers (normalize-native-refers refer-opt rename)
+        scope (or (ensure-string (:scope opts) :scope)
+                  (path->cpp-scope header))
+        include (format-include-arg header (:include opts))]
+    {:alias alias
+     :header header
+     :scope scope
+     :include include
+     :refers refers}))
+
+(defn- register-native-header! [spec]
+  (let [{:keys [alias header scope include refers]} (normalize-native-libspec spec)]
+    #?(:wasm (do
+               ;; WASM AOT: Just register metadata, #include was already processed at compile time
+               (cpp/clojure.core_native.register_native_header_wasm
+                 *ns*
+                 alias
+                 header
+                 scope
+                 include)
+               (doseq [{:keys [local member]} refers]
+                 (cpp/clojure.core_native.register_native_refer_wasm
+                   *ns*
+                   alias
+                   local
+                   member)))
+       :jank (do
+               (cpp/clojure.core_native.register_native_header
+                 *ns*
+                 alias
+                 header
+                 scope
+                 include)
+               (doseq [{:keys [local member]} refers]
+                 (cpp/clojure.core_native.register_native_refer
+                   *ns*
+                   alias
+                   local
+                   member))))))
+
 (defn- prependss [x coll]
   (if (symbol? x)
     (cons x coll)
@@ -4113,10 +4401,6 @@
 
 (defn- root-resource [lib]
   (str "/" (name lib)))
-
-(defn- throw-if [pred msg]
-  (when pred
-    (throw (ex-info :assertion-failure {:msg msg}))))
 
 (defn alias
   "Add an alias in the current namespace to another
@@ -4142,27 +4426,33 @@
    select a subset, via inclusion or exclusion, or to provide a mapping
    to a symbol different from the var's name, in order to prevent
    clashes. Use :use in the ns macro in preference to calling this directly."
-  [ns-sym & filters]
-  (let [ns (find-ns ns-sym)
-        _ (when (nil? ns)
-            (throw (ex-info :unknown-namespace {:value ns-sym})))
-        filters (apply hash-map filters)
-        rename (or (:rename filters) {})
-        exclude? (set (:exclude filters))
-        sym->var (ns-publics ns)
-        to-refer (if (= :all (get filters :refer))
-                   (keys sym->var)
-                   (or (get filters :refer) (get filters :only) (keys sym->var)))]
-    ; TODO: Loop
-    (reduce (fn [acc sym]
-              (when (not (exclude? sym))
-                (let [v (get sym->var sym)
-                      sym (rename sym sym)]
-                  (when (nil? v)
-                    (throw (ex-info :var-does-not-exist {:value sym})))
-                  (cpp/clojure.core_native.refer *ns* sym v))))
-            nil
-            to-refer)))
+  ; Arity-1 overload for AOT compilation (no filters = refer all)
+  ([ns-sym]
+   (refer ns-sym :refer :all))
+  ; Variadic overload with filters
+  ([ns-sym & filters]
+   (let [ns (find-ns ns-sym)
+         _ (when (nil? ns)
+             (throw (ex-info :unknown-namespace {:value ns-sym})))
+         ; If no filters provided, default to referring all
+         filters (if (empty? filters) [:refer :all] filters)
+         filters (apply hash-map filters)
+         rename (or (:rename filters) {})
+         exclude? (set (:exclude filters))
+         sym->var (ns-publics ns)
+         to-refer (if (= :all (get filters :refer))
+                    (keys sym->var)
+                    (or (get filters :refer) (get filters :only) (keys sym->var)))]
+     ; TODO: Loop
+     (reduce (fn [acc sym]
+               (when (not (exclude? sym))
+                 (let [v (get sym->var sym)
+                       sym (rename sym sym)]
+                   (when (nil? v)
+                     (throw (ex-info :var-does-not-exist {:value sym})))
+                   (cpp/clojure.core_native.refer *ns* sym v))))
+             nil
+             to-refer))))
 
 ;; TODO: Should be a ref instead of atom
 (defonce
@@ -4268,15 +4558,23 @@
   [& args]
   (let [flags (filter keyword? args)
         opts (interleave flags (repeat true))
-        args (remove keyword? args)]
+        ;; Filter out nil values and non-libspec vectors that may appear in JIT mode
+        ;; due to codegen issues (e.g. refer bindings like [*compile-path* #'clojure.core/*compile-path*])
+        args (remove #(or (keyword? %)
+                          (nil? %)
+                          (and (vector? %) (not (libspec? %)) (not (native-header-libspec? %)))) args)]
     (let [supported #{:as :reload :reload-all :require :use :verbose :refer :as-alias}
           unsupported (seq (remove supported flags))]
       (throw-if unsupported
                 (str "Unsupported option(s) supplied: " unsupported)))
-    (throw-if (not (seq args)) "Nothing specified to load")
-    (doseq [arg args]
-      (throw-if (not (libspec? arg)) (str "not a libspec: " arg))
-      (apply load-lib (prependss arg opts)))))
+    ;; Don't throw if no args after filtering - might all be spurious in JIT mode
+    (when (seq args)
+      (doseq [arg args]
+        (if (native-header-libspec? arg)
+          (register-native-header! arg)
+          (do
+            (throw-if (not (libspec? arg)) (str "not a libspec: " arg))
+            (apply load-lib (prependss arg opts))))))))
 
 (defn compile
   "Compiles the namespace named by the symbol lib into a set of
@@ -4285,7 +4583,8 @@
    directory specified by *compile-path*, and that directory too must
    be in the module path."
   [path]
-  (cpp/clojure.core_native.compile path))
+  #?(:wasm (throw "JIT compilation is not supported in WASM AOT mode")
+     :jank (cpp/clojure.core_native.compile path)))
 
 (defn require
   "Loads libs, skipping any that are already loaded. Each argument is
@@ -4672,7 +4971,7 @@
 (defn double?
   "Return true if x is a Double"
   [x]
-  (float? x))
+  (cpp/jank.runtime.is_double x))
 
 ;;map stuff
 
@@ -5471,12 +5770,14 @@
 (defn numerator
   "Returns the numerator part of a Ratio."
   [r]
-  (cpp/jank.runtime.numerator r))
+  #?(:wasm (throw "numerator is not supported in WASM")
+     :jank (cpp/jank.runtime.numerator r)))
 
 (defn denominator
   "Returns the denominator part of a Ratio."
   [r]
-  (cpp/jank.runtime.denominator r))
+  #?(:wasm (throw "denominator is not supported in WASM")
+     :jank (cpp/jank.runtime.denominator r)))
 
 (defn decimal?
   "Returns true if n is a BigDecimal"
@@ -5590,10 +5891,7 @@
 (defn read-line
   "Reads the next line from stream that is the current value of *in* ."
   []
-  ;; (if (instance? clojure.lang.LineNumberingPushbackReader *in*)
-  ;;   (.readLine ^clojure.lang.LineNumberingPushbackReader *in*)
-  ;;   (.readLine ^java.io.BufferedReader *in*))
-  (throw "TODO: port read-line"))
+  (cpp/clojure.core_native.read_line))
 
 (defn read-string
   "Reads one object from the string s. Optionally include reader
@@ -6944,25 +7242,27 @@ fails, attempts to require sym's namespace and retries."
   "Opens a reader on f and reads all its contents, returning a string.
   See clojure.java.io/reader for a complete list of supported arguments."
   ([f & opts]
-   (let [opts (normalize-slurp-opts opts)
-         fname (cpp/cast (cpp/type "char const*") f)
-         file (cpp/std.ifstream. fname)]
-     (if-not (cpp/.is_open file)
-       (throw (str f " (No such file or directory)"))
-       (let [size (cpp/std.filesystem.file_size fname)
-             out (cpp/std.string. size (cpp/char 0))]
-         (cpp/.read file (cpp/& (cpp/.front out)) size)
-         out)))))
+   #?(:wasm (throw "slurp is not supported in WASM")
+      :jank (let [opts (normalize-slurp-opts opts)
+                  fname (cpp/cast (cpp/type "char const*") f)
+                  file (cpp/std.ifstream. fname)]
+              (if-not (cpp/.is_open file)
+                (throw (str f " (No such file or directory)"))
+                (let [size (cpp/std.filesystem.file_size fname)
+                      out (cpp/std.string. size (cpp/char 0))]
+                  (cpp/.read file (cpp/& (cpp/.front out)) size)
+                  out))))))
 
 (defn spit
   "Opposite of slurp.  Opens f with writer, writes content, then
   closes f. Options passed to clojure.java.io/writer."
   [f content & options]
-  (let [file (cpp/std.ofstream.)]
-    (cpp/.open file (cpp/cast (cpp/type "char const*") f))
-    (cpp/<< file (cpp/cast (cpp/type "char const*") content))
-    (cpp/.close file)
-    nil))
+  #?(:wasm (throw "spit is not supported in WASM")
+     :jank (let [file (cpp/std.ofstream.)]
+             (cpp/.open file (cpp/cast (cpp/type "char const*") f))
+             (cpp/<< file (cpp/cast (cpp/type "char const*") content))
+             (cpp/.close file)
+             nil)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; futures (needs proxy);;;;;;;;;;;;;;;;;;
 (defn future-call
@@ -7530,10 +7830,14 @@ fails, attempts to require sym's namespace and retries."
   "Parse strings \"true\" or \"false\" and return a boolean, or nil if invalid"
   [s]
   (if (string? s)
-    (case s
-        "true" true
-        "false" false
-        nil)
+    #?(:wasm (condp = s
+               "true" true
+               "false" false
+               nil)
+       :jank (case s
+               "true" true
+               "false" false
+               nil))
     (throw (parsing-err s))))
 
 (defn NaN?
@@ -7545,3 +7849,16 @@ fails, attempts to require sym's namespace and retries."
   "Returns true if num is negative or positive infinity, else false"
   [num]
   (cpp/jank.runtime.is_infinite num))
+
+(defn native-header-functions
+  "Returns the native function names that back a :native-header alias.
+   Searches all namespaces to find the one containing the alias.
+   Optionally filter by the provided prefix."
+  ([alias]
+   (native-header-functions alias ""))
+  ([alias prefix]
+   (throw-if (not (symbol? alias)) (str "Native alias must be a symbol: " alias))
+   (throw-if (not (string? prefix)) (str "Prefix must be a string: " prefix))
+   #?(:wasm []  ;; WASM AOT: introspection not available, return empty
+      :jank (cpp/clojure.core_native.native_header_functions nil alias prefix))))
+

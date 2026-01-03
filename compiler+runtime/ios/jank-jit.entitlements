@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for debugging and JIT on iOS -->
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+
+    <!-- Allow JIT compilation (required for LLVM ORC JIT) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Allow unsigned executable memory (required for JIT) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Dynamic codesigning - allows signing generated code at runtime -->
+    <key>com.apple.private.security.no-sandbox</key>
+    <false/>
+</dict>
+</plist>

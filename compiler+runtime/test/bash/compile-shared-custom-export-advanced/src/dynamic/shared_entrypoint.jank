@@ -1,0 +1,20 @@
+(ns dynamic.shared-entrypoint
+  (:require [jank.export]))
+
+(defn my-is-true [x]
+  (true? x))
+
+(jank.export/register #'my-is-true "my_is_true" [:=> [:cat :bool] :bool])
+
+(defn my-add-three [x y z]
+  (+ x y z))
+
+(jank.export/register #'my-add-three "my_add_three" [:=> [:cat :long :long :long] :long])
+
+(defn my-mixed [a b c]
+  (+ a b c))
+
+(jank.export/register #'my-mixed "my_mixed" [:=> [:cat :int :double :int] :double])
+
+(defn -main [& args]
+  (println "Advanced tests ready!"))

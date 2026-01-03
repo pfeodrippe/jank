@@ -1,6 +1,9 @@
 #pragma once
 
+#include <functional>
 #include <regex>
+#include <string>
+#include <string_view>
 
 /* TODO: Remove these so that people include only what they need. */
 #include <jank/runtime/core/make_box.hpp>
@@ -31,6 +34,43 @@ namespace jank::runtime
   object_ref println(object_ref const args);
   object_ref pr(object_ref const args);
   object_ref prn(object_ref const args);
+
+  void forward_output(std::string_view text);
+  void forward_error(std::string_view text);
+
+  void push_output_redirect(std::function<void(std::string)> sink);
+  void pop_output_redirect();
+
+  struct scoped_output_redirect
+  {
+    explicit scoped_output_redirect(std::function<void(std::string)> sink);
+    scoped_output_redirect(scoped_output_redirect const &) = delete;
+    scoped_output_redirect(scoped_output_redirect &&) = delete;
+    scoped_output_redirect &operator=(scoped_output_redirect const &) = delete;
+    scoped_output_redirect &operator=(scoped_output_redirect &&) = delete;
+    ~scoped_output_redirect();
+  };
+
+  /* A scoped guard that captures stderr output during C++ compilation and forwards it
+   * to the same output redirect as stdout. This allows C++ compilation errors to appear
+   * in the IDE REPL. */
+  struct scoped_stderr_redirect
+  {
+    scoped_stderr_redirect();
+    scoped_stderr_redirect(scoped_stderr_redirect const &) = delete;
+    scoped_stderr_redirect(scoped_stderr_redirect &&) = delete;
+    scoped_stderr_redirect &operator=(scoped_stderr_redirect const &) = delete;
+    scoped_stderr_redirect &operator=(scoped_stderr_redirect &&) = delete;
+    ~scoped_stderr_redirect();
+
+    /* Manually flush captured stderr content to the output redirect.
+     * Call this before sending error responses to ensure stderr content is included.
+     * Can be called multiple times - only forwards new content since last flush. */
+    void flush();
+
+    struct impl;
+    std::unique_ptr<impl> pimpl;
+  };
 
   obj::persistent_string_ref subs(object_ref const s, object_ref const start);
   obj::persistent_string_ref subs(object_ref const s, object_ref const start, object_ref const end);
@@ -109,6 +149,11 @@ namespace jank::runtime
   object_ref re_matches(object_ref const re, object_ref const s);
   object_ref smatch_to_vector(std::smatch const &match_results);
 
+  object_ref get_global_cpp_functions();
+  object_ref get_global_cpp_types();
+
   object_ref add_watch(object_ref const reference, object_ref const key, object_ref const fn);
   object_ref remove_watch(object_ref const reference, object_ref const key);
+
+  object_ref make_user_type(object_ref const type_name, object_ref const constructor_fn);
 }

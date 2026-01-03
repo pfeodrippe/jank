@@ -1,6 +1,26 @@
 #pragma once
 
-#include <clang/Interpreter/CppInterOp.h>
+// Include real CppInterOp when:
+// 1. Not on emscripten (native build), OR
+// 2. On emscripten but with CppInterOp available (WASM with eval support)
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <clang/Interpreter/CppInterOp.h>
+#else
+// Stub definitions for WASM without CppInterOp
+namespace Cpp
+{
+  struct TemplateArgInfo
+  {
+  };
+
+  using TCppScope_t = void *;
+
+  enum class Operator : int
+  {
+    Invalid = 0
+  };
+}
+#endif
 
 #include <jtl/ptr.hpp>
 #include <jtl/result.hpp>
@@ -54,8 +74,31 @@ namespace jank::analyze::cpp_util
   bool is_nullptr(jtl::ptr<void> type);
   bool is_implicitly_convertible(jtl::ptr<void> from, jtl::ptr<void> to);
 
+  /* Type-specific predicates for optimization purposes */
+  bool is_boolean_type(jtl::ptr<void> type);
+  bool is_integer_type(jtl::ptr<void> type);
+  bool is_floating_type(jtl::ptr<void> type);
+  bool is_numeric_type(jtl::ptr<void> type);
+  bool is_void_type(jtl::ptr<void> type);
+
+  /* Expression type predicates */
+  bool expr_is_cpp_bool(expression_ref expr);
+  bool expr_is_cpp_numeric(expression_ref expr);
+  bool expr_is_cpp_primitive(expression_ref expr);
+
   jtl::ptr<void> untyped_object_ptr_type();
   jtl::ptr<void> untyped_object_ref_type();
+
+  /* Convert a :tag metadata value (keyword or string) to a C++ type pointer.
+   * Returns nullptr if the tag is nil or cannot be resolved.
+   * Note: This version adds a pointer level (e.g., :i32 -> int*) for boxed value semantics. */
+  jtl::ptr<void> tag_to_cpp_type(runtime::object_ref tag);
+
+  /* Convert a :tag metadata value to a C++ type pointer with literal interpretation.
+   * Unlike tag_to_cpp_type, this respects the exact type specified:
+   *   :i32 -> int, :i32* -> int*, "int*" -> int*
+   * Use this for function return type hints where the user specifies the exact type. */
+  jtl::ptr<void> tag_to_cpp_type_literal(runtime::object_ref tag);
 
   usize offset_to_typed_object_base(jtl::ptr<void> type);
 

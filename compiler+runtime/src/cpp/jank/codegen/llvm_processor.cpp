@@ -1,10 +1,14 @@
+#include <algorithm>
 #include <list>
+#include <ranges>
 
 #include <Interpreter/Compatibility.h>
+#include <clang/AST/DeclCXX.h>
 #include <clang/Interpreter/CppInterOp.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
+#include <llvm/Demangle/Demangle.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/IR/IRBuilder.h>
@@ -14,6 +18,7 @@
 #include <llvm/Linker/Linker.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/StandardInstrumentations.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/Scalar/GVN.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 
@@ -29,12 +34,33 @@
 #include <jank/util/clang.hpp>
 #include <jank/util/cli.hpp>
 #include <jank/util/fmt/print.hpp>
+#include <jank/util/string.hpp>
 #include <jank/util/scope_exit.hpp>
 
 /* TODO: Remove exceptions. */
 namespace jank::codegen
 {
   using namespace jank::analyze;
+
+  namespace
+  {
+    std::string normalize_cpp_entity_name(std::string qualified)
+    {
+      std::string normalized;
+      normalized.reserve(qualified.size());
+      for(size_t idx{}; idx < qualified.size(); ++idx)
+      {
+        if(qualified[idx] == ':' && idx + 1 < qualified.size() && qualified[idx + 1] == ':')
+        {
+          normalized.push_back('.');
+          ++idx;
+          continue;
+        }
+        normalized.push_back(qualified[idx]);
+      }
+      return normalized;
+    }
+  }
 
   struct deferred_init
   {
@@ -2151,11 +2177,318 @@ namespace jank::codegen
   /* NOLINTNEXTLINE(readability-make-member-function-const): Affects overload resolution. */
   llvm::Value *llvm_processor::impl::gen(expr::cpp_raw_ref const expr, expr::function_arity const &)
   {
+    /* Capture stderr output (C++ compilation errors) so they appear in output. */
+    runtime::scoped_stderr_redirect const stderr_redirect{};
+
     auto parse_res{ __rt_ctx->jit_prc.interpreter->Parse(expr->code.c_str()) };
     if(!parse_res)
     {
       throw std::runtime_error{ "Unable to parse 'cpp/raw' expression." };
     }
+
+    auto stringify_type = [](llvm::Type const *type) {
+      std::string buffer;
+      llvm::raw_string_ostream stream{ buffer };
+      type->print(stream);
+      return stream.str();
+    };
+
+    auto same_signature = [](runtime::context::cpp_function_metadata const &lhs,
+                             runtime::context::cpp_function_metadata const &rhs) {
+      if(lhs.return_type != rhs.return_type)
+      {
+        return false;
+      }
+      if(lhs.arguments.size() != rhs.arguments.size())
+      {
+        return false;
+      }
+      for(usize i{}; i < lhs.arguments.size(); ++i)
+      {
+        auto const &lhs_arg(lhs.arguments[i]);
+        auto const &rhs_arg(rhs.arguments[i]);
+        if(lhs_arg.type != rhs_arg.type)
+        {
+          return false;
+        }
+        if(lhs_arg.name != rhs_arg.name)
+        {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    /* Extract function parameter names from Clang AST before LLVM optimization strips them */
+    std::unordered_map<std::string, std::vector<std::string>> ast_param_names;
+    auto const translation_unit_early{ parse_res->TUPart };
+    if(translation_unit_early != nullptr)
+    {
+      auto &compiler_instance{ *(__rt_ctx->jit_prc.interpreter->getCompilerInstance()) };
+      auto &source_manager{ compiler_instance.getSourceManager() };
+
+      for(auto const *decl : translation_unit_early->decls())
+      {
+        if(auto const *func_decl = llvm::dyn_cast<clang::FunctionDecl>(decl))
+        {
+          if(!func_decl->hasBody() || !func_decl->hasExternalFormalLinkage())
+          {
+            continue;
+          }
+
+          auto loc(func_decl->getBeginLoc());
+          if(!loc.isValid())
+          {
+            continue;
+          }
+          loc = source_manager.getSpellingLoc(loc);
+          auto const file_name(source_manager.getFilename(loc));
+          auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+          if(!in_main_file && !file_name.empty())
+          {
+            continue;
+          }
+
+          auto qualified_name(func_decl->getQualifiedNameAsString());
+          auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+          std::vector<std::string> param_names;
+          for(auto const *param : func_decl->parameters())
+          {
+            param_names.push_back(param->getNameAsString());
+          }
+          ast_param_names[normalized_name] = std::move(param_names);
+        }
+      }
+    }
+
+    for(auto const &f : parse_res->TheModule->functions())
+    {
+      if(!f.isDeclaration() && f.hasExternalLinkage())
+      {
+        auto demangled{ llvm::demangle(f.getName().str()) };
+        auto const open_paren{ demangled.find('(') };
+        std::string prefix{ demangled.substr(0, open_paren) };
+        util::trim(prefix);
+
+        std::string fn_name{ prefix };
+        auto const space{ prefix.rfind(' ') };
+        if(space != std::string::npos)
+        {
+          fn_name = prefix.substr(space + 1);
+        }
+        util::trim(fn_name);
+        if(fn_name.empty())
+        {
+          continue;
+        }
+
+        auto normalized_fn_name(normalize_cpp_entity_name(fn_name));
+        runtime::context::cpp_function_metadata metadata;
+        metadata.name
+          = jtl::immutable_string{ normalized_fn_name.data(), normalized_fn_name.size() };
+        auto const return_type_string(stringify_type(f.getReturnType()));
+        metadata.return_type
+          = jtl::immutable_string{ return_type_string.data(), return_type_string.size() };
+
+        /* Try to get parameter names from AST first, fall back to LLVM IR names */
+        auto const ast_names_it = ast_param_names.find(normalized_fn_name);
+        std::vector<std::string> const *param_names_ptr = nullptr;
+        if(ast_names_it != ast_param_names.end())
+        {
+          param_names_ptr = &ast_names_it->second;
+        }
+
+        usize arg_index{};
+        for(auto const &arg : f.args())
+        {
+          std::string arg_name;
+          /* First, try AST parameter names */
+          if(param_names_ptr != nullptr && arg_index < param_names_ptr->size()
+             && !(*param_names_ptr)[arg_index].empty())
+          {
+            arg_name = (*param_names_ptr)[arg_index];
+          }
+          /* Fall back to LLVM IR names */
+          else if(arg.hasName() && !arg.getName().empty())
+          {
+            arg_name = arg.getName().str();
+          }
+          /* Last resort: generate synthetic names */
+          else
+          {
+            arg_name = util::format("arg{}", arg_index);
+          }
+          auto const arg_type_string(stringify_type(arg.getType()));
+
+          runtime::context::cpp_function_argument_metadata argument;
+          argument.name = jtl::immutable_string{ arg_name.data(), arg_name.size() };
+          argument.type = jtl::immutable_string{ arg_type_string.data(), arg_type_string.size() };
+          metadata.arguments.emplace_back(std::move(argument));
+          ++arg_index;
+        }
+
+        auto locked_globals{ __rt_ctx->global_cpp_functions.wlock() };
+        auto &bucket((*locked_globals)[metadata.name]);
+        auto const existing(std::ranges::find_if(bucket, [&](auto const &entry) {
+          return same_signature(entry, metadata);
+        }));
+        if(existing == bucket.end())
+        {
+          bucket.emplace_back(std::move(metadata));
+        }
+        else
+        {
+          *existing = std::move(metadata);
+        }
+      }
+    }
+
+    std::vector<runtime::context::cpp_type_metadata> discovered_types;
+    auto const translation_unit{ parse_res->TUPart };
+    if(translation_unit != nullptr)
+    {
+      auto &compiler_instance{ *(__rt_ctx->jit_prc.interpreter->getCompilerInstance()) };
+      auto &source_manager{ compiler_instance.getSourceManager() };
+      auto &ast_context{ compiler_instance.getASTContext() };
+      clang::PrintingPolicy printing_policy{ ast_context.getPrintingPolicy() };
+      printing_policy.adjustForCPlusPlus();
+
+      auto const process_record = [&](clang::CXXRecordDecl const *record) -> void {
+        if(record == nullptr)
+        {
+          return;
+        }
+        if(!record->isCompleteDefinition() || record->isImplicit() || record->isLambda()
+           || record->isAnonymousStructOrUnion())
+        {
+          return;
+        }
+
+        auto loc(record->getBeginLoc());
+        if(!loc.isValid())
+        {
+          return;
+        }
+        loc = source_manager.getSpellingLoc(loc);
+        auto const file_name(source_manager.getFilename(loc));
+        auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+        // For cpp/raw expressions, code is parsed inline and may not be considered "main file"
+        // by Clang's source manager. We include records with empty filenames (inline code)
+        // and those in the main file, but exclude standard library and external headers.
+        if(!in_main_file && !file_name.empty())
+        {
+          return;
+        }
+
+        auto qualified_name(record->getQualifiedNameAsString());
+        if(qualified_name.empty())
+        {
+          return;
+        }
+        auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+        runtime::context::cpp_type_metadata metadata;
+        metadata.name = jtl::immutable_string{ normalized_name.data(), normalized_name.size() };
+        metadata.qualified_cpp_name
+          = jtl::immutable_string{ qualified_name.data(), qualified_name.size() };
+        if(record->isUnion())
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Union;
+        }
+        else if(record->isClass())
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Class;
+        }
+        else
+        {
+          metadata.kind = runtime::context::cpp_record_kind::Struct;
+        }
+
+        for(auto const *field : record->fields())
+        {
+          if(field == nullptr)
+          {
+            continue;
+          }
+          auto field_name(field->getNameAsString());
+          if(field_name.empty())
+          {
+            continue;
+          }
+          auto const field_type_string(field->getType().getAsString(printing_policy));
+          runtime::context::cpp_type_field_metadata field_metadata;
+          field_metadata.name = jtl::immutable_string{ field_name.data(), field_name.size() };
+          field_metadata.type
+            = jtl::immutable_string{ field_type_string.data(), field_type_string.size() };
+          metadata.fields.emplace_back(std::move(field_metadata));
+        }
+
+        for(auto const *ctor : record->ctors())
+        {
+          if(ctor == nullptr || ctor->isDeleted() || ctor->isImplicit())
+          {
+            continue;
+          }
+          runtime::context::cpp_function_metadata ctor_metadata;
+          ctor_metadata.name = jtl::immutable_string{ "constructor" };
+          ctor_metadata.return_type = metadata.qualified_cpp_name;
+
+          for(auto const *param : ctor->parameters())
+          {
+            if(param == nullptr)
+            {
+              continue;
+            }
+            auto param_name(param->getNameAsString());
+            if(param_name.empty())
+            {
+              param_name = "arg" + std::to_string(metadata.constructors.size());
+            }
+            auto const param_type_string(param->getType().getAsString(printing_policy));
+            runtime::context::cpp_function_argument_metadata arg_metadata;
+            arg_metadata.name = jtl::immutable_string{ param_name.data(), param_name.size() };
+            arg_metadata.type
+              = jtl::immutable_string{ param_type_string.data(), param_type_string.size() };
+            ctor_metadata.arguments.emplace_back(std::move(arg_metadata));
+          }
+          metadata.constructors.emplace_back(std::move(ctor_metadata));
+        }
+
+        discovered_types.emplace_back(std::move(metadata));
+      };
+
+      std::vector<clang::DeclContext const *> contexts;
+      contexts.reserve(8);
+      contexts.emplace_back(translation_unit);
+      while(!contexts.empty())
+      {
+        auto const *ctx(contexts.back());
+        contexts.pop_back();
+        for(auto const *decl : ctx->decls())
+        {
+          if(auto const *record = llvm::dyn_cast<clang::CXXRecordDecl>(decl))
+          {
+            process_record(record);
+          }
+
+          if(auto const *inner_ctx = llvm::dyn_cast<clang::DeclContext>(decl))
+          {
+            contexts.emplace_back(inner_ctx);
+          }
+        }
+      }
+    }
+
+    if(!discovered_types.empty())
+    {
+      auto locked_types{ __rt_ctx->global_cpp_types.wlock() };
+      for(auto &metadata : discovered_types)
+      {
+        (*locked_types)[metadata.name] = std::move(metadata);
+      }
+    }
+
     link_module(*ctx, parse_res->TheModule.get());
 
     auto const ret{ gen_global(jank_nil()) };
@@ -2221,6 +2554,22 @@ namespace jank::codegen
         return gen_ret(alloc);
       }
       return alloc;
+    }
+    if(expr->val_kind == expr::cpp_value::value_kind::string_literal)
+    {
+      /* Create a global string constant for the literal */
+      auto const str_const{ ctx->builder->CreateGlobalString(
+        llvm::StringRef(expr->literal_str.data() + 1, expr->literal_str.size() - 2),
+        ".str") };
+      auto const str_ptr{ ctx->builder->CreateInBoundsGEP(
+        str_const->getValueType(),
+        str_const,
+        { ctx->builder->getInt64(0), ctx->builder->getInt64(0) }) };
+      if(expr->position == expression_position::tail)
+      {
+        return gen_ret(str_ptr);
+      }
+      return str_ptr;
     }
 
     auto const callable{
@@ -2726,11 +3075,12 @@ namespace jank::codegen
       ctx->builder->getPtrTy(),
       { ctx->builder->getPtrTy(), ctx->builder->getPtrTy(), ctx->builder->getPtrTy() },
       false));
-    auto const fn(llvm_module->getOrInsertFunction("jank_unbox_with_source", fn_type));
+    /* Use lazy source parsing - only parse the source string on error (rare path) */
+    auto const fn(llvm_module->getOrInsertFunction("jank_unbox_lazy_source", fn_type));
 
     auto const type_str{ gen_c_string(Cpp::GetTypeAsString(Cpp::GetCanonicalType(expr->type))) };
-    auto const source_meta{ gen_global_from_read_string(source_to_meta(expr->source)) };
-    llvm::SmallVector<llvm::Value *, 3> const args{ type_str, value, source_meta };
+    auto const source_str{ gen_c_string(to_code_string(source_to_meta(expr->source))) };
+    llvm::SmallVector<llvm::Value *, 3> const args{ type_str, value, source_str };
     auto const call(ctx->builder->CreateCall(fn, args));
     ctx->builder->CreateStore(call, alloc);
 

@@ -1,4 +1,5 @@
 #include <fstream>
+#include <random>
 
 #include <jank/profile/time.hpp>
 #include <jank/util/fmt/print.hpp>
@@ -11,11 +12,32 @@ namespace jank::profile
   static constexpr jtl::immutable_string_view tag{ "jank::profile" };
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
   static std::ofstream output;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+  static thread_local std::minstd_rand rng{ std::random_device{}() };
+  /* Track which calls are being sampled (for paired enter/exit).
+   * We use a counter - increment on sampled enter, decrement on exit. */
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+  static thread_local i32 sampling_depth{ 0 };
+  /* Track depth inside clojure.core to avoid profiling core-to-core calls. */
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+  static thread_local i32 core_depth{ 0 };
 
   static auto now()
   {
     using namespace std::chrono;
     return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+  }
+
+  /* Returns true if this event should be sampled (recorded).
+   * When sample_rate is 0, all events are recorded.
+   * When sample_rate is N, ~1/N events are recorded (random sampling). */
+  static bool should_sample()
+  {
+    if(opts.profiler_sample_rate == 0)
+    {
+      return true;
+    }
+    return (rng() % opts.profiler_sample_rate) == 0;
   }
 
   void configure()
@@ -42,7 +64,20 @@ namespace jank::profile
   {
     if(opts.profiler_enabled)
     {
-      output << util::format("{} {} enter {}\n", tag, now(), region);
+      /* When sampling: if we're already in a sampled region, continue sampling.
+       * Otherwise, randomly decide whether to start sampling this subtree. */
+      if(opts.profiler_sample_rate > 0)
+      {
+        if(sampling_depth > 0 || should_sample())
+        {
+          ++sampling_depth;
+          output << util::format("{} {} enter {}\n", tag, now(), region);
+        }
+      }
+      else
+      {
+        output << util::format("{} {} enter {}\n", tag, now(), region);
+      }
     }
   }
 
@@ -50,7 +85,39 @@ namespace jank::profile
   {
     if(opts.profiler_enabled)
     {
-      output << util::format("{} {} exit {}\n", tag, now(), region);
+      /* When sampling: only output exit if we're in a sampled region. */
+      if(opts.profiler_sample_rate > 0)
+      {
+        if(sampling_depth > 0)
+        {
+          output << util::format("{} {} exit {}\n", tag, now(), region);
+          --sampling_depth;
+        }
+      }
+      else
+      {
+        output << util::format("{} {} exit {}\n", tag, now(), region);
+      }
+    }
+  }
+
+  void enter_core(jtl::immutable_string_view const &region)
+  {
+    /* Only profile clojure.core calls from non-core code.
+     * This avoids profiling internal core-to-core calls which add noise. */
+    if(core_depth == 0)
+    {
+      enter(region);
+    }
+    ++core_depth;
+  }
+
+  void exit_core(jtl::immutable_string_view const &region)
+  {
+    --core_depth;
+    if(core_depth == 0)
+    {
+      exit(region);
     }
   }
 

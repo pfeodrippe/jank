@@ -11,9 +11,14 @@
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/behavior/callable.hpp>
 #include <jank/runtime/core/to_string.hpp>
-#include <jank/runtime/obj/persistent_hash_map.hpp>
+#include <jank/runtime/core/munge.hpp>
+#include <jank/runtime/core/truthy.hpp>
+#include <jank/runtime/core/seq.hpp>
 #include <jank/runtime/obj/persistent_string.hpp>
 #include <jank/runtime/obj/persistent_vector.hpp>
+#include <jank/runtime/obj/persistent_hash_map.hpp>
+#include <jank/runtime/obj/keyword.hpp>
+#include <jank/runtime/obj/number.hpp>
 #include <jank/runtime/detail/type.hpp>
 #include <jank/analyze/processor.hpp>
 #include <jank/c_api.h>
@@ -33,9 +38,16 @@
 #include <clojure/core_native.hpp>
 #include <clojure/string_native.hpp>
 
+#ifndef JANK_TARGET_IOS
+  #include <jank/compile_server/server.hpp>
+#endif
+
 #ifdef JANK_PHASE_2
 extern "C" void jank_load_clojure_core();
 #endif
+extern "C" void jank_load_jank_nrepl_server_asio();
+extern "C" void jank_load_jank_arena_native();
+extern "C" void jank_load_jank_debug_allocator_native();
 
 namespace jank
 {
@@ -53,7 +65,105 @@ namespace jank
 
     {
       profile::timer const timer{ "eval user code" };
-      __rt_ctx->eval_file(util::cli::opts.target_file);
+      /* For WASM AOT or LLVM IR codegen, set compile_files_var to true so that eval_string
+       * generates proper module loader functions (jank_load_*).
+       * This makes the generated code compatible with the WASM runtime. */
+      if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot
+         || util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
+      {
+        /* Derive module name from file path (e.g., "wasm-examples/eita.jank" -> "eita") */
+        std::filesystem::path const file_path{ util::cli::opts.target_file.c_str() };
+        auto const module_name{ file_path.stem().string() };
+
+        context::binding_scope const compile_scope{ obj::persistent_hash_map::create_unique(
+          std::make_pair(__rt_ctx->compile_files_var, jank_true),
+          std::make_pair(__rt_ctx->current_module_var, make_box(module_name))) };
+        util::println("{}",
+                      to_code_string(__rt_ctx->eval_file(util::cli::opts.target_file).unwrap()));
+
+        /* For WASM AOT, generate export wrappers for vars with ^:export metadata */
+        if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot
+           && !util::cli::opts.save_cpp_path.empty())
+        {
+          /* Demunge the module name: convert underscores to hyphens for namespace lookup.
+           * File names use underscores (my_flecs_wasm.jank) but namespaces use hyphens (my-flecs-wasm). */
+          std::string ns_name{ module_name };
+          std::ranges::replace(ns_name, '_', '-');
+          auto const ns(__rt_ctx->find_ns(make_box<obj::symbol>(ns_name)));
+          if(!ns.is_nil())
+          {
+            std::ofstream cpp_out(util::cli::opts.save_cpp_path.c_str(), std::ios::app);
+            if(cpp_out.is_open())
+            {
+              auto const export_kw(__rt_ctx->intern_keyword("export").expect_ok());
+              bool has_exports = false;
+
+              /* Scan all vars in the namespace for :export metadata */
+              auto const mappings(ns->get_mappings());
+              for(auto const &pair : mappings->data)
+              {
+                /* pair.first is the symbol, pair.second is the var */
+                auto const sym(expect_object<obj::symbol>(pair.first));
+                auto const var_obj(dyn_cast<var>(pair.second));
+                if(var_obj.is_nil() || var_obj->meta.is_none())
+                {
+                  continue;
+                }
+
+                auto const meta(var_obj->meta.unwrap());
+                auto const export_val(get(meta, export_kw.erase()));
+                if(truthy(export_val))
+                {
+                  if(!has_exports)
+                  {
+                    cpp_out << "\n// WASM exports for ^:export vars\n";
+                    cpp_out
+                      << "// These functions can be called from JavaScript via ccall/cwrap\n\n";
+                    has_exports = true;
+                  }
+
+                  auto const var_name(sym->name);
+                  auto const munged_name(munge(var_name));
+
+                  /* Generate an extern "C" wrapper that takes a double argument
+                   * and boxes it as a jank integer before calling the function.
+                   * Uses double because JavaScript numbers are IEEE 754 doubles,
+                   * and this avoids BigInt conversion issues with long long.
+                   * Returns a double for the same reason. */
+                  cpp_out << "extern \"C\" double jank_export_" << munged_name
+                          << "(double arg) {\n";
+                  cpp_out << "  using namespace jank::runtime;\n";
+                  cpp_out << "  auto const var = __rt_ctx->find_var(\"" << ns_name << "\", \""
+                          << var_name << "\");\n";
+                  cpp_out << "  if(var.is_nil()) { return 0; }\n";
+                  cpp_out << "  auto const fn = var->deref();\n";
+                  cpp_out << "  auto const boxed_arg = "
+                             "make_box<obj::integer>(static_cast<jank::i64>(arg));\n";
+                  cpp_out << "  auto const result = jank::runtime::dynamic_call(fn, boxed_arg);\n";
+                  cpp_out << "  // Try to unbox the result as an integer\n";
+                  cpp_out << "  auto const int_result = dyn_cast<obj::integer>(result);\n";
+                  cpp_out << "  if(!int_result.is_nil()) { return "
+                             "static_cast<double>(int_result->data); }\n";
+                  cpp_out << "  // Try to unbox as a real (double)\n";
+                  cpp_out << "  auto const real_result = dyn_cast<obj::real>(result);\n";
+                  cpp_out << "  if(!real_result.is_nil()) { return real_result->data; }\n";
+                  cpp_out << "  // If not a number, return 0\n";
+                  cpp_out << "  return 0;\n";
+                  cpp_out << "}\n\n";
+
+                  std::cerr << "[jank] Generated WASM export wrapper for: " << var_name << "\n";
+                }
+              }
+
+              cpp_out.close();
+            }
+          }
+        }
+      }
+      else
+      {
+        __rt_ctx->eval_file(util::cli::opts.target_file);
+      }
     }
 
     //ankerl::nanobench::Config config;
@@ -86,7 +196,41 @@ namespace jank
     {
       profile::timer const timer{ "eval user code" };
       __rt_ctx->load_module("/" + opts.target_module, module::origin::latest).expect_ok();
+    }
 
+#ifndef JANK_TARGET_IOS
+    /* Start iOS compile server if requested.
+     * This runs in a separate thread so the main game loop can continue.
+     * The compile server uses the already-initialized runtime context with
+     * all native headers parsed, so iOS apps can remotely compile code. */
+    std::unique_ptr<compile_server::server> ios_server;
+    if(opts.ios_compile_server_port != 0)
+    {
+      std::cout << "[ios-compile-server] Starting on port " << opts.ios_compile_server_port << "..."
+                << std::endl;
+
+      auto const ios_res_dir = opts.ios_resource_dir.empty()
+        ? util::resource_dir()
+        : jtl::immutable_string{ opts.ios_resource_dir };
+      auto config = compile_server::make_ios_simulator_config(ios_res_dir);
+
+      ios_server
+        = std::make_unique<compile_server::server>(opts.ios_compile_server_port, std::move(config));
+      ios_server->start();
+
+      if(ios_server->is_running())
+      {
+        std::cout << "[ios-compile-server] Ready for iOS connections." << std::endl;
+      }
+      else
+      {
+        std::cerr << "[ios-compile-server] Failed to start!" << std::endl;
+      }
+    }
+#endif
+
+    {
+      profile::timer const timer{ "run -main" };
       auto const main_var(__rt_ctx->find_var(opts.target_module, "-main"));
       if(main_var.is_some())
       {
@@ -105,6 +249,15 @@ namespace jank
                                                opts.target_module) };
       }
     }
+
+#ifndef JANK_TARGET_IOS
+    /* Stop iOS compile server when main exits. */
+    if(ios_server && ios_server->is_running())
+    {
+      std::cout << "[ios-compile-server] Stopping..." << std::endl;
+      ios_server->stop();
+    }
+#endif
   }
 
   static void compile_module()
@@ -174,6 +327,21 @@ namespace jank
       __rt_ctx->load_module("/clojure.core", module::origin::latest).expect_ok();
     }
     __rt_ctx->compile_module(opts.target_module).expect_ok();
+
+    /* Print loaded modules in dependency order if requested */
+    if(opts.list_modules)
+    {
+      auto const modules_rlocked{ __rt_ctx->loaded_modules_in_order.rlock() };
+      for(auto const &it : *modules_rlocked)
+      {
+        /* Skip core modules - they're part of libjank */
+        if(module::is_core_module(it))
+        {
+          continue;
+        }
+        util::println("{}", it);
+      }
+    }
   }
 
   static void repl()
@@ -181,15 +349,25 @@ namespace jank
     using namespace jank;
     using namespace jank::runtime;
 
-    /* TODO: REPL server. */
-    if(opts.repl_server)
-    {
-      throw std::runtime_error{ "Not yet implemented: REPL server" };
-    }
-
     {
       profile::timer const timer{ "require clojure.core" };
       __rt_ctx->load_module("/clojure.core", module::origin::latest).expect_ok();
+    }
+
+    if(opts.repl_server)
+    {
+      /* Load and start the nREPL server */
+      __rt_ctx->load_module("/jank.nrepl-server.core", module::origin::latest).expect_ok();
+      auto const main_var(__rt_ctx->find_var("jank.nrepl-server.core", "-main"));
+      if(main_var.is_some())
+      {
+        dynamic_call(main_var->deref());
+      }
+      else
+      {
+        throw std::runtime_error{ "Could not find jank.nrepl-server.core/-main" };
+      }
+      return;
     }
 
     dynamic_call(__rt_ctx->in_ns_var->deref(), make_box<obj::symbol>("user"));
@@ -382,6 +560,9 @@ int main(int const argc, char const **argv)
     jank_load_clojure_core_native();
     jank_load_jank_compiler_native();
     jank_load_jank_perf_native();
+    jank_load_jank_nrepl_server_asio();
+    jank_load_jank_arena_native();
+    jank_load_jank_debug_allocator_native();
 
 #ifdef JANK_PHASE_2
     jank_load_clojure_core();

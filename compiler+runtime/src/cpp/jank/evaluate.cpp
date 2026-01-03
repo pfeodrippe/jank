@@ -1,7 +1,16 @@
-#include <Interpreter/Compatibility.h>
-#include <Interpreter/CppInterOpInterpreter.h>
-#include <clang/Interpreter/CppInterOp.h>
-#include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#if !defined(JANK_TARGET_EMSCRIPTEN) || defined(JANK_HAS_CPPINTEROP)
+  #include <Interpreter/Compatibility.h>
+  #include <Interpreter/CppInterOpInterpreter.h>
+  #include <clang/Interpreter/CppInterOp.h>
+  #include <clang/AST/Decl.h>
+  #include <clang/AST/DeclCXX.h>
+  #include <clang/Frontend/CompilerInstance.h>
+  #include <llvm/Support/Casting.h>
+#endif
+
+#ifndef JANK_TARGET_WASM
+  #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#endif
 
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/ns.hpp>
@@ -9,7 +18,9 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/behavior/callable.hpp>
-#include <jank/codegen/llvm_processor.hpp>
+#ifndef JANK_TARGET_WASM
+  #include <jank/codegen/llvm_processor.hpp>
+#endif
 #include <jank/codegen/processor.hpp>
 #include <jank/jit/processor.hpp>
 #include <jank/evaluate.hpp>
@@ -19,12 +30,35 @@
 #include <jank/util/clang_format.hpp>
 #include <jank/analyze/visit.hpp>
 #include <jank/analyze/cpp_util.hpp>
+#include <jank/analyze/expression_hash.hpp>
 #include <jank/error/analyze.hpp>
+#include <jank/error/codegen.hpp>
 
 namespace jank::evaluate
 {
   using namespace jank::runtime;
   using namespace jank::analyze;
+
+  namespace
+  {
+    /* Normalizes C++ names by replacing "::" with "." for jank symbol compatibility. */
+    std::string normalize_cpp_entity_name(std::string qualified)
+    {
+      std::string normalized;
+      normalized.reserve(qualified.size());
+      for(size_t idx{}; idx < qualified.size(); ++idx)
+      {
+        if(qualified[idx] == ':' && idx + 1 < qualified.size() && qualified[idx + 1] == ':')
+        {
+          normalized.push_back('.');
+          ++idx;
+          continue;
+        }
+        normalized.push_back(qualified[idx]);
+      }
+      return normalized;
+    }
+  }
 
   /* TODO: Move postwalk into the nodes. */
   template <typename T, typename F>
@@ -148,7 +182,8 @@ namespace jank::evaluate
     expr::function_arity arity{ jtl::move(params),
                                 jtl::make_ref<expr::do_>(expression_position::tail, frame, true),
                                 frame,
-                                fn_ctx };
+                                fn_ctx,
+                                jtl::none };
     expr->frame->parent = arity.frame;
     ret->frame = arity.frame->parent.unwrap_or(arity.frame);
     fn_ctx->name = ret->name;
@@ -264,6 +299,7 @@ namespace jank::evaluate
 
   object_ref eval(expr::def_ref const expr)
   {
+    profile::timer const timer{ "eval:def" };
     auto var(__rt_ctx->intern_var(expr->name).expect_ok());
     var->meta = expr->name->meta;
 
@@ -276,6 +312,35 @@ namespace jank::evaluate
       return var;
     }
 
+    /* Incremental JIT: Check if we can skip compilation by using cached version.
+     * Only applies when JIT cache is enabled. */
+    if(util::cli::opts.jit_cache_enabled)
+    {
+      auto const value_expr = expr->value.unwrap();
+      auto const body_hash = hash_expression(value_expr);
+      auto const qualified_name = expr->name;
+
+      /* Check if we already have this exact definition compiled. */
+      if(auto cached_var = __rt_ctx->jit_cache.get(qualified_name, body_hash))
+      {
+        __rt_ctx->jit_cache.record_hit();
+        /* The var is already bound with the correct value - just return it. */
+        return cached_var.unwrap();
+      }
+
+      __rt_ctx->jit_cache.record_miss();
+
+      /* Cache miss - need to compile. */
+      auto const evaluated_value(eval(value_expr));
+      var->bind_root(evaluated_value);
+
+      /* Store in cache for future reuse. */
+      __rt_ctx->jit_cache.store(qualified_name, body_hash, var);
+
+      return var;
+    }
+
+    /* JIT cache disabled - always compile. */
     auto const evaluated_value(eval(expr->value.unwrap()));
     var->bind_root(evaluated_value);
 
@@ -503,7 +568,8 @@ namespace jank::evaluate
     auto const size(expr->data_exprs.size());
     if(size <= obj::persistent_array_map::max_size)
     {
-      auto const array_box(make_array_box<object_ref>(size * 2llu));
+      auto const array_box(
+        make_array_box<object_ref>(static_cast<usize>(size) * static_cast<usize>(2)));
       usize i{};
       for(auto const &e : expr->data_exprs)
       {
@@ -570,10 +636,13 @@ namespace jank::evaluate
   object_ref eval(expr::function_ref const expr)
   {
     profile::timer const timer{ util::format("eval jit function {}", expr->name) };
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     auto const &module(
       module::nest_module(expect_object<ns>(__rt_ctx->current_ns_var->deref())->to_string(),
                           munge(expr->unique_name)));
 
+  #ifndef JANK_TARGET_WASM
+    /* Native builds support both LLVM IR and C++ codegen */
     if(util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
     {
       /* TODO: Remove extra wrapper, if possible. Just create function object directly? */
@@ -582,34 +651,64 @@ namespace jank::evaluate
       codegen::llvm_processor const cg_prc{ wrapped_expr,
                                             module,
                                             codegen::compilation_target::eval };
-      cg_prc.gen().expect_ok();
-      cg_prc.optimize();
+      {
+        profile::timer const gtimer{ "eval:fn:llvm_gen" };
+        cg_prc.gen().expect_ok();
+        cg_prc.optimize();
+      }
 
-      __rt_ctx->jit_prc.load_ir_module(jtl::move(cg_prc.get_module()));
+      {
+        profile::timer const ltimer{ "eval:fn:llvm_load" };
+        __rt_ctx->jit_prc.load_ir_module(jtl::move(cg_prc.get_module()));
+      }
 
       auto const fn(
         __rt_ctx->jit_prc.find_symbol(util::format("{}_0", munge(cg_prc.get_root_fn_name())))
           .expect_ok());
       return reinterpret_cast<object *(*)()>(fn)();
     }
-    else
+  #else
+    /* WASM only supports C++ codegen, not LLVM IR */
+    if(util::cli::opts.codegen == util::cli::codegen_type::llvm_ir)
     {
-      codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
-
-      /* TODO: Rename to something generic which makes sense for IR and C++ gen? */
-      jtl::immutable_string_view const print_settings{ getenv("JANK_PRINT_IR") ?: "" };
-      if(print_settings == "1")
-      {
-        util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
-      }
-
-      __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
-      auto const expr_str{ cg_prc.expression_str() + ".erase().data" };
-      clang::Value v;
-      __rt_ctx->jit_prc.eval_string({ expr_str.data(), expr_str.size() }, &v);
-      auto ret{ try_object<obj::jit_function>(v.convertTo<runtime::object *>()) };
-      return ret;
+      throw make_box("LLVM IR codegen not supported in WASM - use C++ codegen").erase();
     }
+  #endif
+
+    /* C++ codegen path - works for both native and WASM */
+    codegen::processor cg_prc{ expr, module, codegen::compilation_target::eval };
+
+    /* TODO: Rename to something generic which makes sense for IR and C++ gen? */
+    jtl::immutable_string_view const print_settings{ getenv("JANK_PRINT_IR") ?: "" };
+    if(print_settings == "1")
+    {
+      util::println("{}\n", util::format_cpp_source(cg_prc.declaration_str()).expect_ok());
+    }
+
+    {
+      profile::timer const jtimer{ "eval:fn:cpp_jit_decl" };
+      __rt_ctx->jit_prc.eval_string(cg_prc.declaration_str());
+    }
+    auto const expr_str{ cg_prc.expression_str() + ".erase().data" };
+    clang::Value v;
+    {
+      profile::timer const etimer{ "eval:fn:cpp_jit_expr" };
+      auto res(
+        __rt_ctx->jit_prc.interpreter->ParseAndExecute({ expr_str.data(), expr_str.size() }, &v));
+      if(res)
+      {
+        /* TODO: Helper to turn an llvm::Error into a string. */
+        jtl::immutable_string const msg{ "Unable to compile/eval C++ source." };
+        llvm::logAllUnhandledErrors(jtl::move(res), llvm::errs(), "error: ");
+        llvm::errs().flush();
+        throw error::internal_codegen_failure(msg);
+      }
+    }
+    return try_object<obj::jit_function>(v.convertTo<runtime::object *>());
+#else /* No CppInterOp */
+    (void)expr;
+    throw make_box("eval not supported in WASM without CppInterOp").erase();
+#endif /* CppInterOp available */
   }
 
   object_ref eval(expr::recur_ref const)
@@ -706,8 +805,346 @@ namespace jank::evaluate
 
   object_ref eval(expr::cpp_raw_ref const expr)
   {
-    __rt_ctx->jit_prc.eval_string(expr->code);
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+    auto const &interpreter{ __rt_ctx->jit_prc.interpreter };
+
+    /* Parse and execute the C++ code */
+    auto parse_res{ interpreter->Parse(expr->code.c_str()) };
+    if(!parse_res)
+    {
+      /* Parse failed - report the error */
+      llvm::logAllUnhandledErrors(parse_res.takeError(), llvm::errs(), "cpp/raw parse error: ");
+      llvm::errs().flush();
+      throw make_box("Failed to parse cpp/raw code").erase();
+    }
+    if(parse_res)
+    {
+      auto const translation_unit{ parse_res->TUPart };
+      if(translation_unit != nullptr)
+      {
+        auto &compiler_instance{ *(interpreter->getCompilerInstance()) };
+        auto &ast_context{ compiler_instance.getASTContext() };
+        auto &source_manager{ compiler_instance.getSourceManager() };
+        clang::PrintingPolicy printing_policy{ ast_context.getPrintingPolicy() };
+        printing_policy.adjustForCPlusPlus();
+
+        auto same_signature = [](runtime::context::cpp_function_metadata const &lhs,
+                                 runtime::context::cpp_function_metadata const &rhs) {
+          if(lhs.return_type != rhs.return_type)
+          {
+            return false;
+          }
+          if(lhs.arguments.size() != rhs.arguments.size())
+          {
+            return false;
+          }
+          for(usize i{}; i < lhs.arguments.size(); ++i)
+          {
+            if(lhs.arguments[i].type != rhs.arguments[i].type)
+            {
+              return false;
+            }
+          }
+          return true;
+        };
+
+        native_vector<runtime::context::cpp_type_metadata> discovered_types;
+
+        /* Lambda to process a CXXRecordDecl (struct/class/union) */
+        auto const process_record = [&](clang::CXXRecordDecl const *record) -> void {
+          if(record == nullptr)
+          {
+            return;
+          }
+          if(!record->isCompleteDefinition() || record->isImplicit() || record->isLambda()
+             || record->isAnonymousStructOrUnion())
+          {
+            return;
+          }
+
+          auto loc(record->getBeginLoc());
+          if(!loc.isValid())
+          {
+            return;
+          }
+          loc = source_manager.getSpellingLoc(loc);
+          auto const file_name(source_manager.getFilename(loc));
+          auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+          if(!in_main_file && !file_name.empty())
+          {
+            return;
+          }
+
+          auto qualified_name(record->getQualifiedNameAsString());
+          if(qualified_name.empty())
+          {
+            return;
+          }
+          auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+          runtime::context::cpp_type_metadata metadata;
+          metadata.name = jtl::immutable_string{ normalized_name.data(), normalized_name.size() };
+          metadata.qualified_cpp_name
+            = jtl::immutable_string{ qualified_name.data(), qualified_name.size() };
+          if(record->isUnion())
+          {
+            metadata.kind = runtime::context::cpp_record_kind::Union;
+          }
+          else if(record->isClass())
+          {
+            metadata.kind = runtime::context::cpp_record_kind::Class;
+          }
+          else
+          {
+            metadata.kind = runtime::context::cpp_record_kind::Struct;
+          }
+
+          for(auto const *field : record->fields())
+          {
+            if(field == nullptr)
+            {
+              continue;
+            }
+            auto field_name(field->getNameAsString());
+            if(field_name.empty())
+            {
+              continue;
+            }
+            auto const field_type_string(field->getType().getAsString(printing_policy));
+            runtime::context::cpp_type_field_metadata field_metadata;
+            field_metadata.name = jtl::immutable_string{ field_name.data(), field_name.size() };
+            field_metadata.type
+              = jtl::immutable_string{ field_type_string.data(), field_type_string.size() };
+            metadata.fields.emplace_back(std::move(field_metadata));
+          }
+
+          for(auto const *ctor : record->ctors())
+          {
+            if(ctor == nullptr || ctor->isDeleted() || ctor->isImplicit())
+            {
+              continue;
+            }
+            runtime::context::cpp_function_metadata ctor_metadata;
+            ctor_metadata.name = jtl::immutable_string{ "constructor" };
+            ctor_metadata.return_type = metadata.qualified_cpp_name;
+
+            for(auto const *param : ctor->parameters())
+            {
+              if(param == nullptr)
+              {
+                continue;
+              }
+              auto param_name(param->getNameAsString());
+              if(param_name.empty())
+              {
+                param_name = "arg" + std::to_string(ctor_metadata.arguments.size());
+              }
+              auto const param_type_string(param->getType().getAsString(printing_policy));
+              runtime::context::cpp_function_argument_metadata arg_metadata;
+              arg_metadata.name = jtl::immutable_string{ param_name.data(), param_name.size() };
+              arg_metadata.type
+                = jtl::immutable_string{ param_type_string.data(), param_type_string.size() };
+              ctor_metadata.arguments.emplace_back(std::move(arg_metadata));
+            }
+            metadata.constructors.emplace_back(std::move(ctor_metadata));
+          }
+
+          discovered_types.emplace_back(std::move(metadata));
+        };
+
+        /* CppInterOp adds a preamble before user code, which offsets Clang line numbers.
+         * This constant represents the number of preamble lines to subtract. */
+        constexpr unsigned cpp_interop_preamble_lines{ 3 };
+
+        /* Iterate through all contexts to find functions and types */
+        native_vector<clang::DeclContext const *> contexts;
+        contexts.reserve(8);
+        contexts.emplace_back(translation_unit);
+        while(!contexts.empty())
+        {
+          auto const *ctx(contexts.back());
+          contexts.pop_back();
+
+          for(auto const *decl : ctx->decls())
+          {
+            /* Process functions */
+            if(auto const *func_decl = llvm::dyn_cast<clang::FunctionDecl>(decl))
+            {
+              if(!func_decl->hasBody() || !func_decl->hasExternalFormalLinkage())
+              {
+                continue;
+              }
+
+              auto loc(func_decl->getBeginLoc());
+              if(!loc.isValid())
+              {
+                continue;
+              }
+              loc = source_manager.getSpellingLoc(loc);
+              auto const file_name(source_manager.getFilename(loc));
+              auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+              if(!in_main_file && !file_name.empty())
+              {
+                continue;
+              }
+
+              auto qualified_name(func_decl->getQualifiedNameAsString());
+              auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+              runtime::context::cpp_function_metadata metadata;
+              metadata.name
+                = jtl::immutable_string{ normalized_name.data(), normalized_name.size() };
+
+              auto const return_type(func_decl->getReturnType());
+              auto const return_type_str(return_type.getAsString(printing_policy));
+              metadata.return_type
+                = jtl::immutable_string{ return_type_str.data(), return_type_str.size() };
+
+              for(auto const *param : func_decl->parameters())
+              {
+                runtime::context::cpp_function_argument_metadata argument;
+                auto const param_name(param->getNameAsString());
+                argument.name = jtl::immutable_string{ param_name.data(), param_name.size() };
+
+                auto const param_type(param->getType());
+                auto const param_type_str(param_type.getAsString(printing_policy));
+                argument.type
+                  = jtl::immutable_string{ param_type_str.data(), param_type_str.size() };
+
+                metadata.arguments.emplace_back(std::move(argument));
+              }
+
+              /* Store the jank source location where cpp/raw was called,
+               * plus the line offset within the C++ code */
+              if(expr->source.is_some())
+              {
+                auto const &src(expr->source.unwrap());
+                metadata.origin = src.file;
+                /* Calculate the line offset relative to the start of user code.
+                 * Subtract the CppInterOp preamble lines and 1 (since line 1 of user code
+                 * is the same line as the cpp/raw call). */
+                auto const cpp_line(source_manager.getSpellingLineNumber(loc));
+                metadata.origin_line = static_cast<std::int64_t>(src.start.line)
+                  + static_cast<std::int64_t>(cpp_line - cpp_interop_preamble_lines - 1);
+                metadata.origin_column = static_cast<std::int64_t>(src.start.col);
+              }
+
+              auto locked_globals{ __rt_ctx->global_cpp_functions.wlock() };
+              auto &bucket((*locked_globals)[metadata.name]);
+              auto const existing(std::ranges::find_if(bucket, [&](auto const &entry) {
+                return same_signature(entry, metadata);
+              }));
+              if(existing == bucket.end())
+              {
+                bucket.emplace_back(std::move(metadata));
+              }
+              else
+              {
+                *existing = std::move(metadata);
+              }
+            }
+
+            /* Process global/static variables */
+            if(auto const *var_decl = llvm::dyn_cast<clang::VarDecl>(decl))
+            {
+              /* Only process static variables with file scope */
+              if(!var_decl->hasGlobalStorage())
+              {
+                continue;
+              }
+
+              auto loc(var_decl->getBeginLoc());
+              if(!loc.isValid())
+              {
+                continue;
+              }
+              loc = source_manager.getSpellingLoc(loc);
+              auto const in_main_file(source_manager.isWrittenInMainFile(loc));
+              auto const file_name(source_manager.getFilename(loc));
+              if(!in_main_file && !file_name.empty())
+              {
+                continue;
+              }
+
+              auto qualified_name(var_decl->getQualifiedNameAsString());
+              auto normalized_name(normalize_cpp_entity_name(qualified_name));
+
+              runtime::context::cpp_variable_metadata metadata;
+              metadata.name
+                = jtl::immutable_string{ normalized_name.data(), normalized_name.size() };
+
+              auto const var_type(var_decl->getType());
+              auto const var_type_str(var_type.getAsString(printing_policy));
+              metadata.type = jtl::immutable_string{ var_type_str.data(), var_type_str.size() };
+
+              /* Store the jank source location where cpp/raw was called,
+               * plus the line offset within the C++ code */
+              if(expr->source.is_some())
+              {
+                auto const &src(expr->source.unwrap());
+                metadata.origin = src.file;
+                /* Calculate the line offset relative to the start of user code.
+                 * Subtract the CppInterOp preamble lines and 1 (since line 1 of user code
+                 * is the same line as the cpp/raw call). */
+                auto const cpp_line(source_manager.getSpellingLineNumber(loc));
+                metadata.origin_line = static_cast<std::int64_t>(src.start.line)
+                  + static_cast<std::int64_t>(cpp_line - cpp_interop_preamble_lines - 1);
+                metadata.origin_column = static_cast<std::int64_t>(src.start.col);
+              }
+
+              auto locked_globals{ __rt_ctx->global_cpp_variables.wlock() };
+              (*locked_globals)[metadata.name] = std::move(metadata);
+            }
+
+            /* Process types (structs/classes/unions) */
+            if(auto const *record = llvm::dyn_cast<clang::CXXRecordDecl>(decl))
+            {
+              process_record(record);
+            }
+
+            /* Recurse into nested contexts (namespaces, etc.) */
+            if(auto const *inner_ctx = llvm::dyn_cast<clang::DeclContext>(decl))
+            {
+              contexts.emplace_back(inner_ctx);
+            }
+          }
+        }
+
+        /* Register discovered types */
+        if(!discovered_types.empty())
+        {
+          auto locked_types{ __rt_ctx->global_cpp_types.wlock() };
+          for(auto &metadata : discovered_types)
+          {
+            (*locked_types)[metadata.name] = std::move(metadata);
+          }
+        }
+      }
+    }
+
+    /* Execute the parsed code. We must use Execute() on the parse result, not eval_string(),
+     * because Parse() already registered the declarations. Calling eval_string() would try
+     * to parse the same code again, causing symbol conflicts. */
+    if(parse_res)
+    {
+      auto err(interpreter->Execute(*parse_res));
+      if(err)
+      {
+        llvm::logAllUnhandledErrors(jtl::move(err), llvm::errs(), "cpp/raw execute error: ");
+        llvm::errs().flush();
+        throw make_box("Failed to execute cpp/raw code").erase();
+      }
+    }
+    else
+    {
+      /* Parse failed or returned no result - fall back to eval_string */
+      __rt_ctx->jit_prc.eval_string(expr->code);
+    }
     return runtime::jank_nil();
+#else
+    (void)expr;
+    throw make_box("eval not supported in WASM without CppInterOp").erase();
+#endif
   }
 
   object_ref eval(expr::cpp_type_ref const)

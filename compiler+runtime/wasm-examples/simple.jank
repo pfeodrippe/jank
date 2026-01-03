@@ -1,0 +1,6 @@
+(ns simple)
+
+; Very simple test for WAS AOT
+(def result 42)
+
+(println "Result:" result)

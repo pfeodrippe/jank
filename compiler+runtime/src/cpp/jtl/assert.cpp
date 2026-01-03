@@ -1,4 +1,4 @@
-#include <cpptrace/basic.hpp>
+#include <jank/util/cpptrace.hpp>
 
 #include <jtl/assert.hpp>
 #include <jank/util/fmt/print.hpp>

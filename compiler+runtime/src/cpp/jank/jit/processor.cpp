@@ -2,6 +2,7 @@
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Frontend/FrontendDiagnostic.h>
+#include <clang/Interpreter/Value.h>
 #include <Interpreter/Compatibility.h>
 #include <clang/Interpreter/CppInterOp.h>
 #include <llvm/ExecutionEngine/Orc/Core.h>
@@ -14,7 +15,11 @@
 #include <llvm/ExecutionEngine/JITEventListener.h>
 #include <llvm/IRReader/IRReader.h>
 
-#include <cpptrace/gdb_jit.hpp>
+#ifdef JANK_IOS_JIT
+  #include <dlfcn.h>
+#endif
+
+#include <jank/util/cpptrace.hpp>
 
 #include <jank/jit/processor.hpp>
 #include <jank/util/make_array.hpp>
@@ -29,6 +34,30 @@
 
 namespace jank::jit
 {
+  /* Thread-local recovery point for LLVM fatal errors. */
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+  static thread_local jmp_buf *jit_recovery_buf{ nullptr };
+
+  void set_jit_recovery_point(jmp_buf *buf)
+  {
+    jit_recovery_buf = buf;
+  }
+
+  jmp_buf *get_jit_recovery_point()
+  {
+    return jit_recovery_buf;
+  }
+
+  scoped_jit_recovery::scoped_jit_recovery(jmp_buf &buf)
+  {
+    set_jit_recovery_point(&buf);
+  }
+
+  scoped_jit_recovery::~scoped_jit_recovery()
+  {
+    set_jit_recovery_point(nullptr);
+  }
+
   static jtl::immutable_string default_shared_lib_name(jtl::immutable_string const &lib)
 #if defined(__APPLE__)
   {
@@ -40,20 +69,25 @@ namespace jank::jit
   }
 #endif
 
-  [[maybe_unused]]
-  static void
-  handle_fatal_llvm_error(void * const user_data, char const *message, bool const gen_crash_diag)
+  static void handle_fatal_llvm_error(void * const, char const *message, bool const gen_crash_diag)
   {
-    auto &diags(*static_cast<clang::DiagnosticsEngine *>(user_data));
-    diags.Report(clang::diag::err_fe_error_backend) << message;
+    /* Log the error message to stderr. */
+    std::cerr << "LLVM fatal error: " << (message ? message : "(null)") << "\n";
 
     /* Run the interrupt handlers to make sure any special cleanups get done, in
        particular that we remove files registered with RemoveFileOnSignal. */
     llvm::sys::RunInterruptHandlers();
 
-    /* We cannot recover from llvm errors.  When reporting a fatal error, exit
-       with status 70 to generate crash diagnostics.  For BSD systems this is
-       defined as an internal software error. Otherwise, exit with status 1. */
+    /* Check if a recovery point has been registered (e.g., by nREPL eval).
+     * If so, longjmp to it instead of exiting. This allows the caller to
+     * handle the error gracefully. */
+    if(auto *buf = get_jit_recovery_point())
+    {
+      // NOLINTNEXTLINE(modernize-avoid-setjmp-longjmp)
+      longjmp(*buf, JIT_FATAL_ERROR_SIGNAL);
+    }
+
+    /* No recovery point - exit as before. */
     std::exit(gen_crash_diag ? 70 : 1);
   }
 
@@ -153,6 +187,8 @@ namespace jank::jit
     args.emplace_back(strdup(util::format("{}/lib", jank_resource_dir).c_str()));
 
     /* We need to include our special runtime PCH. */
+#if !defined(JANK_TARGET_IOS)
+    /* On desktop, build PCH on demand if not found. */
     auto pch_path{ util::find_pch(binary_version) };
     if(pch_path.is_none())
     {
@@ -166,6 +202,21 @@ namespace jank::jit
     auto const &pch_path_str{ pch_path.unwrap() };
     args.emplace_back("-include-pch");
     args.emplace_back(strdup(pch_path_str.c_str()));
+#else
+    /* On iOS, PCH is optional - if it exists (pre-bundled), use it.
+     * Otherwise we'll parse the prelude header after interpreter creation. */
+    auto pch_path{ util::find_pch(binary_version) };
+    bool const has_pch{ pch_path.is_some() };
+    if(has_pch)
+    {
+      auto const &pch_path_str{ pch_path.unwrap() };
+      args.emplace_back("-include-pch");
+      args.emplace_back(strdup(pch_path_str.c_str()));
+    }
+#endif
+
+    args.emplace_back("-w");
+    args.emplace_back("-Wno-c++11-narrowing");
 
     args.emplace_back("-w");
     args.emplace_back("-Wno-c++11-narrowing");
@@ -194,6 +245,26 @@ namespace jank::jit
     interpreter.reset(static_cast<Cpp::Interpreter *>(
       Cpp::CreateInterpreter(args, {}, vfs, static_cast<int>(llvm::CodeModel::Large))));
 
+#if defined(JANK_TARGET_IOS)
+    /* On iOS without PCH, we need to explicitly include the prelude header
+     * so that jank types are available for the analyzer. This is slower than
+     * using a pre-compiled header, but ensures types are properly registered. */
+    if(!has_pch)
+    {
+      profile::timer const pch_timer{ "jit prelude parse" };
+      auto result = interpreter->process("#include <jank/prelude.hpp>");
+      if(result != Cpp::Interpreter::kSuccess)
+      {
+        throw std::runtime_error("Failed to parse jank prelude header");
+      }
+    }
+#endif
+
+    /* Install our custom fatal error handler so we can recover from LLVM crashes in the REPL.
+     * The handler checks if a recovery point has been registered (via set_jit_recovery_point)
+     * and longjmps to it instead of calling exit(). */
+    llvm::install_fatal_error_handler(handle_fatal_llvm_error, nullptr);
+
     /* Enabling perf support requires registering a couple of plugins with LLVM. These
      * plugins will generate files which perf can then use to inject additional info
      * into its recorded data (via `perf inject`).
@@ -203,7 +274,10 @@ namespace jank::jit
      * Clang 19, at least. This workaround was suggested by and borrowed from Julia devs.
      *
      * https://github.com/mortenpi/julia/blob/1edc6f1b7752ed67059020ba7ce174dffa225954/src/jitlayers.cpp#L2330
+     *
+     * Perf profiling is not available on iOS.
      */
+#if !defined(JANK_TARGET_IOS)
     if(util::cli::opts.perf_profiling_enabled)
     {
       auto const ee{ interpreter->getExecutionEngine() };
@@ -211,11 +285,11 @@ namespace jank::jit
       auto &ol{ ee->getObjLinkingLayer() };
       auto &oll{ llvm::cast<llvm::orc::ObjectLinkingLayer>(ol) };
 
-#define add_address_to_map(map, name)                                     \
-  ((map)[es.intern(ee->mangle(#name))]                                    \
-   = { llvm::orc::ExecutorAddr::fromPtr(&(name)),                         \
-       llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable }, \
-   llvm::orc::ExecutorAddr::fromPtr(&(name)))
+  #define add_address_to_map(map, name)                                     \
+    ((map)[es.intern(ee->mangle(#name))]                                    \
+     = { llvm::orc::ExecutorAddr::fromPtr(&(name)),                         \
+         llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable }, \
+     llvm::orc::ExecutorAddr::fromPtr(&(name)))
 
       llvm::orc::SymbolMap perf_fns;
       auto const start_addr{ add_address_to_map(perf_fns, llvm_orc_registerJITLoaderPerfStart) };
@@ -230,11 +304,26 @@ namespace jank::jit
                                                                    true,
                                                                    true));
     }
+#endif
 
     auto const &load_result{ load_dynamic_libs(util::cli::opts.libs) };
     if(load_result.is_err())
     {
       throw error::system_failure(load_result.expect_err().c_str());
+    }
+
+    /* Load JIT-only libraries from --jit-lib CLI option.
+     * These are loaded for symbol resolution but not passed to AOT linker. */
+    auto const &jit_load_result{ load_dynamic_libs(util::cli::opts.jit_libs) };
+    if(jit_load_result.is_err())
+    {
+      throw error::system_failure(jit_load_result.expect_err().c_str());
+    }
+
+    /* Load object files from --obj CLI option. */
+    for(auto const &obj_path : util::cli::opts.object_files)
+    {
+      load_object(obj_path);
     }
   }
 
@@ -252,20 +341,101 @@ namespace jank::jit
   {
     profile::timer const timer{ "jit eval_string" };
     auto const &formatted{ s };
-    /* TODO: There is some sort of immutable_string or result bug here. */
     //auto const &formatted{ util::format_cpp_source(s).expect_ok() };
     //util::println("// eval_string:\n{}\n", formatted);
     auto err(interpreter->ParseAndExecute({ formatted.data(), formatted.size() }, ret));
     if(err)
     {
       llvm::logAllUnhandledErrors(jtl::move(err), llvm::errs(), "error: ");
-      throw error::internal_codegen_failure("Unable to compile C++ source.");
+      llvm::errs().flush();
+      /* Include the code in the error message for better debugging */
+      auto const preview_len{ std::min<size_t>(formatted.size(), 500) };
+      native_transient_string code_preview{ formatted.data(), preview_len };
+      if(formatted.size() > 500)
+      {
+        code_preview.append("...(truncated)");
+      }
+      throw std::runtime_error{ util::format("Failed to evaluate C++ code:\n{}", code_preview) };
     }
     register_jit_stack_frames();
   }
 
+  jtl::result<eval_result, jtl::immutable_string>
+  processor::eval_string_with_result(jtl::immutable_string const &s) const
+  {
+    profile::timer const timer{ "jit eval_string_with_result" };
+
+    clang::Value v;
+    auto parse_err(interpreter->ParseAndExecute({ s.data(), s.size() }, &v));
+    if(parse_err)
+    {
+      std::string err_msg;
+      llvm::raw_string_ostream err_stream{ err_msg };
+      llvm::logAllUnhandledErrors(std::move(parse_err), err_stream, "");
+      err_stream.flush();
+
+      auto const preview_len{ std::min<size_t>(s.size(), 200) };
+      native_transient_string code_preview{ s.data(), preview_len };
+      if(s.size() > 200)
+      {
+        code_preview.append("...");
+      }
+
+      return err(util::format("Failed to evaluate C++ expression '{}': {}",
+                              code_preview,
+                              jtl::immutable_string{ err_msg.data(), err_msg.size() }));
+    }
+
+    register_jit_stack_frames();
+
+    eval_result result;
+    result.valid = v.isValid();
+    result.is_void = v.isVoid();
+
+    if(result.valid && !result.is_void)
+    {
+      result.ptr = v.getPtr();
+
+      /* Capture the type string */
+      {
+        std::string type_buf;
+        llvm::raw_string_ostream type_stream{ type_buf };
+        v.printType(type_stream);
+        type_stream.flush();
+        result.type_str = jtl::immutable_string{ type_buf.data(), type_buf.size() };
+      }
+
+      /* Capture the full printed representation (type + data) */
+      {
+        std::string repr_buf;
+        llvm::raw_string_ostream repr_stream{ repr_buf };
+        v.print(repr_stream);
+        repr_stream.flush();
+        result.repr = jtl::immutable_string{ repr_buf.data(), repr_buf.size() };
+      }
+    }
+    else if(result.is_void)
+    {
+      result.type_str = "void";
+      result.repr = "(void)";
+    }
+
+    return ok(jtl::move(result));
+  }
+
   void processor::load_object(jtl::immutable_string_view const &path) const
   {
+    /* Canonicalize the path to detect duplicates even with different relative paths. */
+    std::error_code ec;
+    auto const canonical_path{ std::filesystem::canonical(std::string_view{ path }, ec) };
+    std::string const path_key{ ec ? std::string{ path } : canonical_path.string() };
+
+    /* Skip if already loaded - makes this idempotent for nREPL load-file operations. */
+    if(loaded_objects_.contains(path_key))
+    {
+      return;
+    }
+
     auto const ee{ interpreter->getExecutionEngine() };
     auto file{ llvm::MemoryBuffer::getFile(std::string_view{ path }) };
     if(!file)
@@ -276,7 +446,40 @@ namespace jank::jit
      * runtime, which likely won't happen until clang::Interpreter is on the ORC runtime. */
     /* TODO: Return result on failure. */
     llvm::cantFail(ee->addObjectFile(std::move(file.get())));
+    loaded_objects_.insert(path_key);
     register_jit_stack_frames();
+  }
+
+  bool processor::load_object(char const *data, size_t size, std::string const &name) const
+  {
+    /* Skip if already loaded - uses the name as key for idempotency. */
+    if(loaded_objects_.contains(name))
+    {
+      return true;
+    }
+
+    auto const ee{ interpreter->getExecutionEngine() };
+    auto buffer{ llvm::MemoryBuffer::getMemBuffer(llvm::StringRef{ data, size },
+                                                  name,
+                                                  /* RequiresNullTerminator */ false) };
+
+    if(!buffer)
+    {
+      util::println(stderr, "[jit] Failed to create memory buffer for object: {}", name);
+      return false;
+    }
+
+    auto err = ee->addObjectFile(std::move(buffer));
+    if(err)
+    {
+      llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");
+      llvm::errs().flush();
+      return false;
+    }
+
+    loaded_objects_.insert(name);
+    register_jit_stack_frames();
+    return true;
   }
 
   void processor::load_ir_module(llvm::orc::ThreadSafeModule &&m) const
@@ -306,6 +509,7 @@ namespace jank::jit
     if(!ir_module)
     {
       err.print("jank", llvm::errs());
+      llvm::errs().flush();
       /* TODO: Return a result. */
       throw std::runtime_error{ util::format("unable to load module") };
     }
@@ -332,6 +536,16 @@ namespace jank::jit
     {
       return symbol.get().toPtr<void *>();
     }
+
+#ifdef JANK_IOS_JIT
+    /* For iOS JIT, statically linked native modules (like nrepl-server.asio)
+     * won't be in the JIT symbol table. Fall back to dlsym to search the
+     * main executable and all loaded libraries. */
+    if(void *sym = dlsym(RTLD_DEFAULT, name.c_str()))
+    {
+      return sym;
+    }
+#endif
 
     return err(util::format("Failed to find symbol: '{}'", name));
   }
@@ -367,27 +581,67 @@ namespace jank::jit
     {
       if(std::filesystem::path{ lib.c_str() }.is_absolute())
       {
-        load_dynamic_library(lib);
+        auto const load_res{ load_dynamic_library(lib) };
+        if(load_res.is_err())
+        {
+          return err(load_res.expect_err());
+        }
+        continue;
       }
-      else
+
+      auto const result{ processor::find_dynamic_lib(lib) };
+      if(result.is_some())
       {
-        auto const result{ processor::find_dynamic_lib(lib) };
-        if(result.is_none())
+        auto const load_res{ load_dynamic_library(result.unwrap()) };
+        if(load_res.is_err())
         {
-          return err(util::format("Failed to load dynamic library '{}'.", lib));
+          return err(load_res.expect_err());
         }
-        else
-        {
-          load_dynamic_library(result.unwrap());
-        }
+        continue;
       }
+
+      auto const &default_lib_name{ default_shared_lib_name(lib) };
+      auto const load_default_res{ load_dynamic_library(default_lib_name) };
+      if(load_default_res.is_ok())
+      {
+        continue;
+      }
+
+      auto const load_raw_res{ load_dynamic_library(lib) };
+      if(load_raw_res.is_ok())
+      {
+        continue;
+      }
+
+      return err(load_raw_res.expect_err());
     }
 
     return ok();
   }
 
-  void processor::load_dynamic_library(jtl::immutable_string const &path) const
+  jtl::string_result<void> processor::load_dynamic_library(jtl::immutable_string const &path) const
   {
-    llvm::cantFail(static_cast<clang::Interpreter &>(*interpreter).LoadDynamicLibrary(path.data()));
+    if(path.empty())
+    {
+      return err("Attempted to load an empty library path.");
+    }
+
+    auto load_err{
+      static_cast<clang::Interpreter &>(*interpreter).LoadDynamicLibrary(path.data())
+    };
+    if(load_err)
+    {
+      std::string err_message;
+      llvm::handleAllErrors(std::move(load_err),
+                            [&](llvm::ErrorInfoBase &info) { err_message = info.message(); });
+      if(err_message.empty())
+      {
+        err_message = "unknown error";
+      }
+
+      return err(util::format("Failed to load dynamic library '{}': {}", path, err_message));
+    }
+
+    return ok();
   }
 }

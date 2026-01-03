@@ -1,16 +1,25 @@
 #pragma once
 
+#include <cstdint>
 #include <list>
 
-#include <folly/Synchronized.h>
+#include <jank/util/folly_shim.hpp>
 
 #include <jtl/result.hpp>
-#include <jank/analyze/processor.hpp>
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+  #include <jank/analyze/processor.hpp>
+  #include <jank/jit/processor.hpp>
+  #include <jank/jit/incremental_cache.hpp>
+#endif
 #include <jank/runtime/module/loader.hpp>
 #include <jank/runtime/ns.hpp>
 #include <jank/runtime/var.hpp>
-#include <jank/jit/processor.hpp>
 #include <jank/util/cli.hpp>
+
+namespace llvm
+{
+  class Module;
+}
 
 namespace jank
 {
@@ -82,10 +91,14 @@ namespace jank::runtime
 
     jtl::option<object_ref> eval_file(jtl::immutable_string const &path);
     jtl::option<object_ref> eval_string(jtl::immutable_string const &code);
+    jtl::option<object_ref>
+    eval_string(jtl::immutable_string const &code, usize start_line, usize start_col);
     jtl::result<void, error_ref> eval_cpp_string(jtl::immutable_string const &code) const;
     object_ref read_string(jtl::immutable_string const &code);
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     native_vector<analyze::expression_ref>
     analyze_string(jtl::immutable_string const &code, bool const eval = true);
+#endif
 
     /* Finds the specified module on the module path and loads it. If
      * the module is already loaded, nothing is done.
@@ -120,14 +133,71 @@ namespace jank::runtime
     obj::symbol_ref unique_symbol() const;
     obj::symbol_ref unique_symbol(jtl::immutable_string const &prefix) const;
 
+    struct cpp_function_argument_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string type;
+    };
+
+    struct cpp_function_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string return_type;
+      native_vector<cpp_function_argument_metadata> arguments;
+      jtl::option<jtl::immutable_string> origin;
+      jtl::option<std::int64_t> origin_line;
+      jtl::option<std::int64_t> origin_column;
+    };
+
+    enum class cpp_record_kind : std::uint8_t
+    {
+      Struct,
+      Class,
+      Union
+    };
+
+    struct cpp_type_field_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string type;
+    };
+
+    struct cpp_type_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string qualified_cpp_name;
+      cpp_record_kind kind{ cpp_record_kind::Struct };
+      native_vector<cpp_type_field_metadata> fields;
+      native_vector<cpp_function_metadata> constructors;
+    };
+
+    struct cpp_variable_metadata
+    {
+      jtl::immutable_string name;
+      jtl::immutable_string type;
+      jtl::option<jtl::immutable_string> origin;
+      jtl::option<std::int64_t> origin_line;
+      jtl::option<std::int64_t> origin_column;
+    };
+
     folly::Synchronized<native_unordered_map<obj::symbol_ref, ns_ref>> namespaces;
     folly::Synchronized<native_unordered_map<jtl::immutable_string, obj::keyword_ref>> keywords;
+    folly::Synchronized<
+      native_unordered_map<jtl::immutable_string, native_vector<cpp_function_metadata>>>
+      global_cpp_functions;
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_type_metadata>>
+      global_cpp_types;
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_variable_metadata>>
+      global_cpp_variables;
 
     struct binding_scope
     {
       binding_scope();
       binding_scope(obj::persistent_hash_map_ref const bindings);
       ~binding_scope();
+
+      /* Track whether we actually pushed, to avoid asymmetric pop when stack was empty */
+      bool pushed{ false };
     };
 
     jtl::string_result<void> push_thread_bindings();
@@ -137,12 +207,14 @@ namespace jank::runtime
     obj::persistent_hash_map_ref get_thread_bindings() const;
     jtl::option<thread_binding_frame> current_thread_binding_frame();
 
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     /* The analyze processor is reused across evaluations so we can keep the semantic information
      * of previous code. This is essential for REPL use.
      *
      * TODO: Is it? I think we can remove this. */
     /* TODO: This needs to be synchronized, if it's kept. */
     analyze::processor an_prc;
+#endif
     jtl::immutable_string binary_version;
     /* TODO: This needs to be a dynamic var. */
     native_unordered_map<jtl::immutable_string, native_vector<jtl::immutable_string>>
@@ -161,11 +233,20 @@ namespace jank::runtime
     var_ref no_recur_var;
     var_ref gensym_env_var;
 
-    static thread_local native_list<thread_binding_frame> thread_binding_frames;
+    /* Hold onto the CLI Options for use at runtime */
+    util::cli::options opts;
 
+    /* XXX: We can't use thread_local here, due to bdwgc not supporting it. */
+    static native_unordered_map<std::thread::id, native_list<thread_binding_frame>>
+      thread_binding_frames;
+
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+    /* Cache for compiled defs to enable incremental JIT. */
+    jit::incremental_cache jit_cache;
     /* This must go last, since it'll try to access other bits in the runtime context during
      * its initialization and we need them to be ready. */
     jit::processor jit_prc;
+#endif
   };
 
   /* NOLINTNEXTLINE */

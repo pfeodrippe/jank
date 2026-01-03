@@ -40,6 +40,9 @@ namespace jank::analyze::expr
     do_ref body;
     local_frame_ptr frame;
     function_context_ref fn_ctx;
+    /* If set, the function returns a native C++ type directly instead of object_ref.
+     * This is set from :tag metadata on the enclosing def. */
+    jtl::option<jtl::immutable_string> native_return_type;
   };
 
   struct arity_key

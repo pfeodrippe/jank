@@ -21,9 +21,16 @@ namespace jtl
   using f32 = float;
   using f64 = double;
 
+#if defined(__wasm32__) || defined(__wasm__)
+  // wasm32 has 4-byte pointers
+  using uptr = unsigned long;
+  using usize = uptr;
+  using ssize = long;
+#else
   using uptr = unsigned long long;
   using usize = uptr;
   using ssize = long long;
+#endif
   using uhash = u32;
   using nullptr_t = decltype(nullptr);
 

@@ -1,6 +1,13 @@
+#include <algorithm>
+#include <ranges>
+#include <cctype>
+#include <functional>
 #include <fstream>
+#include <string>
+#include <unordered_map>
 #include <vector>
 #include <cstdlib>
+#include <atomic>
 
 #include <jtl/result.hpp>
 #include <jtl/string_builder.hpp>
@@ -10,6 +17,14 @@
 #include <jank/aot/processor.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/module/loader.hpp>
+#include <jank/runtime/obj/atom.hpp>
+#include <jank/runtime/obj/keyword.hpp>
+#include <jank/runtime/obj/persistent_hash_map.hpp>
+#include <jank/runtime/obj/persistent_string.hpp>
+#include <jank/runtime/obj/persistent_vector.hpp>
+#include <jank/runtime/obj/persistent_vector_sequence.hpp>
+#include <jank/runtime/obj/symbol.hpp>
+#include <jank/runtime/rtti.hpp>
 #include <jank/util/cli.hpp>
 #include <jank/util/fmt.hpp>
 #include <jank/util/fmt/print.hpp>
@@ -22,20 +37,753 @@ namespace jank::aot
 {
   using namespace jank::runtime;
 
+  static std::string schema_key(object_ref const type_obj)
+  {
+    auto const kw(dyn_cast<obj::keyword>(type_obj));
+    if(kw.is_some())
+    {
+      if(kw->sym->ns.empty())
+      {
+        return util::format(":{}", kw->sym->name);
+      }
+      return util::format(":{}/{}", kw->sym->ns, kw->sym->name);
+    }
+
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_some())
+    {
+      std::string key{ "[" };
+      for(size_t i{}; i < vec->count(); ++i)
+      {
+        if(i != 0)
+        {
+          key += ' ';
+        }
+        key += schema_key(vec->data[i]);
+      }
+      key += ']';
+      return key;
+    }
+
+    return util::format("ptr:{}", static_cast<void *>(type_obj.data));
+  }
+
+  static bool parse_fn_schema(object_ref const type_obj,
+                              std::vector<object_ref> &arg_types,
+                              object_ref &ret_type)
+  {
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_nil() || vec->count() != 3)
+    {
+      return false;
+    }
+
+    auto const tag_kw(dyn_cast<obj::keyword>(vec->data[0]));
+    if(tag_kw.is_nil() || tag_kw->sym->name != "fn")
+    {
+      return false;
+    }
+
+    auto const args_vec(dyn_cast<obj::persistent_vector>(vec->data[1]));
+    if(args_vec.is_nil())
+    {
+      return false;
+    }
+
+    arg_types.clear();
+    size_t start_idx{};
+    if(args_vec->count() > 0)
+    {
+      auto const maybe_cat(dyn_cast<obj::keyword>(args_vec->data[0]));
+      if(maybe_cat.is_some() && maybe_cat->sym->name == "cat")
+      {
+        start_idx = 1;
+      }
+    }
+    for(size_t i{ start_idx }; i < args_vec->count(); ++i)
+    {
+      arg_types.emplace_back(args_vec->data[i]);
+    }
+
+    ret_type = vec->data[2];
+    return true;
+  }
+
+  struct fn_wrapper_requirement
+  {
+    std::string key;
+    std::string helper_name;
+    object_ref schema;
+    object_ref return_type;
+    std::vector<object_ref> arg_types;
+  };
+
+  struct fn_wrapper_registry
+  {
+    std::unordered_map<std::string, usize> key_to_index;
+    std::vector<fn_wrapper_requirement> requirements;
+
+    fn_wrapper_requirement &ensure(object_ref const fn_schema)
+    {
+      auto const key(schema_key(fn_schema));
+      if(auto const it = key_to_index.find(key); it != key_to_index.end())
+      {
+        return requirements[it->second];
+      }
+
+      std::vector<object_ref> arg_types;
+      object_ref ret_type;
+      if(!parse_fn_schema(fn_schema, arg_types, ret_type))
+      {
+        throw error::internal_aot_failure(
+          util::format("Invalid :fn schema: {}", schema_key(fn_schema)));
+      }
+
+      auto const helper_name(util::format("wrap_fn_{}", requirements.size()));
+      requirements.push_back(
+        fn_wrapper_requirement{ key, helper_name, fn_schema, ret_type, arg_types });
+      key_to_index.emplace(key, requirements.size() - 1);
+      return requirements.back();
+    }
+  };
+
+  struct jank_fn_wrapper_registry
+  {
+    std::unordered_map<std::string, usize> key_to_index;
+    std::vector<fn_wrapper_requirement> requirements;
+
+    fn_wrapper_requirement &ensure(object_ref const fn_schema)
+    {
+      auto const key(schema_key(fn_schema));
+      if(auto const it = key_to_index.find(key); it != key_to_index.end())
+      {
+        return requirements[it->second];
+      }
+
+      std::vector<object_ref> arg_types;
+      object_ref ret_type;
+      if(!parse_fn_schema(fn_schema, arg_types, ret_type))
+      {
+        throw error::internal_aot_failure(
+          util::format("Invalid :fn schema: {}", schema_key(fn_schema)));
+      }
+
+      auto const helper_name(util::format("unwrap_fn_{}", requirements.size()));
+      requirements.push_back(
+        fn_wrapper_requirement{ key, helper_name, fn_schema, ret_type, arg_types });
+      key_to_index.emplace(key, requirements.size() - 1);
+      return requirements.back();
+    }
+  };
+
   static jtl::immutable_string relative_to_cache_dir(jtl::immutable_string const &file_path)
   {
     return util::format("{}/{}", __rt_ctx->binary_cache_dir, file_path);
   }
 
+  static std::string module_to_basename(jtl::immutable_string const &module)
+  {
+    std::string sanitized{ module.data(), module.size() };
+    std::ranges::transform(sanitized, sanitized.begin(), [](unsigned char ch) {
+      if(std::isalnum(ch) || ch == '_')
+      {
+        return static_cast<char>(ch);
+      }
+      return '_';
+    });
+    return sanitized;
+  }
+
+  static std::string schema_to_c_type(object_ref const type_obj)
+  {
+    auto const kw(dyn_cast<obj::keyword>(type_obj));
+    if(kw.is_some())
+    {
+      if(!kw->sym->ns.empty())
+      {
+        /* Assume it's a struct name or similar if qualified, or handle specially. */
+        return "void*";
+      }
+      auto const &name(kw->sym->name);
+      if(name == "int")
+      {
+        return "int";
+      }
+      if(name == "long")
+      {
+        return "long";
+      }
+      if(name == "double")
+      {
+        return "double";
+      }
+      if(name == "float")
+      {
+        return "float";
+      }
+      if(name == "bool")
+      {
+        return "bool";
+      }
+      if(name == "string")
+      {
+        return "char const *";
+      }
+      if(name == "void")
+      {
+        return "void";
+      }
+    }
+
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_some())
+    {
+      if(vec->count() > 0)
+      {
+        auto const first(vec->data[0]);
+        auto const kw(dyn_cast<obj::keyword>(first));
+        if(kw.is_some())
+        {
+          if(kw->sym->name == "fn" && vec->count() == 3)
+          {
+            auto const args_vec(dyn_cast<obj::persistent_vector>(vec->data[1]));
+            if(args_vec.is_nil())
+            {
+              return "void*";
+            }
+
+            std::string args_sig;
+            size_t start_idx{};
+            if(args_vec->count() > 0)
+            {
+              auto const maybe_cat(dyn_cast<obj::keyword>(args_vec->data[0]));
+              if(maybe_cat.is_some() && maybe_cat->sym->name == "cat")
+              {
+                start_idx = 1;
+              }
+            }
+            for(size_t i{ start_idx }; i < args_vec->count(); ++i)
+            {
+              if(!args_sig.empty())
+              {
+                args_sig += ", ";
+              }
+              args_sig += schema_to_c_type(args_vec->data[i]);
+            }
+            if(args_sig.empty())
+            {
+              args_sig = "void";
+            }
+            auto const ret_sig(schema_to_c_type(vec->data[2]));
+            return util::format("{} (*)({})", ret_sig, args_sig);
+          }
+          if(kw->sym->name == "vector" && vec->count() == 2)
+          {
+            // [:vector :type]
+            auto const inner(vec->data[1]);
+            std::string const inner_type = schema_to_c_type(inner);
+            if(inner_type != "void*")
+            {
+              if(inner_type == "char const *")
+              {
+                return "char const **";
+              }
+              return inner_type + "*";
+            }
+          }
+        }
+      }
+    }
+    return "void*";
+  }
+
+  static std::string
+  gen_box(object_ref const type_obj, std::string const &val, fn_wrapper_registry *registry)
+  {
+    auto const kw(dyn_cast<obj::keyword>(type_obj));
+    if(kw.is_some())
+    {
+      auto const &name(kw->sym->name);
+      if(name == "int")
+      {
+        return util::format("jank_integer_create({})", val);
+      }
+      if(name == "long")
+      {
+        return util::format("jank_integer_create({})", val);
+      }
+      if(name == "double")
+      {
+        return util::format("jank_real_create({})", val);
+      }
+      if(name == "float")
+      {
+        return util::format("jank_real_create({})", val);
+      }
+      if(name == "bool")
+      {
+        return util::format("({} ? jank_const_true() : jank_const_false())", val);
+      }
+      if(name == "string")
+      {
+        return util::format("jank_string_create({})", val);
+      }
+    }
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_some())
+    {
+      auto const tag_kw(dyn_cast<obj::keyword>(vec->data[0]));
+      if(tag_kw.is_some() && tag_kw->sym->name == "fn")
+      {
+        if(registry == nullptr)
+        {
+          throw error::internal_aot_failure(
+            "Internal error: encountered :fn schema without registry context");
+        }
+        auto &req(registry->ensure(type_obj));
+        return util::format("{}({})", req.helper_name, val);
+      }
+    }
+    return util::format("jank_pointer_create({})", val);
+  }
+
+  static std::string gen_unbox(object_ref const type_obj,
+                               std::string const &val,
+                               jank_fn_wrapper_registry *registry = nullptr)
+  {
+    auto const kw(dyn_cast<obj::keyword>(type_obj));
+    if(kw.is_some())
+    {
+      auto const &name(kw->sym->name);
+      if(name == "int")
+      {
+        return util::format("(int)jank_to_integer({})", val);
+      }
+      if(name == "long")
+      {
+        return util::format("(long)jank_to_integer({})", val);
+      }
+      if(name == "double")
+      {
+        return util::format("jank_to_real({})", val);
+      }
+      if(name == "float")
+      {
+        return util::format("(float)jank_to_real({})", val);
+      }
+      if(name == "bool")
+      {
+        return util::format("(bool)jank_truthy({})", val);
+      }
+      if(name == "string")
+      {
+        return util::format("jank_to_string({})", val);
+      }
+      if(name == "void")
+      {
+        return "";
+      }
+    }
+    auto const vec(dyn_cast<obj::persistent_vector>(type_obj));
+    if(vec.is_some())
+    {
+      auto const tag_kw(dyn_cast<obj::keyword>(vec->data[0]));
+      if(tag_kw.is_some() && tag_kw->sym->name == "fn")
+      {
+        if(registry != nullptr)
+        {
+          auto &req(registry->ensure(type_obj));
+          return util::format("{}({})", req.helper_name, val);
+        }
+        auto const type_str(schema_to_c_type(type_obj));
+        return util::format("reinterpret_cast<{}>(jank_native_function_wrapper_get_pointer({}))",
+                            type_str,
+                            val);
+      }
+    }
+    std::string const type_str = schema_to_c_type(type_obj);
+    return util::format("reinterpret_cast<{}>(jank_to_pointer({}))", type_str, val);
+  }
+
+  static std::string schema_to_c_parameter(object_ref const type_obj, std::string const &name)
+  {
+    auto type_sig(schema_to_c_type(type_obj));
+    auto const fn_pos(type_sig.find(" (*)"));
+    if(fn_pos != std::string::npos)
+    {
+      type_sig.replace(fn_pos, 4, util::format(" (*{})", name));
+      return type_sig;
+    }
+    return util::format("{} {}", type_sig, name);
+  }
+
+  static std::string schema_to_c_function_decl(std::string const &ret_type,
+                                               std::string const &name,
+                                               std::string const &args_sig)
+  {
+    auto const fn_pos(ret_type.find("(*)"));
+    if(fn_pos != std::string::npos)
+    {
+      auto ret_with_name(ret_type);
+      ret_with_name.replace(fn_pos, 3, util::format("(*{}({}))", name, args_sig));
+      return util::format(R"(extern "C" {})", ret_with_name);
+    }
+
+    return util::format(R"(extern "C" {} {}({}))", ret_type, name, args_sig);
+  }
+
+  static std::string emit_fn_wrapper_helpers(fn_wrapper_registry const &registry,
+                                             jank_fn_wrapper_registry *jank_fn_registry)
+  {
+    if(registry.requirements.empty())
+    {
+      return {};
+    }
+
+    jtl::string_builder sb;
+    sb("\nnamespace\n{\n");
+
+    for(auto const &req : registry.requirements)
+    {
+      auto const signature(schema_to_c_type(req.schema));
+      util::format_to(sb, "using {}_signature = {};\n", req.helper_name, signature);
+      util::format_to(sb,
+                      "static jank_object_ref {}_invoke(void *callback, void *context, "
+                      "jank_object_ref const *args, jank_usize arg_count)\n",
+                      req.helper_name);
+      sb("{\n");
+      sb("  (void)context;\n");
+      sb("  (void)arg_count;\n");
+      util::format_to(sb,
+                      "  auto const typed_fn = reinterpret_cast<{}_signature>(callback);\n",
+                      req.helper_name);
+
+      if(req.arg_types.empty())
+      {
+        sb("  (void)args;\n");
+      }
+
+      std::vector<std::string> native_arg_names;
+      for(size_t i{}; i < req.arg_types.size(); ++i)
+      {
+        auto const native_name(util::format("native_arg{}", i));
+        auto const conversion(
+          gen_unbox(req.arg_types[i], util::format("args[{}]", i), jank_fn_registry));
+        util::format_to(sb, "  auto const {} = {};\n", native_name, conversion);
+        native_arg_names.emplace_back(native_name);
+      }
+
+      std::string fn_args;
+      for(size_t i{}; i < native_arg_names.size(); ++i)
+      {
+        if(i != 0)
+        {
+          fn_args += ", ";
+        }
+        fn_args += native_arg_names[i];
+      }
+
+      auto const ret_kw(dyn_cast<obj::keyword>(req.return_type));
+      bool const is_void(!ret_kw.is_nil() && ret_kw->sym->name == "void");
+
+      if(is_void)
+      {
+        util::format_to(sb, "  typed_fn({});\n  return jank_const_nil();\n", fn_args);
+      }
+      else
+      {
+        util::format_to(sb, "  auto const callback_result = typed_fn({});\n", fn_args);
+        auto const boxed_expr(gen_box(req.return_type, "callback_result", nullptr));
+        util::format_to(sb, "  return {};\n", boxed_expr);
+      }
+
+      sb("}\n\n");
+
+      util::format_to(sb,
+                      "static jank_object_ref {}({}_signature fn)\n",
+                      req.helper_name,
+                      req.helper_name);
+      sb("{\n");
+      sb("  if(fn == nullptr)\n  {\n    return jank_const_nil();\n  }\n\n");
+      util::format_to(sb,
+                      "  return jank_native_function_wrapper_create(\n    reinterpret_cast<void "
+                      "*>(fn),\n    nullptr,\n    &{}_invoke,\n    static_cast<jank_u8>({}));\n",
+                      req.helper_name,
+                      req.arg_types.size());
+      sb("}\n\n");
+    }
+
+    sb("} // namespace\n");
+    return sb.release();
+  }
+
+  static std::string
+  emit_jank_fn_wrapper_helpers(jank_fn_wrapper_registry &registry, fn_wrapper_registry *fn_registry)
+  {
+    if(registry.requirements.empty())
+    {
+      return {};
+    }
+
+    jtl::string_builder sb;
+    sb("\nnamespace\n{\n");
+
+    // Use index-based loop to handle potential vector reallocation if new requirements are added
+    for(size_t req_idx = 0; req_idx < registry.requirements.size(); ++req_idx)
+    {
+      auto const &req = registry.requirements[req_idx];
+      size_t const slots_count = 16;
+      util::format_to(sb, "static jank_object_ref {}_slots[{}];\n", req.helper_name, slots_count);
+      util::format_to(sb, "static std::atomic<size_t> {}_next_slot{{}};\n", req.helper_name);
+
+      auto const signature(schema_to_c_type(req.schema));
+
+      std::string args_sig;
+      std::string args_call;
+      int arg_idx = 0;
+      // Skip :cat
+      for(auto const &arg_type : req.arg_types)
+      {
+        if(!args_sig.empty())
+        {
+          args_sig += ", ";
+        }
+        if(!args_call.empty())
+        {
+          args_call += ", ";
+        }
+        auto const arg_name = util::format("arg{}", arg_idx);
+        args_sig += schema_to_c_parameter(arg_type, arg_name);
+        args_call += gen_box(arg_type, arg_name, fn_registry);
+        arg_idx++;
+      }
+
+      auto const ret_type_str = schema_to_c_type(req.return_type);
+      auto const ret_kw(dyn_cast<obj::keyword>(req.return_type));
+      bool const is_void(!ret_kw.is_nil() && ret_kw->sym->name == "void");
+
+      // Generate trampolines
+      for(size_t i = 0; i < slots_count; ++i)
+      {
+        auto const trampoline_name = util::format("{}_trampoline_{}", req.helper_name, i);
+        auto const decl = schema_to_c_function_decl(ret_type_str, trampoline_name, args_sig);
+        std::string static_decl = decl;
+        if(static_decl.starts_with("extern \"C\" "))
+        {
+          static_decl.replace(0, 11, "static ");
+        }
+
+        util::format_to(sb, "{}\n", static_decl);
+        sb("{\n");
+        util::format_to(sb, "  auto const fn = {}_slots[{}];\n", req.helper_name, i);
+
+        auto const deref_call = util::format("jank_call{}", arg_idx);
+        util::format_to(sb,
+                        "  auto const result = {}(fn{});\n",
+                        deref_call,
+                        (args_call.empty() ? "" : ", " + args_call));
+
+        if(!is_void)
+        {
+          // Pass registry to handle recursive :fn types
+          auto const unbox_expr = gen_unbox(req.return_type, "result", &registry);
+          util::format_to(sb, "  return {};\n", unbox_expr);
+        }
+        else
+        {
+          sb("  (void)result;\n");
+        }
+        sb("}\n\n");
+      }
+
+      // Trampoline array
+      util::format_to(sb,
+                      "static {} (*{}_trampolines[])({}) = ",
+                      ret_type_str,
+                      req.helper_name,
+                      args_sig);
+      sb("{\n");
+      for(size_t i = 0; i < slots_count; ++i)
+      {
+        util::format_to(sb, "  &{}_trampoline_{},\n", req.helper_name, i);
+      }
+      sb("};\n\n");
+
+      // unwrap_fn_X implementation
+      auto const unwrap_decl
+        = schema_to_c_function_decl(signature, req.helper_name, "jank_object_ref fn");
+      std::string static_unwrap_decl = unwrap_decl;
+      if(static_unwrap_decl.starts_with("extern \"C\" "))
+      {
+        static_unwrap_decl.replace(0, 11, "static ");
+      }
+      util::format_to(sb, "{}\n", static_unwrap_decl);
+      sb("{\n");
+      util::format_to(sb,
+                      "  size_t const slot = {}_next_slot++ % {};\n",
+                      req.helper_name,
+                      slots_count);
+      util::format_to(sb, "  {}_slots[slot] = fn;\n", req.helper_name);
+      util::format_to(sb, "  return {}_trampolines[slot];\n", req.helper_name);
+      sb("}\n\n");
+    }
+
+    sb("} // namespace\n");
+    return sb.release();
+  }
+
+  static jtl::option<std::string> generate_single_export(object_ref const var_obj_ref,
+                                                         jtl::immutable_string const &name_str,
+                                                         object_ref const schema_obj,
+                                                         fn_wrapper_registry &fn_registry,
+                                                         jank_fn_wrapper_registry &jank_fn_registry)
+  {
+    auto const var_obj(dyn_cast<var>(var_obj_ref));
+    if(var_obj.is_nil())
+    {
+      return {};
+    }
+
+    auto const schema_vec(dyn_cast<obj::persistent_vector>(schema_obj));
+    if(schema_obj.is_nil() || schema_vec.is_nil() || schema_vec->count() != 3)
+    {
+      return {};
+    }
+
+    // Schema: [:=> [:cat arg...] ret]
+    auto const arrow_kw(dyn_cast<obj::keyword>(schema_vec->data[0]));
+    auto const args_cat(dyn_cast<obj::persistent_vector>(schema_vec->data[1]));
+    auto const return_type_obj(schema_vec->data[2]);
+
+    if(arrow_kw.is_nil() || arrow_kw->sym->name != "=>" || args_cat.is_nil()
+       || return_type_obj.is_nil())
+    {
+      return {};
+    }
+
+    auto const ns_str(var_obj->n->name->name);
+    auto const var_name_str(var_obj->name->name);
+
+    std::string args_sig;
+    std::string args_call;
+    int arg_idx = 0;
+
+    // Skip :cat
+    for(size_t i = 1; i < args_cat->count(); ++i)
+    {
+      auto const arg_type(args_cat->data[i]);
+      if(arg_type.is_nil())
+      {
+        continue;
+      }
+
+      if(!args_sig.empty())
+      {
+        args_sig += ", ";
+      }
+      if(!args_call.empty())
+      {
+        args_call += ", ";
+      }
+
+      auto const arg_name = util::format("arg{}", arg_idx);
+      args_sig += schema_to_c_parameter(arg_type, arg_name);
+      args_call += gen_box(arg_type, arg_name, &fn_registry);
+      arg_idx++;
+    }
+
+    auto const ret_type_str = schema_to_c_type(return_type_obj);
+    auto const deref_call = util::format("jank_call{}", arg_idx);
+    auto const unbox_expr = gen_unbox(return_type_obj, "result", &jank_fn_registry);
+
+    // Check if return type is void
+    auto const ret_kw(dyn_cast<obj::keyword>(return_type_obj));
+    bool is_void = false;
+    if(!ret_kw.is_nil() && ret_kw->sym->name == "void")
+    {
+      is_void = true;
+    }
+
+    auto const function_decl(schema_to_c_function_decl(ret_type_str, name_str, args_sig));
+
+    return util::format(
+      R"(
+{}
+{{
+  auto const var = jank_var_intern_c("{}", "{}");
+  auto const derefed = jank_deref(var);
+  auto const result = {}(derefed{});
+  {}
+}}
+)",
+      function_decl,
+      ns_str,
+      var_name_str,
+      deref_call,
+      (args_call.empty() ? "" : ", " + args_call),
+      is_void ? "" : util::format("return {};", unbox_expr));
+  }
+
+  jtl::result<std::string, error_ref> generate_entrypoint_source(object_ref const var,
+                                                                 jtl::immutable_string const &name,
+                                                                 object_ref const schema)
+  {
+    fn_wrapper_registry fn_registry;
+    jank_fn_wrapper_registry jank_fn_registry;
+    jtl::string_builder sb;
+
+    auto const export_code(
+      generate_single_export(var, name, schema, fn_registry, jank_fn_registry));
+    if(!export_code.is_some())
+    {
+      return error::internal_aot_failure("Failed to generate export code");
+    }
+
+    std::string jank_helper_code;
+    std::string helper_code;
+    size_t prev_jank_reqs = 0;
+    size_t prev_fn_reqs = 0;
+
+    while(true)
+    {
+      jank_helper_code = emit_jank_fn_wrapper_helpers(jank_fn_registry, &fn_registry);
+      helper_code = emit_fn_wrapper_helpers(fn_registry, &jank_fn_registry);
+
+      if(jank_fn_registry.requirements.size() == prev_jank_reqs
+         && fn_registry.requirements.size() == prev_fn_reqs)
+      {
+        break;
+      }
+      prev_jank_reqs = jank_fn_registry.requirements.size();
+      prev_fn_reqs = fn_registry.requirements.size();
+    }
+
+    if(!jank_helper_code.empty())
+    {
+      sb(jank_helper_code);
+    }
+    if(!helper_code.empty())
+    {
+      sb(helper_code);
+    }
+    sb(export_code.unwrap());
+
+    return sb.release();
+  }
+
   // TODO: Generate an object file instead of a cpp
-  static jtl::immutable_string gen_entrypoint(jtl::immutable_string const &module)
+  static jtl::immutable_string
+  gen_entrypoint(jtl::immutable_string const &module, bool const emit_shared_library)
   {
     jtl::string_builder sb;
     sb(R"(/* DO NOT MODIFY: Autogenerated by jank. */
 
+#include <atomic>
+
 using jank_object_ref = void*;
 using jank_bool = char;
 using jank_usize = unsigned long long;
+using jank_u8 = unsigned char;
 
 extern "C" int jank_init_with_pch(int const argc,
                          char const ** const argv,
@@ -46,11 +794,41 @@ extern "C" int jank_init_with_pch(int const argc,
 extern "C" void jank_load_clojure_core_native();
 extern "C" void jank_load_clojure_core();
 extern "C" void jank_load_jank_compiler_native();
+extern "C" void jank_load_jank_nrepl_server_asio();
 extern "C" jank_object_ref jank_var_intern_c(char const *, char const *);
 extern "C" jank_object_ref jank_deref(jank_object_ref);
+extern "C" jank_object_ref jank_call0(jank_object_ref);
+extern "C" jank_object_ref jank_call1(jank_object_ref, jank_object_ref);
 extern "C" jank_object_ref jank_call2(jank_object_ref, jank_object_ref, jank_object_ref);
+extern "C" jank_object_ref jank_call3(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref);
+extern "C" jank_object_ref jank_call4(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref);
+extern "C" jank_object_ref jank_call5(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref);
+extern "C" jank_object_ref jank_call6(jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref, jank_object_ref);
 extern "C" void jank_module_set_loaded(char const *module);
 extern "C" jank_object_ref jank_parse_command_line_args(int, char const **);
+extern "C" jank_object_ref jank_integer_create(long long);
+extern "C" long long jank_to_integer(jank_object_ref);
+extern "C" jank_object_ref jank_real_create(double);
+extern "C" double jank_to_real(jank_object_ref);
+extern "C" jank_object_ref jank_string_create(char const *);
+extern "C" char const *jank_to_string(jank_object_ref);
+extern "C" jank_object_ref jank_pointer_create(void*);
+extern "C" void* jank_to_pointer(jank_object_ref);
+extern "C" jank_object_ref jank_const_nil();
+extern "C" jank_object_ref jank_const_true();
+extern "C" jank_object_ref jank_const_false();
+extern "C" jank_bool jank_truthy(jank_object_ref);
+extern "C" jank_object_ref jank_native_function_wrapper_create(
+  void *callback,
+  void *context,
+  jank_object_ref (*invoke)(void *, void *, jank_object_ref const *, jank_usize),
+  jank_u8 arg_count);
+extern "C" void *jank_native_function_wrapper_get_pointer(jank_object_ref);
+extern "C" void jank_register_native_alias(char const *ns_name,
+                                           char const *alias_name,
+                                           char const *header,
+                                           char const *include_directive,
+                                           char const *scope);
 )");
 
     auto const modules_rlocked{ __rt_ctx->loaded_modules_in_order.rlock() };
@@ -73,17 +851,123 @@ namespace
         )",
                     pch_path.unwrap()));
 
-    sb(R"(
+    auto const entry_signature(emit_shared_library
+                                 ? R"(extern "C" int jank_entrypoint(int argc, const char** argv))"
+                                 : "int main(int argc, const char** argv)");
 
-int main(int argc, const char** argv)
+    fn_wrapper_registry fn_registry;
+    jank_fn_wrapper_registry jank_fn_registry;
+    jtl::string_builder exports_sb;
+
+    if(emit_shared_library)
+    {
+      auto const export_exports_var(__rt_ctx->find_var("jank.export", "exports"));
+      if(!export_exports_var.is_nil() && export_exports_var->is_bound())
+      {
+        // util::println("Found jank.export/exports");
+        auto const exports_atom(dyn_cast<obj::atom>(export_exports_var->deref()));
+        if(!exports_atom.is_nil())
+        {
+          // util::println("It is an atom");
+          auto const exports_map(dyn_cast<obj::persistent_hash_map>(exports_atom->deref()));
+          if(!exports_map.is_nil())
+          {
+            // util::println("It contains a map with {} entries", exports_map->count());
+            for(auto const &pair : exports_map->data)
+            {
+              auto const name_obj(dyn_cast<obj::persistent_string>(pair.first));
+              auto const info_map(dyn_cast<obj::persistent_hash_map>(pair.second));
+
+              if(!name_obj.is_nil() && !info_map.is_nil())
+              {
+                auto const var_obj(dyn_cast<var>(
+                  info_map->get(__rt_ctx->intern_keyword("", "var").expect_ok().erase())));
+                auto const schema_obj(dyn_cast<obj::persistent_vector>(
+                  info_map->get(__rt_ctx->intern_keyword("", "schema").expect_ok().erase())));
+
+                if(!var_obj.is_nil() && !schema_obj.is_nil() && schema_obj->count() == 3)
+                {
+                  auto const export_code(generate_single_export(var_obj,
+                                                                name_obj->data,
+                                                                schema_obj,
+                                                                fn_registry,
+                                                                jank_fn_registry));
+                  if(export_code.is_some())
+                  {
+                    exports_sb(export_code.unwrap());
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    std::string jank_helper_code;
+    std::string helper_code;
+    size_t prev_jank_reqs = 0;
+    size_t prev_fn_reqs = 0;
+
+    while(true)
+    {
+      jank_helper_code = emit_jank_fn_wrapper_helpers(jank_fn_registry, &fn_registry);
+      helper_code = emit_fn_wrapper_helpers(fn_registry, &jank_fn_registry);
+
+      if(jank_fn_registry.requirements.size() == prev_jank_reqs
+         && fn_registry.requirements.size() == prev_fn_reqs)
+      {
+        break;
+      }
+      prev_jank_reqs = jank_fn_registry.requirements.size();
+      prev_fn_reqs = fn_registry.requirements.size();
+    }
+
+    if(!jank_helper_code.empty())
+    {
+      sb(jank_helper_code);
+    }
+    if(!helper_code.empty())
+    {
+      sb(helper_code);
+    }
+    sb(exports_sb.release());
+
+    sb("\n\n");
+    sb(entry_signature);
+    sb(R"(
 {
   auto const fn{ [](int const argc, char const **argv) {
     jank_load_clojure_core_native();
     jank_load_clojure_core();
     jank_module_set_loaded("/clojure.core");
     jank_load_jank_compiler_native();
+          jank_load_jank_nrepl_server_asio();
+          jank_module_set_loaded("/jank.nrepl-server.asio");
 
     )");
+
+    /* Pre-populate native aliases for AOT compiled headers.
+     * This ensures that when module load functions call register_native_header,
+     * the alias already exists and JIT compilation is skipped. */
+    {
+      auto const namespaces_rlocked{ __rt_ctx->namespaces.rlock() };
+      for(auto const &[ns_sym, ns_ref] : *namespaces_rlocked)
+      {
+        auto const aliases = ns_ref->native_aliases_map_snapshot();
+        for(auto const &[alias_sym, alias_data] : aliases)
+        {
+          util::format_to(sb,
+                          R"(jank_register_native_alias("{}", "{}", "{}", "{}", "{}");)"
+                          "\n",
+                          ns_ref->name->name,
+                          alias_sym->name,
+                          alias_data.header,
+                          alias_data.include_directive,
+                          alias_data.scope);
+        }
+      }
+    }
 
     for(auto const &it : *modules_rlocked)
     {
@@ -227,6 +1111,18 @@ int main(int argc, const char** argv)
         module));
     }
 
+    auto const emit_shared_library(util::cli::opts.output_shared_library);
+    auto output_filename(util::cli::opts.output_filename);
+    if(emit_shared_library && output_filename == "a.out")
+    {
+      auto const module_basename(module_to_basename(module));
+#if defined(__APPLE__)
+      output_filename = util::format("lib{}.dylib", module_basename);
+#else
+      output_filename = util::format("lib{}.so", module_basename);
+#endif
+    }
+
     auto const compiler_args_res{ build_compiler_args() };
     if(compiler_args_res.is_err())
     {
@@ -264,7 +1160,7 @@ int main(int argc, const char** argv)
       }
     }
 
-    auto const entrypoint_path{ gen_entrypoint(module) };
+    auto const entrypoint_path{ gen_entrypoint(module, emit_shared_library) };
     compiler_args.push_back(strdup("-x"));
     compiler_args.push_back(strdup("c++"));
     compiler_args.push_back(strdup(entrypoint_path.c_str()));
@@ -281,9 +1177,57 @@ int main(int argc, const char** argv)
       compiler_args.push_back(strdup(lib));
     }
 
+    /* Add user-specified libraries from -l flags.
+     * If the library is an absolute path, pass it directly.
+     * Otherwise, add the -l prefix for library name lookup. */
     for(auto const &lib : util::cli::opts.libs)
     {
-      compiler_args.push_back(strdup(util::format("-l{}", lib).c_str()));
+      if(lib.size() > 0 && lib[0] == '/')
+      {
+        /* Absolute path - pass directly. */
+        compiler_args.push_back(strdup(lib.c_str()));
+      }
+      else
+      {
+        /* Library name - add -l prefix. */
+        compiler_args.push_back(strdup(util::format("-l{}", lib).c_str()));
+      }
+    }
+
+    /* Add user-specified link-only libraries from --link-lib flags.
+     * These are not loaded into JIT, only passed to the AOT linker.
+     * For absolute paths, use -Wl, prefix to pass directly to linker,
+     * avoiding clang treating them as source files. */
+    for(auto const &lib : util::cli::opts.link_libs)
+    {
+      if(lib.size() > 0 && lib[0] == '/')
+      {
+        /* Absolute path - pass directly to linker via -Wl. */
+        compiler_args.push_back(strdup(util::format("-Wl,{}", lib).c_str()));
+      }
+      else
+      {
+        /* Library name - add -l prefix. */
+        compiler_args.push_back(strdup(util::format("-l{}", lib).c_str()));
+      }
+    }
+
+    /* Add user-specified object files from --obj flags.
+     * Use -Wl, prefix to pass them directly to the linker, avoiding
+     * clang treating them as source files after the -x c++ flag. */
+    for(auto const &obj : util::cli::opts.object_files)
+    {
+      compiler_args.push_back(strdup(util::format("-Wl,{}", obj).c_str()));
+    }
+
+    /* Add user-specified macOS frameworks. */
+    if constexpr(jtl::current_platform == jtl::platform::macos_like)
+    {
+      for(auto const &framework : util::cli::opts.frameworks)
+      {
+        compiler_args.push_back(strdup("-framework"));
+        compiler_args.push_back(strdup(framework.c_str()));
+      }
     }
 
     /* On non-macOS platforms, explicitly link libstdc++.
@@ -292,6 +1236,21 @@ int main(int argc, const char** argv)
     {
       compiler_args.push_back(strdup("-lstdc++"));
     }
+
+    if(emit_shared_library)
+    {
+#if defined(__APPLE__)
+      compiler_args.push_back(strdup("-dynamiclib"));
+      compiler_args.push_back(strdup("-Wl,-undefined,dynamic_lookup"));
+#else
+      compiler_args.push_back(strdup("-shared"));
+#endif
+    }
+    else
+    {
+      compiler_args.push_back(strdup("-rdynamic"));
+    }
+    compiler_args.push_back(strdup("-O2"));
 
     /* Required because of `strdup` usage and need to manually free the memory.
      * Clang expects C strings that we own. */
@@ -305,7 +1264,7 @@ int main(int argc, const char** argv)
     } };
 
     compiler_args.push_back(strdup("-o"));
-    compiler_args.push_back(strdup(util::cli::opts.output_filename.c_str()));
+    compiler_args.push_back(strdup(output_filename.c_str()));
 
     //util::println("compilation command: {} ", compiler_args);
 

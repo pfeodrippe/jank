@@ -11,6 +11,8 @@ namespace jank::runtime::obj
 {
   static constexpr auto epsilon{ std::numeric_limits<f64>::epsilon() };
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // boost::multiprecision has .str() method but native long long does not
   static native_big_decimal to_native_big_decimal(ratio_data const &r)
   {
     return native_big_decimal(r.numerator.str().c_str())
@@ -21,6 +23,19 @@ namespace jank::runtime::obj
   {
     return to_native_big_decimal(r.data);
   }
+#else
+  // For WASM: native_big_decimal is just double, native_big_integer is long long
+  static native_big_decimal to_native_big_decimal(ratio_data const &r)
+  {
+    return static_cast<native_big_decimal>(r.numerator)
+      / static_cast<native_big_decimal>(r.denominator);
+  }
+
+  static native_big_decimal to_native_big_decimal(ratio const &r)
+  {
+    return to_native_big_decimal(r.data);
+  }
+#endif
 
   static native_big_integer extract_big_integer(object_ref const d)
   {
@@ -35,13 +50,16 @@ namespace jank::runtime::obj
     }
     else
     {
-      throw std::runtime_error{
-        util::format("Type {} cannot be used as a ratio numerator or denominator.", d->type)
-      };
+      throw std::runtime_error{ util::format(
+        "Type cannot be used as a ratio numerator or denominator: {}",
+        runtime::to_string(d)) };
     }
     return result;
   }
 
+
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Only needed when native_big_integer != i64 (boost::multiprecision)
   ratio_data::ratio_data(native_big_integer const &numerator, native_big_integer const &denominator)
     : numerator{ numerator }
     , denominator{ denominator }
@@ -60,16 +78,39 @@ namespace jank::runtime::obj
       this->denominator = -1 * this->denominator;
     }
   }
+#endif
 
   ratio_data::ratio_data(big_integer const &numerator, big_integer const &denominator)
     : ratio_data(numerator.data, denominator.data)
   {
   }
 
+#ifdef JANK_TARGET_EMSCRIPTEN
+  // For WASM: native_big_integer == i64, so only one constructor is needed
+  ratio_data::ratio_data(i64 const numerator, i64 const denominator)
+    : numerator{ numerator }
+    , denominator{ denominator }
+  {
+    if(denominator == 0)
+    {
+      throw std::invalid_argument{ "Ratio denominator cannot be zero." };
+    }
+    auto const gcd{ big_integer::gcd(numerator, denominator) };
+    this->numerator /= gcd;
+    this->denominator /= gcd;
+
+    if(denominator < 0)
+    {
+      this->numerator = -1 * this->numerator;
+      this->denominator = -1 * this->denominator;
+    }
+  }
+#else
   ratio_data::ratio_data(i64 const numerator, i64 const denominator)
     : ratio_data(native_big_integer(numerator), native_big_integer(denominator))
   {
   }
+#endif
 
   ratio_data::ratio_data(object_ref const numerator, object_ref const denominator)
     : ratio_data(extract_big_integer(numerator), extract_big_integer(denominator))
@@ -81,6 +122,8 @@ namespace jank::runtime::obj
   {
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Only needed when native_big_integer != i64 (boost::multiprecision)
   object_ref
   ratio::create(native_big_integer const &numerator, native_big_integer const &denominator)
   {
@@ -101,6 +144,18 @@ namespace jank::runtime::obj
   {
     return create(native_big_integer(numerator), native_big_integer(denominator));
   }
+#else
+  // For WASM: native_big_integer == i64, so only one implementation
+  object_ref ratio::create(i64 const numerator, i64 const denominator)
+  {
+    ratio_data const data{ numerator, denominator };
+    if(data.denominator == 1)
+    {
+      return make_box<integer>(data.numerator);
+    }
+    return make_box<ratio>(data);
+  }
+#endif
 
   f64 ratio_data::to_real() const
   {
@@ -172,7 +227,14 @@ namespace jank::runtime::obj
         using T = std::decay_t<decltype(*typed_o)>;
         if constexpr(std::is_same_v<T, big_decimal>)
         {
+#ifdef JANK_TARGET_EMSCRIPTEN
+          // For WASM: native_big_decimal is double, use standard comparison
+          auto const lhs = to_native_big_decimal(*this);
+          auto const rhs = typed_o->data;
+          return (lhs > rhs) - (lhs < rhs);
+#else
           return to_native_big_decimal(*this).compare(typed_o->data);
+#endif
         }
         else
         {
@@ -616,6 +678,8 @@ namespace jank::runtime::obj
     return l < (r ? 1ll : 0ll);
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Only needed when native_big_integer != i64 (boost::multiprecision)
   ratio_ref operator+(ratio_data const &l, native_big_integer const &r)
   {
     return make_box<ratio>(ratio_data(l.numerator + (r * l.denominator), l.denominator));
@@ -716,6 +780,7 @@ namespace jank::runtime::obj
     return l >= ratio_data(r, 1);
   }
 
+  // Only needed when native_big_decimal != f64 (boost::multiprecision)
   native_big_decimal operator+(ratio_data const &l, native_big_decimal const &r)
   {
     return to_native_big_decimal(l) + r;
@@ -819,4 +884,5 @@ namespace jank::runtime::obj
   {
     return to_native_big_decimal(l) >= r;
   }
+#endif // JANK_TARGET_EMSCRIPTEN
 }
