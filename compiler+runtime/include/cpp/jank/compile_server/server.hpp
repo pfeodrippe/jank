@@ -297,6 +297,11 @@ namespace jank::compile_server
 
     void handle_connection(tcp::socket socket)
     {
+      // Clear loaded namespaces cache for fresh client
+      // This is needed because the iOS app may have restarted (fresh JIT state)
+      // while the compile server is still running with stale cache
+      loaded_namespaces_.clear();
+
       try
       {
         boost::asio::streambuf buffer;
@@ -1051,20 +1056,22 @@ namespace jank::compile_server
                                 "compile");
         }
 
-        // Analyze ALL forms with *ns* bound to the target namespace
-        {
-          runtime::context::binding_scope const analysis_scope{
-            runtime::obj::persistent_hash_map::create_unique(
-              std::make_pair(runtime::__rt_ctx->current_ns_var, target_ns))
-          };
+        // Analyze, wrap, and codegen ALL forms with *ns* bound to the target namespace.
+        // CRITICAL: The binding scope MUST extend through wrap_expressions and codegen,
+        // because both use __rt_ctx->current_ns() to generate unique names and symbol counters.
+        // If the scope closes too early, names will be based on "clojure.core" instead of
+        // the target namespace, causing symbol mismatches and nil constants on iOS JIT.
+        runtime::context::binding_scope const analysis_scope{
+          runtime::obj::persistent_hash_map::create_unique(
+            std::make_pair(runtime::__rt_ctx->current_ns_var, target_ns))
+        };
 
-          for(auto const &parsed_form : all_forms)
-          {
-            auto expr
-              = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
-            expr = analyze::pass::optimize(expr);
-            exprs.push_back(expr);
-          }
+        for(auto const &parsed_form : all_forms)
+        {
+          auto expr
+            = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+          expr = analyze::pass::optimize(expr);
+          exprs.push_back(expr);
         }
 
         // Generate module name
@@ -1077,6 +1084,9 @@ namespace jank::compile_server
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
         auto const cpp_code_body = cg_prc.declaration_str();
+
+        // Extract constant metadata for iOS JIT BSS pre-allocation
+        auto const constants = cg_prc.get_lifted_constants_metadata();
 
         // Use the jank_load_XXX function as the entry symbol - this function is generated
         // by the codegen processor and contains the critical var/constant initialization code.
@@ -1131,7 +1141,8 @@ namespace jank::compile_server
           compiled_module_info{ std::string(module_name.data(), module_name.size()),
                                 entry_symbol,
                                 base64_encode(object_result.object_data),
-                                source_path });
+                                source_path,
+                                constants });
 
         std::cout << "[compile-server] Namespace " << ns_name
                   << " compiled successfully, object size: " << object_result.object_data.size()
@@ -1152,7 +1163,22 @@ namespace jank::compile_server
           response += R"({"name":")" + escape_json(mod.name);
           response += R"(","symbol":")" + escape_json(mod.symbol);
           response += R"(","path":")" + escape_json(mod.source_path);
-          response += R"(","object":")" + mod.encoded_object + R"("})";
+          response += R"(","object":")" + mod.encoded_object;
+          // Add constants array for iOS JIT BSS pre-allocation
+          response += R"(","constants":[)";
+          bool first_const = true;
+          for(auto const &c : mod.constants)
+          {
+            if(!first_const)
+            {
+              response += ",";
+            }
+            first_const = false;
+            response += R"({"name":")" + escape_json(c.qualified_name);
+            response += R"(","size":)" + std::to_string(c.size);
+            response += R"(,"align":)" + std::to_string(c.alignment) + "}";
+          }
+          response += R"(]})";
         }
         response += "]}";
 
@@ -1518,6 +1544,7 @@ namespace jank::compile_server
       std::string symbol;
       std::string encoded_object;
       std::string source_path;
+      native_vector<constant_info> constants;  // For iOS JIT BSS pre-allocation
     };
 
     // Compile a single namespace from source (helper for require_ns)
@@ -1565,23 +1592,25 @@ namespace jank::compile_server
           return jtl::none;
         }
 
-        // Analyze ALL forms with *ns* bound to the target namespace
+        // Analyze, wrap, and codegen ALL forms with *ns* bound to the target namespace.
+        // CRITICAL: The binding scope MUST extend through wrap_expressions and codegen,
+        // because both use __rt_ctx->current_ns() to generate unique names and symbol counters.
+        // If the scope closes too early, names will be based on "clojure.core" instead of
+        // the target namespace, causing symbol mismatches and nil constants on iOS JIT.
         analyze::processor an_prc;
         native_vector<analyze::expression_ref> exprs;
 
-        {
-          runtime::context::binding_scope const analysis_scope{
-            runtime::obj::persistent_hash_map::create_unique(
-              std::make_pair(runtime::__rt_ctx->current_ns_var, target_ns))
-          };
+        runtime::context::binding_scope const analysis_scope{
+          runtime::obj::persistent_hash_map::create_unique(
+            std::make_pair(runtime::__rt_ctx->current_ns_var, target_ns))
+        };
 
-          for(auto const &parsed_form : all_forms)
-          {
-            auto expr
-              = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
-            expr = analyze::pass::optimize(expr);
-            exprs.push_back(expr);
-          }
+        for(auto const &parsed_form : all_forms)
+        {
+          auto expr
+            = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+          expr = analyze::pass::optimize(expr);
+          exprs.push_back(expr);
         }
 
         // Generate module name
@@ -1594,6 +1623,9 @@ namespace jank::compile_server
         // Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::module };
         auto const cpp_code_body = cg_prc.declaration_str();
+
+        // Extract constant metadata for iOS JIT BSS pre-allocation
+        auto const constants = cg_prc.get_lifted_constants_metadata();
 
         // Use the jank_load_XXX function as the entry symbol - this function is generated
         // by the codegen processor and contains the critical var/constant initialization code.
@@ -1644,7 +1676,8 @@ namespace jank::compile_server
         return compiled_module_info{ std::string(module_name.data(), module_name.size()),
                                      entry_symbol,
                                      base64_encode(object_result.object_data),
-                                     source_path };
+                                     source_path,
+                                     constants };
       }
       catch(std::exception const &e)
       {

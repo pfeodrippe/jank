@@ -144,6 +144,12 @@ extern "C"
   jank_object_ref jank_const_nil();
   jank_object_ref jank_const_true();
   jank_object_ref jank_const_false();
+
+  /* Constant registry for iOS JIT compatibility.
+   * Constants are stored in a registry and accessed by key to avoid BSS relocation issues. */
+  void jank_constant_set(char const *key, jank_object_ref value);
+  jank_object_ref jank_constant_get(char const *key);
+
   jank_object_ref jank_integer_create(jank_i64 i);
   jank_object_ref jank_big_integer_create(char const * const s);
   jank_object_ref jank_big_decimal_create(char const * const s);

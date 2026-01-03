@@ -2,6 +2,7 @@
 
 #include <jank/analyze/processor.hpp>
 #include <jank/codegen/llvm_processor.hpp>
+#include <jank/compile_server/protocol.hpp>
 
 namespace jank::analyze
 {
@@ -175,6 +176,14 @@ namespace jank::codegen
                             jtl::immutable_string const &ret_tmp,
                             native_vector<analyze::expression_ref> const &arg_exprs,
                             analyze::expr::function_arity const &fn_arity);
+
+    /* For module target, wrap constant access with registry lookup to avoid
+     * iOS JIT ADRP relocation issues. For other targets, return name as-is. */
+    jtl::immutable_string wrap_constant_access(jtl::immutable_string const &simple_name);
+
+    /* Returns metadata for all lifted constants (for iOS JIT BSS pre-allocation).
+     * The qualified_name is the mangled C++ symbol name (e.g., "_ZN8vybe_sdf8const_117E"). */
+    native_vector<compile_server::constant_info> get_lifted_constants_metadata() const;
 
     analyze::expr::function_ref root_fn;
     jtl::immutable_string module;

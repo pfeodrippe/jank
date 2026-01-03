@@ -3,10 +3,13 @@
 #include <jank/runtime/object.hpp>
 #include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/core/to_string.hpp>
+#include <jank/runtime/module/loader.hpp>
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <execinfo.h>
 #include <cxxabi.h>
+#include <dlfcn.h>
 
 namespace jank::runtime
 {
@@ -55,14 +58,41 @@ namespace jank::runtime
         sb(source.to_string());
       }
 
+      // Show current execution context from source hint stack
+      auto const current_src{ runtime::current_source_hint() };
+      if(current_src != read::source::unknown())
+      {
+        sb("\n\n=== Current jank Source Location ===\n");
+        sb("File: ");
+        sb(current_src.file.data());
+        sb("\nModule: ");
+        sb(current_src.module.data());
+        sb("\nLine ");
+        sb(std::to_string(current_src.start.line));
+        sb(", Column ");
+        sb(std::to_string(current_src.start.col));
+        if(current_src.end.line != current_src.start.line)
+        {
+          sb(" to Line ");
+          sb(std::to_string(current_src.end.line));
+          sb(", Column ");
+          sb(std::to_string(current_src.end.col));
+        }
+        sb("\n");
+      }
+
+      // Print debug execution trace
+      sb(runtime::debug_trace_dump());
+
       // Print stack trace for debugging using execinfo (works on iOS)
-      sb("\n\n=== C++ Stack Trace ===\n");
+      sb("\n=== C++ Stack Trace ===\n");
       void *callstack[64];
       int frames = backtrace(callstack, 64);
       char **strs = backtrace_symbols(callstack, frames);
       for(int i = 0; i < frames; ++i)
       {
         std::string frame_str(strs[i]);
+
         // Try to demangle C++ symbols
         size_t mangled_start = frame_str.find("_Z");
         if(mangled_start != std::string::npos)
@@ -77,8 +107,30 @@ namespace jank::runtime
             free(demangled);
           }
         }
+
+#ifdef JANK_IOS_JIT
+        // Try to lookup JIT symbol for this address
+        uintptr_t frame_addr = reinterpret_cast<uintptr_t>(callstack[i]);
+        std::string jit_sym = module::lookup_jit_symbol(frame_addr);
+        if(!jit_sym.empty())
+        {
+          sb("  [JIT] ");
+          sb(jit_sym);
+          sb(" @ 0x");
+          std::ostringstream addr_ss;
+          addr_ss << std::hex << frame_addr;
+          sb(addr_ss.str());
+          sb("\n");
+        }
+        else
+        {
+          sb(frame_str);
+          sb("\n");
+        }
+#else
         sb(frame_str);
         sb("\n");
+#endif
       }
       free(strs);
       sb("=== End Stack Trace ===\n");

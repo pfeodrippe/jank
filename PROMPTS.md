@@ -1,5 +1,128 @@
+How to solve   Loading frag: vulkan_kim/mesh.frag.spv
+    Vert size: 5624, Frag size: 2648
+Mesh preview pipeline initialized
+Mesh preview uploaded: 140712 vertices, 211068 triangles
+GLB loaded and displayed: exported_scene.glb
+Mesh loaded successfully!
+Default shader: hand_cigarette
+Objects loaded: 6
+Starting iOS viewer...
+2026-01-04 17:26:54.858 SdfViewerMobile-JIT-Sim[47521:197619485] Unbalanced calls to begin/end appearance transitions for <SDL_uikitviewcontroller: 0x102824400>.
+2026-01-04 17:26:54.858 SdfViewerMobile-JIT-Sim[47521:197619485] Unbalanced calls to begin/end appearance transitions for <SDL_uikitviewcontroller: 0x102824400>.
+[DEBUG] load_shader_by_name: entering with name=hand_cigarette
+[DEBUG] load_shader_by_name: engine OK, shaderDir=vulkan_kim
+[DEBUG] load_shader_by_name: compPath=vulkan_kim/hand_cigarette.comp
+[DEBUG] load_shader_by_name: loading pre-compiled SPIR-V...
+[iOS] Loading pre-compiled SPIR-V: vulkan_kim/hand_cigarette.spv
+[DEBUG] load_shader_by_name: compile SUCCESS (15397 words)
+[DEBUG] load_shader_by_name: pipeline created successfully, handle=0x108504410
+[DEBUG] load_shader_by_name: dirty flag set to TRUE
+[DEBUG] load_shader_by_name: COMPLETE! Loaded shader: hand_cigarette
+Shader: hand_cigarette
+
+╔══════════════════════════════════════════════════════════════
+║ C++ Standard Exception
+╠══════════════════════════════════════════════════════════════
+║ not a number: nil
+║
+║ Note: This is a C++ exception, not a jank exception.
+║ It may be from C++ interop code or runtime type checking.
+╠══════════════════════════════════════════════════════════════
+║ Stack Trace:
+╠══════════════════════════════════════════════════════════════
+║ 0   SdfViewerMobile-JIT-Sim.debug.dylib 0x0000000109d8aae0 call_jank_main_impl() + 2064
+║ 1   SdfViewerMobile-JIT-Sim.debug.dylib 0x0000000109d6cd4c call_jank_main() + 44
+║ 2   SdfViewerMobile-JIT-Sim.debug.dylib 0x0000000109d6c9f0 sdf_viewer_main + 260
+║ 3   SdfViewerMobile-JIT-Sim.debug.dylib 0x0000000109cc2ba8 SDL_main + 96
+║ 4   libSDL3.0.dylib                     0x000000010173e154 -[SDLUIKitDelegate postFinishLaunch] + 64
+║ 5   Foundation                          0x0000000180f32760 __NSFireDelayedPerform + 332
+║ 6   CoreFoundation                      0x000000018041becc __CFRUNLOOP_IS_CALLING_OUT_TO_A_TIMER_CALLBACK_FUNCTION__ + 28
+║ 7   CoreFoundation                      0x000000018041bb88 __CFRunLoopDoTimer + 956
+║ 8   CoreFoundation                      0x000000018041b21c __CFRunLoopDoTimers + 284
+║ 9   CoreFoundation                      0x00000001804157ac __CFRunLoopRun + 1804
+║ 10  CoreFoundation                      0x0000000180414c24 CFRunLoopRunSpecific + 552
+
+║ 11  GraphicsServices                    0x000000019020ab10 GSEventRunModal + 160
+║ 12  UIKitCore                           0x0000000185ad82fc -[UIApplication _run] + 796
+║ 13  UIKitCore                           0x0000000185adc4f4 UIApplicationMain + 124
+║ 14  libSDL3.0.dylib                     0x000000010173d290 SDL_RunApp + 196
+║ 15  SdfViewerMobile-JIT-Sim.debug.dylib 0x0000000109cc2b3c __debug_main_executable_dylib_entry_point + 48
+║ 16  dyld                                0x000000010112d410 start_sim + 20
+║ 17  ???                                 0x000000010100a274 0x0 + 4311786100
+
+=== jank Execution Trace (most recent last) ===
+    0: -main
+    1: run!
+    2: draw
+    3: update-uniforms!
+=== End Execution Trace ===
+╚══════════════════════════════════════════════════════════════
+
 Why would I have this error?
 
+
+I'm having below, ultrathink, investigate. create a .md plan where we could fix it!!! This is running ios jit (ios aot works fine), desktop jit also works fine
+
+
+> Vulkan initialized!
+         UBO size: 1152 bytes
+         Scene has 6 objects
+         Loading pre-exported GLB mesh...
+         [load_glb_and_display] Called with: exported_scene.glb
+         [load_glb_and_display] Resolved relative path to: exported_scene.glb
+         [load_glb_and_display] Calling mc::loadGLB with: exported_scene.glb
+         Loaded GLB: exported_scene.glb - 140712 vertices, 211068 triangles, with colors, with normals
+         [load_glb_and_display] GLB loaded: 140712 verts, 633204 indices
+         Initializing mesh preview pipeline...
+             Shader dir: vulkan_kim
+             Loading vert: vulkan_kim/mesh.vert.spv
+             Loading frag: vulkan_kim/mesh.frag.spv
+             Vert size: 5624, Frag size: 2648
+         Mesh preview pipeline initialized
+         Mesh preview uploaded: 140712 vertices, 211068 triangles
+         GLB loaded and displayed: exported_scene.glb
+         Mesh loaded successfully!
+         Default shader: hand_cigarette
+         Objects loaded: 6
+         Starting iOS viewer...
+         2026-01-04 14:17:31.237 SdfViewerMobile-JIT-Sim[32105:197061995] Unbalanced calls to begin/end appearance transitions for <SDL_uikitviewcontroller: 0x103026400>.
+         2026-01-04 14:17:31.238 SdfViewerMobile-JIT-Sim[32105:197061995] Unbalanced calls to begin/end appearance transitions for <SDL_uikitviewcontroller: 0x103026400>.
+         ╔══════════════════════════════════════════════════════════════
+         ║ C++ Standard Exception
+         ╠══════════════════════════════════════════════════════════════
+         ║ not a number: nil
+         ║
+         ║ Note: This is a C++ exception, not a jank exception.
+         ║ It may be from C++ interop code or runtime type checking.
+         ╠══════════════════════════════════════════════════════════════
+         ║ Stack Trace:
+         ╠══════════════════════════════════════════════════════════════
+         ║ 0   SdfViewerMobile-JIT-Sim.debug.dylib 0x000000010920eae0 call_jank_main_impl() + 2064
+         ║ 1   SdfViewerMobile-JIT-Sim.debug.dylib 0x00000001091f0d4c call_jank_main() + 44
+         ║ 2   SdfViewerMobile-JIT-Sim.debug.dylib 0x00000001091f09f0 sdf_viewer_main + 260
+         ║ 3   SdfViewerMobile-JIT-Sim.debug.dylib 0x0000000109146ba8 SDL_main + 96
+         ║ 4   libSDL3.0.dylib                     0x0000000100bc2154 -[SDLUIKitDelegate postFinishLaunch] + 64
+         ║ 5   Foundation                          0x0000000180f32760 __NSFireDelayedPerform + 332
+         ║ 6   CoreFoundation                      0x000000018041becc __CFRUNLOOP_IS_CALLING_OUT_TO_A_TIMER_CALLBACK_FUNCTION__ + 28
+         ║ 7   CoreFoundation                      0x000000018041bb88 __CFRunLoopDoTimer + 956
+         ║ 8   CoreFoundation                      0x000000018041b21c __CFRunLoopDoTimers + 284
+         ║ 9   CoreFoundation                      0x00000001804157ac __CFRunLoopRun + 1804
+         ║ 10  CoreFoundation                      0x0000000180414c24 CFRunLoopRunSpecific + 552
+         ║ 11  GraphicsServices                    0x000000019020ab10 GSEventRunModal + 160
+         ║ 12  UIKitCore                           0x0000000185ad82fc -[UIApplication _run] + 796
+         ║ 13  UIKitCore                           0x0000000185adc4f4 UIApplicationMain + 124
+         ║ 14  libSDL3.0.dylib                     0x0000000100bc1290 SDL_RunApp + 196
+         ║ 15  SdfViewerMobile-JIT-Sim.debug.dylib 0x0000000109146b3c __debug_main_executable_dylib_entry_point + 48
+         ║ 16  dyld                                0x000000010038d410 start_sim + 20
+         ║ 17  ???                                 0x0000000100556274 0x0 + 4300563060
+         === jank Execution Trace (most recent last) ===
+             0: -main
+             1: run!
+             2: draw
+             3: update-uniforms!
+         === End Execution Trace ===
+         ╚══════════════════════════════════════════════════════════════
+         (5m 6s)
 [compile-server] Modules to compile for iOS: 17
 [compile-server] Skipping core module: jank.nrepl-server.asio
 [compile-server] Skipping core module: clojure.core
@@ -326,3 +449,5 @@ Fetch https://github.com/SanderMertens/flecs/blob/master/include/flecs/addons/cp
 ## Prompt 16 (November 29, 2025)
 
 At line 1110 of compiler+runtime/test/cpp/jank/nrepl/engine.cpp , there should exist completions!! Don't cheat, fix it!!
+
+Why am I having below? Just create a .md plan (don't modify code)

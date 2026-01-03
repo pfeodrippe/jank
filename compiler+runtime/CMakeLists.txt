@@ -1083,6 +1083,7 @@ else()
   # Desktop or iOS with JIT: use real JIT processor
   list(APPEND jank_lib_sources src/cpp/jank/jit/processor.cpp)
   list(APPEND jank_lib_sources src/cpp/jank/jit/interpreter.cpp)
+  list(APPEND jank_lib_sources src/cpp/jank/jit/bss_preallocator.cpp)
 endif()
 
 add_library(
@@ -1152,7 +1153,8 @@ elseif(jank_target_ios)
     )
 
     # Define JANK_TARGET_IOS only - JIT is enabled like desktop
-    target_compile_definitions(jank_lib PUBLIC JANK_TARGET_IOS=1 JANK_IOS_JIT=1)
+    # JANK_DEBUG_SOURCE_TRACKING enables source location tracking at function entry for debugging
+    target_compile_definitions(jank_lib PUBLIC JANK_TARGET_IOS=1 JANK_IOS_JIT=1 JANK_DEBUG_SOURCE_TRACKING=1)
 
     # iOS includes including LLVM/CppInterOp
     target_include_directories(

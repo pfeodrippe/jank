@@ -22,6 +22,7 @@
 #include <jank/util/cpptrace.hpp>
 
 #include <jank/jit/processor.hpp>
+#include <jank/jit/bss_preallocator.hpp>
 #include <jank/util/make_array.hpp>
 #include <jank/util/environment.hpp>
 #include <jank/util/fmt/print.hpp>
@@ -446,6 +447,9 @@ namespace jank::jit
      * runtime, which likely won't happen until clang::Interpreter is on the ORC runtime. */
     /* TODO: Return result on failure. */
     llvm::cantFail(ee->addObjectFile(std::move(file.get())));
+    /* Initialize the JITDylib to ensure proper symbol materialization and relocation.
+     * Without this, static namespace-scope variables may not be properly linked. */
+    llvm::cantFail(ee->initialize(ee->getMainJITDylib()));
     loaded_objects_.insert(path_key);
     register_jit_stack_frames();
   }
@@ -473,6 +477,16 @@ namespace jank::jit
     if(err)
     {
       llvm::logAllUnhandledErrors(std::move(err), llvm::errs(), "error: ");
+      llvm::errs().flush();
+      return false;
+    }
+
+    /* Initialize the JITDylib to ensure proper symbol materialization and relocation.
+     * Without this, static namespace-scope variables may not be properly linked. */
+    auto init_err = ee->initialize(ee->getMainJITDylib());
+    if(init_err)
+    {
+      llvm::logAllUnhandledErrors(std::move(init_err), llvm::errs(), "init error: ");
       llvm::errs().flush();
       return false;
     }
@@ -528,6 +542,19 @@ namespace jank::jit
       return err(util::format("Failed to remove the symbol: '{}'", name));
     }
     return ok();
+  }
+
+  bool processor::preallocate_constants(
+    native_vector<compile_server::constant_info> const &constants) const
+  {
+    if(constants.empty())
+    {
+      return true;
+    }
+
+    auto const ee{ interpreter->getExecutionEngine() };
+    bss_preallocator preallocator;
+    return preallocator.preallocate(*ee, ee->getMainJITDylib(), constants);
   }
 
   jtl::string_result<void *> processor::find_symbol(jtl::immutable_string const &name) const

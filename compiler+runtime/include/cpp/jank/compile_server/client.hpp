@@ -180,9 +180,11 @@ namespace jank::compile_server
         response.entry_symbol = get_json_string(line, "symbol");
         auto encoded = get_json_string(line, "object");
         response.object_data = base64_decode(encoded);
+        response.constants = parse_constants_array(line);
 
         std::cout << "[compile-client] Compiled successfully, object size: "
-                  << response.object_data.size() << " bytes" << std::endl;
+                  << response.object_data.size() << " bytes, constants: "
+                  << response.constants.size() << std::endl;
       }
       else if(op == "error")
       {
@@ -391,6 +393,7 @@ namespace jank::compile_server
               mod.source_path = get_json_string(obj_str, "path");
               auto encoded = get_json_string(obj_str, "object");
               mod.object_data = base64_decode(encoded);
+              mod.constants = parse_constants_array(obj_str);
 
               if(!mod.name.empty())
               {
@@ -626,6 +629,97 @@ namespace jank::compile_server
       {
         return 0;
       }
+    }
+
+    // Parse the "constants" JSON array for BSS pre-allocation
+    static std::vector<constant_info> parse_constants_array(std::string const &json)
+    {
+      std::vector<constant_info> result;
+
+      // Find the "constants" key
+      auto key_pos = json.find("\"constants\"");
+      if(key_pos == std::string::npos)
+      {
+        return result;
+      }
+
+      // Find the opening bracket
+      auto arr_start = json.find('[', key_pos);
+      if(arr_start == std::string::npos)
+      {
+        return result;
+      }
+
+      // Find matching closing bracket
+      int depth = 1;
+      size_t arr_end = arr_start + 1;
+      while(arr_end < json.size() && depth > 0)
+      {
+        if(json[arr_end] == '[')
+        {
+          depth++;
+        }
+        else if(json[arr_end] == ']')
+        {
+          depth--;
+        }
+        arr_end++;
+      }
+
+      if(depth != 0)
+      {
+        return result;
+      }
+
+      // Parse each object in the array
+      size_t pos = arr_start + 1;
+      while(pos < arr_end)
+      {
+        auto obj_start = json.find('{', pos);
+        if(obj_start == std::string::npos || obj_start >= arr_end)
+        {
+          break;
+        }
+
+        // Find matching closing brace
+        depth = 1;
+        size_t obj_end = obj_start + 1;
+        while(obj_end < arr_end && depth > 0)
+        {
+          if(json[obj_end] == '{')
+          {
+            depth++;
+          }
+          else if(json[obj_end] == '}')
+          {
+            depth--;
+          }
+          obj_end++;
+        }
+
+        if(depth == 0)
+        {
+          std::string obj_str = json.substr(obj_start, obj_end - obj_start);
+
+          constant_info info;
+          info.qualified_name = get_json_string(obj_str, "name");
+          info.size = static_cast<size_t>(get_json_int(obj_str, "size"));
+          info.alignment = static_cast<size_t>(get_json_int(obj_str, "align"));
+
+          if(!info.qualified_name.empty() && info.size > 0)
+          {
+            result.push_back(std::move(info));
+          }
+
+          pos = obj_end;
+        }
+        else
+        {
+          break;
+        }
+      }
+
+      return result;
     }
 
     static std::vector<uint8_t> base64_decode(std::string const &encoded)

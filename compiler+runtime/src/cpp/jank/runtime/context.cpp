@@ -44,6 +44,7 @@
 #include <jank/profile/time.hpp>
 #ifdef JANK_IOS_JIT
   #include <jank/compile_server/remote_compile.hpp>
+  #include <jank/jit/bss_preallocator.hpp>
 #endif
 
 namespace jank::runtime
@@ -240,6 +241,22 @@ namespace jank::runtime
       {
         /* No object generated - might be a no-op form */
         return jank_nil();
+      }
+
+      /* Pre-allocate BSS storage for constants to avoid ADRP distance violations */
+      if(!response.constants.empty())
+      {
+        profile::timer const prealloc_timer{ "rt eval_string:remote:prealloc" };
+        native_vector<compile_server::constant_info> constants;
+        for(auto const &c : response.constants)
+        {
+          constants.push_back(c);
+        }
+        if(!jit_prc.preallocate_constants(constants))
+        {
+          throw error::internal_codegen_failure(
+            jtl::immutable_string{ "Failed to pre-allocate constants for remote-compiled object" });
+        }
       }
 
       /* Load the object file into the JIT */

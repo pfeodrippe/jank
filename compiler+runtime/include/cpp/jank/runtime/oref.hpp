@@ -180,6 +180,12 @@ namespace jank::runtime
       return data->type == object_type::nil;
     }
 
+    /* Create an oref from a raw void pointer (for iOS JIT constant registry). */
+    static oref from_ptr(void *ptr) noexcept
+    {
+      return oref{ reinterpret_cast<value_type *>(ptr) };
+    }
+
     value_type *data{ std::bit_cast<object *>(jank_const_nil()) };
   };
 

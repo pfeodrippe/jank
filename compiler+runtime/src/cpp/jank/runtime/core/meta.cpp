@@ -1,4 +1,5 @@
 #include <vector>
+#include <exception>
 
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core/meta.hpp>
@@ -283,6 +284,99 @@ namespace jank::runtime
     {
       hint_stack.pop_back();
     }
+  }
+
+  read::source current_source_hint()
+  {
+    auto &hint_stack(source_hint_stack());
+    if(!hint_stack.empty())
+    {
+      return hint_stack.back();
+    }
+    return read::source::unknown();
+  }
+
+  namespace
+  {
+    constexpr size_t debug_trace_max_entries{ 32 };
+
+    struct debug_trace_entry
+    {
+      char const *location{ nullptr };
+      char const *file{ nullptr };
+      int line{ 0 };
+    };
+
+    auto &debug_trace_stack()
+    {
+      thread_local std::vector<debug_trace_entry> stack;
+      return stack;
+    }
+  }
+
+  void debug_trace_push(char const *location, char const *file, int line)
+  {
+    auto &stack{ debug_trace_stack() };
+
+    /* If no file provided, try to get it from the runtime context */
+    char const *effective_file = file;
+    int effective_line = line;
+
+    if(!file && __rt_ctx)
+    {
+      static thread_local std::string file_buffer;
+      auto const file_obj{ __rt_ctx->current_file_var->deref() };
+      if(!file_obj.is_nil())
+      {
+        file_buffer = to_string(file_obj);
+        effective_file = file_buffer.c_str();
+      }
+    }
+
+    stack.push_back({ location, effective_file, effective_line });
+    /* Keep only the last N entries to avoid memory growth */
+    if(stack.size() > debug_trace_max_entries)
+    {
+      stack.erase(stack.begin());
+    }
+  }
+
+  void debug_trace_pop()
+  {
+    /* Don't pop during exception unwinding - we want to preserve the trace! */
+    if(std::uncaught_exceptions() > 0)
+    {
+      return;
+    }
+    auto &stack{ debug_trace_stack() };
+    if(!stack.empty())
+    {
+      stack.pop_back();
+    }
+  }
+
+  std::string debug_trace_dump()
+  {
+    auto &stack{ debug_trace_stack() };
+    std::string result;
+    result += "\n=== jank Execution Trace (most recent last) ===\n";
+    for(size_t i = 0; i < stack.size(); ++i)
+    {
+      result += "  ";
+      result += std::to_string(i);
+      result += ": ";
+      result += stack[i].location ? stack[i].location : "(null)";
+      if(stack[i].file && stack[i].line > 0)
+      {
+        result += " @ ";
+        result += stack[i].file;
+        result += ":";
+        result += std::to_string(stack[i].line);
+      }
+      result += "\n";
+    }
+    result += "=== End Execution Trace ===\n";
+    return result;
   }
 
   obj::persistent_hash_map_ref

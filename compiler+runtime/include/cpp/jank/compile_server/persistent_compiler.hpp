@@ -144,8 +144,25 @@ namespace jank::compile_server
       driver_args_storage.push_back("-c");
       driver_args_storage.push_back("-target");
       driver_args_storage.push_back(target_triple_);
+      // Use -nostdinc++ and explicitly add iOS SDK's libc++ headers
+      // This ensures we use iOS SDK headers, not LLVM's bundled libc++
+      // Must match the PCH build flags for header consistency
+      driver_args_storage.push_back("-nostdinc++");
+      driver_args_storage.push_back("-isystem");
+      driver_args_storage.push_back(sysroot_ + "/usr/include/c++/v1");
       driver_args_storage.push_back("-isysroot");
       driver_args_storage.push_back(sysroot_);
+
+      // Set minimum deployment target to match PCH (iOS 17.0)
+      if(target_triple_.find("simulator") != std::string::npos)
+      {
+        driver_args_storage.push_back("-mios-simulator-version-min=17.0");
+      }
+      else
+      {
+        driver_args_storage.push_back("-miphoneos-version-min=17.0");
+      }
+
       driver_args_storage.push_back("-std=gnu++20");
       driver_args_storage.push_back("-fPIC");
       driver_args_storage.push_back("-w");
@@ -167,6 +184,9 @@ namespace jank::compile_server
       {
         driver_args_storage.push_back("-include-pch");
         driver_args_storage.push_back(pch_path_);
+        // Skip PCH target validation to handle SDK version mismatches
+        driver_args_storage.push_back("-Xclang");
+        driver_args_storage.push_back("-fno-validate-pch");
       }
 
       for(auto const &inc : include_paths_)
@@ -374,13 +394,36 @@ namespace jank::compile_server
         }
       }
 
+      // Use -nostdinc++ and explicitly add iOS SDK's libc++ headers
+      // This ensures we use iOS SDK headers, not LLVM's bundled libc++
+      // Must match the PCH build flags for header consistency
+      args_storage.push_back("-nostdinc++");
+      args_storage.push_back("-isystem");
+      args_storage.push_back(sysroot + "/usr/include/c++/v1");
+      std::cout << "[incremental-compiler] Added -nostdinc++ and -isystem " << sysroot
+                << "/usr/include/c++/v1" << std::endl;
+
       args_storage.push_back("-isysroot");
       args_storage.push_back(sysroot);
+
+      // Set minimum deployment target to match PCH (iOS 17.0)
+      // This prevents clang from deriving version from SDK (e.g., 18.1)
+      if(target_triple.find("simulator") != std::string::npos)
+      {
+        args_storage.push_back("-mios-simulator-version-min=17.0");
+      }
+      else
+      {
+        args_storage.push_back("-miphoneos-version-min=17.0");
+      }
 
       if(!pch_path.empty() && std::filesystem::exists(pch_path))
       {
         args_storage.push_back("-include-pch");
         args_storage.push_back(pch_path);
+        // Skip PCH target validation to handle SDK version mismatches
+        args_storage.push_back("-Xclang");
+        args_storage.push_back("-fno-validate-pch");
         std::cout << "[incremental-compiler] Using PCH: " << pch_path << std::endl;
       }
 
@@ -399,8 +442,10 @@ namespace jank::compile_server
 
       // Convert to char* array
       std::vector<char const *> args;
+      std::cout << "[incremental-compiler] Full arg list:" << std::endl;
       for(auto const &arg : args_storage_)
       {
+        std::cout << "  " << arg << std::endl;
         args.push_back(arg.c_str());
       }
 
@@ -450,7 +495,8 @@ namespace jank::compile_server
                                                         "generic",
                                                         "",
                                                         target_opts,
-                                                        llvm::Reloc::PIC_));
+                                                        llvm::Reloc::PIC_,
+                                                        llvm::CodeModel::Large));
 
       if(!target_machine_)
       {

@@ -454,6 +454,23 @@ extern "C"
     return jank_false.erase().data;
   }
 
+  void jank_constant_set(char const * const key, jank_object_ref const value)
+  {
+    auto locked = __rt_ctx->constants.wlock();
+    (*locked)[key] = object_ref{ reinterpret_cast<object *>(value) };
+  }
+
+  jank_object_ref jank_constant_get(char const * const key)
+  {
+    auto locked = __rt_ctx->constants.rlock();
+    auto const it = locked->find(key);
+    if(it != locked->end())
+    {
+      return it->second.data;
+    }
+    return jank_nil().data;
+  }
+
   jank_object_ref jank_integer_create(jank_i64 const i)
   {
     return make_box(i).erase().data;

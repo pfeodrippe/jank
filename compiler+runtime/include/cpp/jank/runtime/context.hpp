@@ -182,6 +182,10 @@ namespace jank::runtime
 
     folly::Synchronized<native_unordered_map<obj::symbol_ref, ns_ref>> namespaces;
     folly::Synchronized<native_unordered_map<jtl::immutable_string, obj::keyword_ref>> keywords;
+    /* Constant registry for iOS JIT compatibility.
+     * On iOS JIT, BSS namespace-scope globals have ADRP relocation issues with ORC JIT ARM64.
+     * Constants are stored here and accessed via jank_constant_set/get C API. */
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, object_ref>> constants;
     folly::Synchronized<
       native_unordered_map<jtl::immutable_string, native_vector<cpp_function_metadata>>>
       global_cpp_functions;

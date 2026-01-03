@@ -53,6 +53,14 @@ namespace jank::compile_server
     std::string module; // module name for generated code
   };
 
+  // Constant metadata for pre-allocation (iOS JIT BSS fix)
+  struct constant_info
+  {
+    std::string qualified_name;  // e.g., "vybe_ui::const_117" (C++ qualified name)
+    size_t size{ sizeof(void*) };  // sizeof(object_ref)
+    size_t alignment{ alignof(void*) };  // alignof(object_ref)
+  };
+
   // Compile response from macOS to iOS
   struct compile_response
   {
@@ -62,6 +70,7 @@ namespace jank::compile_server
     // On success:
     std::vector<uint8_t> object_data; // ARM64 object file bytes
     std::string entry_symbol; // Symbol to call after loading
+    std::vector<constant_info> constants; // Lifted constants for pre-allocation
 
     // On error:
     std::string error;
@@ -84,6 +93,7 @@ namespace jank::compile_server
     std::string entry_symbol; // symbol to call after loading
     std::vector<uint8_t> object_data; // ARM64 object file bytes
     std::string source_path; // best-effort source path for this module (may be empty)
+    std::vector<constant_info> constants; // Lifted constants for pre-allocation
   };
 
   // Require response from macOS to iOS

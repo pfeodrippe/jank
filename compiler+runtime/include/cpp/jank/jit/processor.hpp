@@ -9,6 +9,7 @@
 #include <jtl/option.hpp>
 #include <jtl/result.hpp>
 #include <jtl/string_builder.hpp>
+#include <jank/compile_server/protocol.hpp>
 
 namespace llvm
 {
@@ -101,6 +102,12 @@ namespace jank::jit
     jtl::result<void, jtl::immutable_string>
     load_dynamic_libs(native_vector<jtl::immutable_string> const &libs) const;
     jtl::option<jtl::immutable_string> find_dynamic_lib(jtl::immutable_string const &lib) const;
+
+    /* Pre-allocate BSS storage for constants before loading object files.
+     * Required for iOS JIT to avoid ADRP relocation distance violations.
+     * Must be called BEFORE load_object() for objects that reference these symbols. */
+    bool preallocate_constants(
+      native_vector<compile_server::constant_info> const &constants) const;
 
     std::unique_ptr<Cpp::Interpreter> interpreter;
     native_vector<std::filesystem::path> library_dirs;

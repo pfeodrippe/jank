@@ -1119,7 +1119,8 @@ namespace jank::codegen
     }
     else
     {
-      ret = detail::lift_constant(lifted_constants, expr->data);
+      /* Lift the constant and wrap access for module target (iOS JIT registry). */
+      ret = wrap_constant_access(detail::lift_constant(lifted_constants, expr->data));
     }
 
     switch(expr->position)
@@ -2407,8 +2408,9 @@ namespace jank::codegen
     auto ret_tmp{ runtime::munge(__rt_ctx->unique_string("cpp_unbox")) };
     auto value_tmp{ gen(expr->value_expr, arity) };
     auto const type_name{ cpp_util::get_qualified_type_name(Cpp::GetCanonicalType(expr->type)) };
-    auto const meta{ detail::lift_constant(lifted_constants,
-                                           runtime::source_to_meta(expr->source)) };
+    /* Wrap constant access for module target (iOS JIT registry). */
+    auto const meta{ wrap_constant_access(detail::lift_constant(lifted_constants,
+                                           runtime::source_to_meta(expr->source))) };
 
     util::format_to(body_buffer,
                     "auto {}{ "
@@ -2757,6 +2759,35 @@ namespace jank::codegen
 
       //util::format_to(body_buffer, "jank::profile::timer __timer{ \"{}\" };", root_fn->name);
 
+      /* Emit source location tracking for debugging */
+      if(root_fn->source.is_some())
+      {
+        auto const &src{ root_fn->source.unwrap() };
+        util::format_to(body_buffer,
+                        R"(jank::runtime::source_hint_guard __src_guard{{ "{}", "{}", {}, {} }};)",
+                        util::escape(src.file),
+                        util::escape(src.module),
+                        src.start.line,
+                        src.start.col);
+      }
+
+      /* Always emit debug trace with function name and source location when available */
+      if(root_fn->source.is_some())
+      {
+        auto const &src{ root_fn->source.unwrap() };
+        util::format_to(body_buffer,
+                        R"(jank::runtime::debug_trace_guard __debug_trace( "{}", "{}", {} );)",
+                        util::escape(root_fn->name),
+                        util::escape(src.file),
+                        src.start.line);
+      }
+      else
+      {
+        util::format_to(body_buffer,
+                        R"(jank::runtime::debug_trace_guard __debug_trace( "{}" );)",
+                        util::escape(root_fn->name));
+      }
+
       if(!param_shadows_fn && arity.fn_ctx->is_named_recursive)
       {
         util::format_to(body_buffer,
@@ -2890,13 +2921,28 @@ namespace jank::codegen
 
       for(auto const &v : lifted_constants)
       {
-        util::format_to(footer_buffer,
-                        "new (&{}::{}) {}(",
-                        ns,
-                        v.second,
-                        detail::gen_constant_type(v.first, true));
-        detail::gen_constant(v.first, footer_buffer, true);
-        util::format_to(footer_buffer, ");");
+        if(target == compilation_target::module)
+        {
+          /* Use constant registry for module target to avoid iOS JIT ADRP relocation issues.
+           * Instead of placement-new to BSS globals, store constants in runtime registry. */
+          util::format_to(footer_buffer,
+                          "jank_constant_set(\"{}::{}\", (",
+                          ns,
+                          v.second);
+          detail::gen_constant(v.first, footer_buffer, true);
+          util::format_to(footer_buffer, ").erase().data);");
+        }
+        else
+        {
+          /* Original placement-new for wasm_aot and other targets. */
+          util::format_to(footer_buffer,
+                          "new (&{}::{}) {}(",
+                          ns,
+                          v.second,
+                          detail::gen_constant_type(v.first, true));
+          detail::gen_constant(v.first, footer_buffer, true);
+          util::format_to(footer_buffer, ");");
+        }
       }
 
       util::format_to(footer_buffer, "{}::{}{ }.call();", ns, struct_name);
@@ -2971,5 +3017,76 @@ namespace jank::codegen
       generated_expression = true;
     }
     return { expression_buffer.data(), expression_buffer.size() };
+  }
+
+  jtl::immutable_string processor::wrap_constant_access(jtl::immutable_string const &simple_name)
+  {
+    /* For module target, wrap constant access with registry lookup to avoid
+     * iOS JIT ADRP relocation issues. Constants are stored in a runtime registry
+     * and accessed via jank_constant_get() instead of BSS namespace-scope globals.
+     * Use owner_target (not target) so nested functions also use registry lookup. */
+    if(owner_target == compilation_target::module)
+    {
+      auto const ns{ runtime::module::module_to_native_ns(module) };
+      return util::format("jank::runtime::object_ref::from_ptr(jank_constant_get(\"{}::{}\"))",
+                          ns,
+                          simple_name);
+    }
+    return simple_name;
+  }
+
+  native_vector<compile_server::constant_info>
+  processor::get_lifted_constants_metadata() const
+  {
+    native_vector<compile_server::constant_info> result;
+
+    if(lifted_constants.empty())
+    {
+      return result;
+    }
+
+    /* Get the C++ namespace from module name (e.g., "vybe.sdf.ui" -> "vybe::sdf::ui") */
+    auto const ns{ runtime::module::module_to_native_ns(module) };
+
+    /* Split namespace on :: to get parts for Itanium ABI mangling */
+    native_vector<native_transient_string> ns_parts;
+    {
+      native_transient_string ns_str{ ns };
+      size_t pos{};
+      while((pos = ns_str.find("::")) != native_transient_string::npos)
+      {
+        ns_parts.emplace_back(ns_str.substr(0, pos));
+        ns_str.erase(0, pos + 2);
+      }
+      if(!ns_str.empty())
+      {
+        ns_parts.emplace_back(ns_str);
+      }
+    }
+
+    for(auto const &[obj, const_name] : lifted_constants)
+    {
+      compile_server::constant_info info;
+
+      /* Build Itanium ABI mangled name: _ZN<len1><part1><len2><part2>...<lenN><name>E
+       * For ARM64 Mach-O, the symbol name is the mangled name without underscore prefix. */
+      native_transient_string mangled{ "_ZN" };
+      for(auto const &part : ns_parts)
+      {
+        mangled += std::to_string(part.size());
+        mangled += part;
+      }
+      mangled += std::to_string(const_name.size());
+      mangled += native_transient_string{ const_name };
+      mangled += "E";
+
+      info.qualified_name = mangled;
+      info.size = sizeof(void *);      /* sizeof(object_ref) */
+      info.alignment = alignof(void *); /* alignof(object_ref) */
+
+      result.emplace_back(jtl::move(info));
+    }
+
+    return result;
   }
 }
