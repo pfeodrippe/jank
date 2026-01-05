@@ -215,6 +215,9 @@ namespace jank::codegen
       lifted_constants;
     bool generated_declaration{};
     bool generated_expression{};
+    /* When true, function_code is emitted even for eval target.
+     * Set by iOS compile server where generated code is compiled remotely. */
+    bool remote_compilation{};
     native_set<jtl::immutable_string> emitted_function_codes;
 
     /* CSE cache for cpp/unbox operations.

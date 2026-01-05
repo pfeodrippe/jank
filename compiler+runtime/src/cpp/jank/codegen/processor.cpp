@@ -1345,6 +1345,7 @@ namespace jank::codegen
                                                               : compilation_target::function);
     /* Since each codegen proc handles one callable struct, we create a new one for this fn. */
     processor prc{ expr, module, fn_target, owner_target };
+    prc.remote_compilation = remote_compilation;  // Inherit from parent for iOS compile server
 
     /* Always share lifted_vars and lifted_constants with nested functions,
      * regardless of compilation target. This ensures constants used in
@@ -2003,7 +2004,12 @@ namespace jank::codegen
   jtl::option<handle>
   processor::gen(analyze::expr::cpp_call_ref const expr, analyze::expr::function_arity const &arity)
   {
-    if((target == compilation_target::module || target == compilation_target::function)
+    /* Emit nested function code for module/function targets, or when doing remote compilation.
+     * For local JIT eval, skip to avoid redefinitions in CppInterOp.
+     * The iOS compile server sets remote_compilation=true to emit function_code. */
+    if((target == compilation_target::module
+        || target == compilation_target::function
+        || remote_compilation)
        && !expr->function_code.empty())
     {
       util::format_to(cpp_raw_buffer, "\n{}\n", expr->function_code);

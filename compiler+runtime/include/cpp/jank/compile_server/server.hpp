@@ -655,6 +655,7 @@ namespace jank::compile_server
 
         // Step 6: Generate C++ code
         codegen::processor cg_prc{ fn_expr, module_name, codegen::compilation_target::eval };
+        cg_prc.remote_compilation = true;  // Emit function_code for iOS JIT
         auto const cpp_code_body = cg_prc.declaration_str();
         auto const munged_struct_name = std::string(runtime::munge(cg_prc.struct_name).data());
         auto const entry_symbol = "_" + munged_struct_name + "_0";
@@ -765,6 +766,7 @@ namespace jank::compile_server
 
         // Generate C++ code
         codegen::processor cg_prc{ wrapped_expr, module, codegen::compilation_target::eval };
+        cg_prc.remote_compilation = true;  // Emit function_code for iOS JIT
         auto const cpp_source = cg_prc.declaration_str();
 
         std::cout << "[compile-server] Generated native source (" << cpp_source.size() << " bytes)"
