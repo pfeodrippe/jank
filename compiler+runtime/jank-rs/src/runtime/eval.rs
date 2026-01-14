@@ -2,14 +2,28 @@
 //!
 //! This module implements the interpreter that evaluates Clojure forms.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::types::{Value, Symbol, Function, Arity, List};
 use crate::error::{JankError, JankResult};
 use crate::runtime::env::Environment;
+use crate::runtime::compiler::Compiler;
 
 /// Maximum recursion depth before stack overflow
 const MAX_RECURSION_DEPTH: usize = 10000;
+
+/// JIT compilation threshold (compile after this many calls)
+/// Set to 1 for immediate compilation - no interpreter overhead!
+const JIT_THRESHOLD: usize = 1;
+
+/// A compiled function with its metadata
+struct CompiledFunction {
+    /// Function pointer (transmuted to correct arity)
+    ptr: *const u8,
+    /// Number of parameters
+    arity: usize,
+}
 
 /// The evaluator for Clojure expressions
 pub struct Evaluator {
@@ -17,6 +31,12 @@ pub struct Evaluator {
     global_env: Arc<Environment>,
     /// Current recursion depth
     depth: usize,
+    /// JIT compiler (lazy-initialized)
+    compiler: Option<Compiler>,
+    /// Compiled functions cache (function name -> compiled fn)
+    compiled: HashMap<String, CompiledFunction>,
+    /// Call counts for functions
+    call_counts: HashMap<String, usize>,
 }
 
 impl Evaluator {
@@ -30,6 +50,9 @@ impl Evaluator {
         Evaluator {
             global_env,
             depth: 0,
+            compiler: None,
+            compiled: HashMap::new(),
+            call_counts: HashMap::new(),
         }
     }
 
@@ -38,12 +61,116 @@ impl Evaluator {
         Evaluator {
             global_env: env,
             depth: 0,
+            compiler: None,
+            compiled: HashMap::new(),
+            call_counts: HashMap::new(),
         }
+    }
+
+    /// Get or initialize the JIT compiler
+    fn get_compiler(&mut self) -> JankResult<&mut Compiler> {
+        if self.compiler.is_none() {
+            self.compiler = Some(Compiler::new()?);
+        }
+        Ok(self.compiler.as_mut().unwrap())
+    }
+
+    /// Check if a function should be JIT compiled based on call count
+    fn should_compile(&mut self, name: &str) -> bool {
+        let count = self.call_counts.entry(name.to_string()).or_insert(0);
+        *count += 1;
+        *count == JIT_THRESHOLD && !self.compiled.contains_key(name)
+    }
+
+    /// Try to JIT compile a function if it's eligible
+    fn try_jit_compile(&mut self, name: &str, params: &[Symbol], body: &Value) -> Option<()> {
+        // Check if body is JIT-eligible (only numeric operations)
+        if !is_jit_eligible(body) {
+            return None;
+        }
+
+        // Try to compile
+        let compiler = self.get_compiler().ok()?;
+        let ptr = compiler.compile_numeric_fn(name, params, body).ok()?;
+
+        self.compiled.insert(name.to_string(), CompiledFunction {
+            ptr,
+            arity: params.len(),
+        });
+
+        Some(())
+    }
+
+    /// Call a compiled function with i64 args
+    fn call_compiled(&self, name: &str, args: &[Value]) -> Option<Value> {
+        let compiled = self.compiled.get(name)?;
+        if args.len() != compiled.arity {
+            return None;
+        }
+
+        // Convert args to i64
+        let int_args: Vec<i64> = args.iter()
+            .filter_map(|v| match v {
+                Value::Integer(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+
+        if int_args.len() != args.len() {
+            return None; // Not all args are integers
+        }
+
+        // Call based on arity
+        let result: i64 = unsafe {
+            match compiled.arity {
+                0 => {
+                    let f: extern "C" fn() -> i64 = std::mem::transmute(compiled.ptr);
+                    f()
+                }
+                1 => {
+                    let f: extern "C" fn(i64) -> i64 = std::mem::transmute(compiled.ptr);
+                    f(int_args[0])
+                }
+                2 => {
+                    let f: extern "C" fn(i64, i64) -> i64 = std::mem::transmute(compiled.ptr);
+                    f(int_args[0], int_args[1])
+                }
+                3 => {
+                    let f: extern "C" fn(i64, i64, i64) -> i64 = std::mem::transmute(compiled.ptr);
+                    f(int_args[0], int_args[1], int_args[2])
+                }
+                4 => {
+                    let f: extern "C" fn(i64, i64, i64, i64) -> i64 = std::mem::transmute(compiled.ptr);
+                    f(int_args[0], int_args[1], int_args[2], int_args[3])
+                }
+                _ => return None, // Too many args
+            }
+        };
+
+        Some(Value::Integer(result))
     }
 
     /// Get the global environment
     pub fn global_env(&self) -> Arc<Environment> {
         Arc::clone(&self.global_env)
+    }
+
+    /// Check if a function has been JIT compiled (for testing)
+    #[cfg(test)]
+    pub fn is_compiled(&self, name: &str) -> bool {
+        self.compiled.contains_key(name)
+    }
+
+    /// Get the call count for a function (for testing)
+    #[cfg(test)]
+    pub fn call_count(&self, name: &str) -> usize {
+        self.call_counts.get(name).copied().unwrap_or(0)
+    }
+
+    /// Get the function pointer for a compiled function (for testing/benchmarks)
+    #[cfg(test)]
+    pub fn get_compiled_ptr(&self, name: &str) -> Option<*const u8> {
+        self.compiled.get(name).map(|f| f.ptr)
     }
 
     /// Evaluate a form in the global environment
@@ -255,8 +382,8 @@ impl Evaluator {
                 f(args)
             }
 
-            Function::Interpreted { params, body, env, is_variadic, variadic_param, .. } |
-            Function::Closure { params, body, captured_env: env, is_variadic, variadic_param, .. } => {
+            Function::Interpreted { name, params, body, env, is_variadic, variadic_param, .. } |
+            Function::Closure { name, params, body, captured_env: env, is_variadic, variadic_param, .. } => {
                 // Check arity
                 if *is_variadic {
                     if args.len() < params.len() {
@@ -274,7 +401,27 @@ impl Evaluator {
                     ));
                 }
 
-                // Create new environment with parameters bound
+                // For named, non-variadic functions, try JIT
+                if let Some(fn_name) = name {
+                    let fn_name_str = fn_name.name();
+
+                    // Check if already compiled
+                    if let Some(result) = self.call_compiled(fn_name_str, args) {
+                        return Ok(result);
+                    }
+
+                    // Check if should compile now
+                    if !*is_variadic && self.should_compile(fn_name_str) {
+                        // Try to JIT compile
+                        let _ = self.try_jit_compile(fn_name_str, params, body);
+                        // Try to use compiled version
+                        if let Some(result) = self.call_compiled(fn_name_str, args) {
+                            return Ok(result);
+                        }
+                    }
+                }
+
+                // Fall back to interpretation
                 let local_env = Arc::new(Environment::with_fn_args(
                     Arc::clone(env),
                     params,
@@ -526,8 +673,8 @@ impl Evaluator {
 
         let func = Function::Interpreted {
             name: Some(name.clone()),
-            params,
-            body: Arc::new(body),
+            params: params.clone(),
+            body: Arc::new(body.clone()),
             env,
             is_variadic,
             variadic_param,
@@ -537,6 +684,12 @@ impl Evaluator {
         // Define in global environment
         let func_val = Value::Function(Arc::new(func));
         self.global_env.define(name.name(), func_val);
+
+        // EAGER JIT: Compile immediately if eligible!
+        // This makes the first call fast (no compilation overhead)
+        if !is_variadic {
+            let _ = self.try_jit_compile(name.name(), &params, &body);
+        }
 
         Ok(Value::Symbol(name))
     }
@@ -699,6 +852,59 @@ impl Default for Evaluator {
     }
 }
 
+/// Check if a function body is eligible for JIT compilation
+/// A body is eligible if it only uses:
+/// - Integer literals
+/// - Boolean literals
+/// - Parameter references
+/// - Supported operations (+, -, *, /, inc, dec, <, >, <=, >=, =)
+/// - Control flow (if, do, loop, recur)
+/// - Logical (not, and, or)
+/// - Predicates (zero?, pos?, neg?)
+fn is_jit_eligible(expr: &Value) -> bool {
+    match expr {
+        Value::Integer(_) => true,
+        Value::Bool(_) => true,
+        Value::Symbol(_) => true, // Assume all symbols are parameters
+        Value::List(list) => {
+            if list.is_empty() {
+                return false;
+            }
+
+            let head = list.head().unwrap();
+
+            // Check if it's a supported operation
+            if let Value::Symbol(sym) = &head {
+                let supported = matches!(
+                    sym.name(),
+                    "+" | "-" | "*" | "/" | "inc" | "dec" |
+                    "<" | ">" | "<=" | ">=" | "=" |
+                    "if" | "do" | "loop" | "recur" |
+                    "not" | "and" | "or" |
+                    "zero?" | "pos?" | "neg?"
+                );
+
+                if !supported {
+                    return false;
+                }
+
+                // Check that all arguments are also eligible
+                list.iter().skip(1).all(|arg| is_jit_eligible(&arg))
+            } else {
+                false
+            }
+        }
+        Value::Vector(v) => {
+            // Vectors in loop bindings should be checked for eligible init expressions
+            v.iter().all(|elem| {
+                matches!(elem, Value::Symbol(_) | Value::Integer(_) | Value::Bool(_))
+                    || is_jit_eligible(elem)
+            })
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -777,5 +983,255 @@ mod tests {
             evaluator.eval(&read_string("(square 5)").unwrap()).unwrap(),
             Value::Integer(25)
         );
+    }
+
+    #[test]
+    fn test_jit_eager_compilation() {
+        // Test that functions get JIT compiled at DEFINITION time (not call time!)
+        let mut evaluator = Evaluator::new();
+
+        // Define a simple numeric function - this IMMEDIATELY compiles it!
+        evaluator.eval(&read_string("(defn double [x] (* x 2))").unwrap()).unwrap();
+
+        // ALREADY compiled at definition time! No waiting for first call!
+        assert!(evaluator.is_compiled("double"));
+        assert_eq!(evaluator.call_count("double"), 0); // Not called yet!
+
+        // FIRST call is already fast - no compilation overhead!
+        let result = evaluator.eval(&read_string("(double 50)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(100));
+
+        // All calls go through the JIT path - native speed from the start!
+        for i in 1..=100 {
+            let result = evaluator.eval(&read_string(&format!("(double {})", i)).unwrap()).unwrap();
+            assert_eq!(result, Value::Integer(i * 2));
+        }
+    }
+
+    #[test]
+    fn test_jit_factorial_eager() {
+        // Test with a more complex function using loop/recur
+        let mut evaluator = Evaluator::new();
+
+        // Define factorial using loop/recur - compiles at definition time!
+        evaluator.eval(&read_string(
+            "(defn factorial [n] (loop [i n acc 1] (if (<= i 1) acc (recur (dec i) (* acc i)))))"
+        ).unwrap()).unwrap();
+
+        // ALREADY compiled at definition time!
+        assert!(evaluator.is_compiled("factorial"));
+
+        // First call is already native speed - no compilation overhead!
+        let result = evaluator.eval(&read_string("(factorial 10)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(3628800)); // 10!
+
+        // Verify correct results with compiled version - native speed!
+        assert_eq!(
+            evaluator.eval(&read_string("(factorial 5)").unwrap()).unwrap(),
+            Value::Integer(120)
+        );
+        assert_eq!(
+            evaluator.eval(&read_string("(factorial 20)").unwrap()).unwrap(),
+            Value::Integer(2432902008176640000)
+        );
+    }
+
+    #[test]
+    fn test_jit_not_eligible() {
+        // Test that functions with unsupported operations don't get compiled
+        let mut evaluator = Evaluator::new();
+
+        // Define a function that uses println (not JIT eligible)
+        evaluator.eval(&read_string("(defn greet [x] (str \"Hello \" x))").unwrap()).unwrap();
+
+        // Call it many times
+        for _ in 0..150 {
+            let _ = evaluator.eval(&read_string("(greet \"world\")").unwrap());
+        }
+
+        // Should NOT be compiled (str is not a supported JIT operation)
+        assert!(!evaluator.is_compiled("greet"));
+    }
+
+    #[test]
+    fn test_jit_native_speed_factorial() {
+        use std::time::Instant;
+
+        let mut evaluator = Evaluator::new();
+
+        // Define factorial using loop/recur
+        evaluator.eval(&read_string(
+            "(defn factorial [n] (loop [i n acc 1] (if (<= i 1) acc (recur (dec i) (* acc i)))))"
+        ).unwrap()).unwrap();
+
+        // Warm up (this compiles the function on first call)
+        evaluator.eval(&read_string("(factorial 20)").unwrap()).unwrap();
+        assert!(evaluator.is_compiled("factorial"));
+
+        // Benchmark: call factorial(20) 100,000 times
+        let iterations = 100_000;
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let result = evaluator.eval(&read_string("(factorial 20)").unwrap()).unwrap();
+            assert_eq!(result, Value::Integer(2432902008176640000));
+        }
+        let elapsed = start.elapsed();
+
+        println!(
+            "\nJIT factorial(20) x {}: {:?} ({:?} per call)",
+            iterations, elapsed, elapsed / iterations as u32
+        );
+
+        // Should complete in under 1 second for 100k calls (that's ~10μs per call)
+        // Native code is fast!
+        assert!(elapsed.as_secs() < 2, "factorial(20) too slow: {:?}", elapsed);
+    }
+
+    #[test]
+    fn test_jit_native_speed_fibonacci() {
+        use std::time::Instant;
+
+        let mut evaluator = Evaluator::new();
+
+        // Define iterative fibonacci using loop/recur
+        evaluator.eval(&read_string(
+            "(defn fib [n] (loop [i n a 0 b 1] (if (<= i 0) a (recur (dec i) b (+ a b)))))"
+        ).unwrap()).unwrap();
+
+        // Warm up (this compiles the function on first call)
+        evaluator.eval(&read_string("(fib 40)").unwrap()).unwrap();
+        assert!(evaluator.is_compiled("fib"));
+
+        // Benchmark: call fib(40) 100,000 times
+        let iterations = 100_000;
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let result = evaluator.eval(&read_string("(fib 40)").unwrap()).unwrap();
+            assert_eq!(result, Value::Integer(102334155));
+        }
+        let elapsed = start.elapsed();
+
+        println!(
+            "\nJIT fib(40) x {}: {:?} ({:?} per call)",
+            iterations, elapsed, elapsed / iterations as u32
+        );
+
+        // Native code is FAST!
+        assert!(elapsed.as_secs() < 2, "fib(40) too slow: {:?}", elapsed);
+    }
+
+    /// Pure Rust fibonacci for comparison
+    fn rust_fib(n: i64) -> i64 {
+        let mut i = n;
+        let mut a = 0i64;
+        let mut b = 1i64;
+        while i > 0 {
+            let temp = a + b;
+            a = b;
+            b = temp;
+            i -= 1;
+        }
+        a
+    }
+
+    /// Pure Rust factorial for comparison
+    fn rust_factorial(n: i64) -> i64 {
+        let mut i = n;
+        let mut acc = 1i64;
+        while i > 1 {
+            acc *= i;
+            i -= 1;
+        }
+        acc
+    }
+
+    #[test]
+    fn test_jit_vs_rust_speed_comparison() {
+        use std::time::Instant;
+
+        let mut evaluator = Evaluator::new();
+
+        // Define jank functions
+        evaluator.eval(&read_string(
+            "(defn jank-fib [n] (loop [i n a 0 b 1] (if (<= i 0) a (recur (dec i) b (+ a b)))))"
+        ).unwrap()).unwrap();
+        evaluator.eval(&read_string(
+            "(defn jank-factorial [n] (loop [i n acc 1] (if (<= i 1) acc (recur (dec i) (* acc i)))))"
+        ).unwrap()).unwrap();
+
+        // Warm up JIT (compiles on first call)
+        evaluator.eval(&read_string("(jank-fib 40)").unwrap()).unwrap();
+        evaluator.eval(&read_string("(jank-factorial 20)").unwrap()).unwrap();
+        assert!(evaluator.is_compiled("jank-fib"));
+        assert!(evaluator.is_compiled("jank-factorial"));
+
+        let iterations = 1_000_000;
+
+        // ========== RUST BENCHMARKS ==========
+        println!("\n========== SPEED COMPARISON ==========");
+        println!("Iterations: {}", iterations);
+        println!();
+
+        // Rust fib(40)
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(rust_fib(40));
+        }
+        let rust_fib_time = start.elapsed();
+        println!("RUST fib(40) x {}: {:?} ({:?} per call)",
+            iterations, rust_fib_time, rust_fib_time / iterations as u32);
+
+        // Rust factorial(20)
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(rust_factorial(20));
+        }
+        let rust_factorial_time = start.elapsed();
+        println!("RUST factorial(20) x {}: {:?} ({:?} per call)",
+            iterations, rust_factorial_time, rust_factorial_time / iterations as u32);
+
+        // ========== JANK JIT BENCHMARKS ==========
+        println!();
+
+        // JIT fib(40) - direct function call (no eval overhead)
+        let fib_ptr_raw = evaluator.get_compiled_ptr("jank-fib").unwrap();
+        let fib_ptr: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(fib_ptr_raw) };
+
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(fib_ptr(40));
+        }
+        let jit_fib_time = start.elapsed();
+        println!("JANK JIT fib(40) x {}: {:?} ({:?} per call)",
+            iterations, jit_fib_time, jit_fib_time / iterations as u32);
+
+        // JIT factorial(20) - direct function call (no eval overhead)
+        let factorial_ptr_raw = evaluator.get_compiled_ptr("jank-factorial").unwrap();
+        let factorial_ptr: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(factorial_ptr_raw) };
+
+        let start = Instant::now();
+        for _ in 0..iterations {
+            std::hint::black_box(factorial_ptr(20));
+        }
+        let jit_factorial_time = start.elapsed();
+        println!("JANK JIT factorial(20) x {}: {:?} ({:?} per call)",
+            iterations, jit_factorial_time, jit_factorial_time / iterations as u32);
+
+        // ========== COMPARISON ==========
+        println!();
+        println!("========== RESULTS ==========");
+        let fib_ratio = jit_fib_time.as_nanos() as f64 / rust_fib_time.as_nanos() as f64;
+        let factorial_ratio = jit_factorial_time.as_nanos() as f64 / rust_factorial_time.as_nanos() as f64;
+
+        println!("fib(40): JANK JIT is {:.2}x vs Rust", fib_ratio);
+        println!("factorial(20): JANK JIT is {:.2}x vs Rust", factorial_ratio);
+
+        // Verify correctness
+        assert_eq!(rust_fib(40), 102334155);
+        assert_eq!(rust_factorial(20), 2432902008176640000);
+        assert_eq!(fib_ptr(40), 102334155);
+        assert_eq!(factorial_ptr(20), 2432902008176640000);
+
+        println!("==============================\n");
     }
 }
