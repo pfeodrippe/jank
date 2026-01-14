@@ -2,16 +2,21 @@
 //!
 //! This module compiles Clojure function ASTs to native code via Cranelift IR.
 //! Supports tagged values using NaN-boxing for mixed-type operations.
+//!
+//! Native Rust functions are registered and callable with ZERO overhead -
+//! the JIT emits direct call instructions to Rust function addresses.
 
 use std::collections::HashMap;
 
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{Linkage, Module};
+use cranelift_module::{Linkage, Module, FuncId};
+use cranelift_codegen::ir::FuncRef;
 
 use crate::error::{JankError, JankResult};
 use crate::types::{Value, Symbol, List};
 use crate::runtime::tagged::{Tagged, NIL, TRUE, FALSE};
+use crate::runtime::native;
 
 /// Compiled function that works with tagged values (NaN-boxed u64)
 pub type CompiledTaggedFn = extern "C" fn(u64) -> u64;
@@ -67,6 +72,18 @@ pub fn tag_nil() -> u64 {
     NIL
 }
 
+/// Metadata about a registered native function
+struct NativeFunction {
+    /// Function pointer
+    ptr: *const u8,
+    /// Number of i64 parameters
+    param_count: usize,
+    /// Whether it returns an i64
+    returns_i64: bool,
+    /// The function ID in the JIT module (set after declaration)
+    func_id: Option<FuncId>,
+}
+
 /// The compiler that translates Clojure AST to Cranelift IR
 pub struct Compiler {
     /// The JIT module
@@ -77,10 +94,14 @@ pub struct Compiler {
     func_ctx: FunctionBuilderContext,
     /// Compiled functions cache
     compiled: HashMap<String, *const u8>,
+    /// Registered native Rust functions that can be called from JIT code
+    native_functions: HashMap<String, NativeFunction>,
+    /// Whether native functions have been declared in the module
+    natives_declared: bool,
 }
 
 impl Compiler {
-    /// Create a new compiler
+    /// Create a new compiler with all core Rust functions registered
     pub fn new() -> JankResult<Self> {
         let mut flag_builder = settings::builder();
         flag_builder.set("opt_level", "speed").map_err(|e| {
@@ -97,26 +118,174 @@ impl Compiler {
                 JankError::eval(format!("Failed to finish ISA: {}", e))
             })?;
 
-        let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        // Create JIT builder and register native function symbols
+        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+
+        // Register all native function symbols with the JIT linker
+        // This allows Cranelift to resolve calls to these functions
+        builder.symbol("jank_sqrt", native::jank_sqrt as *const u8);
+        builder.symbol("jank_abs", native::jank_abs as *const u8);
+        builder.symbol("jank_pow", native::jank_pow as *const u8);
+        builder.symbol("jank_mod", native::jank_mod as *const u8);
+        builder.symbol("jank_quot", native::jank_quot as *const u8);
+        builder.symbol("jank_min", native::jank_min as *const u8);
+        builder.symbol("jank_max", native::jank_max as *const u8);
+        builder.symbol("jank_rand_int", native::jank_rand_int as *const u8);
+        builder.symbol("jank_bit_and", native::jank_bit_and as *const u8);
+        builder.symbol("jank_bit_or", native::jank_bit_or as *const u8);
+        builder.symbol("jank_bit_xor", native::jank_bit_xor as *const u8);
+        builder.symbol("jank_bit_not", native::jank_bit_not as *const u8);
+        builder.symbol("jank_bit_shift_left", native::jank_bit_shift_left as *const u8);
+        builder.symbol("jank_bit_shift_right", native::jank_bit_shift_right as *const u8);
+        builder.symbol("jank_println_int", native::jank_println_int as *const u8);
+
         let module = JITModule::new(builder);
         let ctx = module.make_context();
 
-        Ok(Compiler {
+        let mut compiler = Compiler {
             module,
             ctx,
             func_ctx: FunctionBuilderContext::new(),
             compiled: HashMap::new(),
-        })
+            native_functions: HashMap::new(),
+            natives_declared: false,
+        };
+
+        // Register metadata for all core functions
+        compiler.register_core_functions();
+
+        Ok(compiler)
+    }
+
+    /// Register all core Rust functions
+    fn register_core_functions(&mut self) {
+        // Math functions (1 param)
+        self.register_native("sqrt", native::jank_sqrt as *const u8, 1, true);
+        self.register_native("abs", native::jank_abs as *const u8, 1, true);
+
+        // Math functions (2 params)
+        self.register_native("pow", native::jank_pow as *const u8, 2, true);
+        self.register_native("mod", native::jank_mod as *const u8, 2, true);
+        self.register_native("quot", native::jank_quot as *const u8, 2, true);
+        self.register_native("min", native::jank_min as *const u8, 2, true);
+        self.register_native("max", native::jank_max as *const u8, 2, true);
+
+        // Random (1 param)
+        self.register_native("rand-int", native::jank_rand_int as *const u8, 1, true);
+
+        // Bit operations
+        self.register_native("bit-and", native::jank_bit_and as *const u8, 2, true);
+        self.register_native("bit-or", native::jank_bit_or as *const u8, 2, true);
+        self.register_native("bit-xor", native::jank_bit_xor as *const u8, 2, true);
+        self.register_native("bit-not", native::jank_bit_not as *const u8, 1, true);
+        self.register_native("bit-shift-left", native::jank_bit_shift_left as *const u8, 2, true);
+        self.register_native("bit-shift-right", native::jank_bit_shift_right as *const u8, 2, true);
+
+        // I/O (special case - uses i64 for simplicity)
+        self.register_native("println-int", native::jank_println_int as *const u8, 1, true);
+    }
+
+    /// Register a native Rust function that can be called from JIT code
+    ///
+    /// # Safety
+    /// The function pointer must be valid and have the correct signature:
+    /// extern "C" fn(i64, ...) -> i64
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Register a Rust function
+    /// extern "C" fn my_sqrt(x: i64) -> i64 {
+    ///     (x as f64).sqrt() as i64
+    /// }
+    /// compiler.register_native("sqrt", my_sqrt as *const u8, 1, true);
+    ///
+    /// // Now you can call (sqrt 16) from JIT code!
+    /// ```
+    pub fn register_native(
+        &mut self,
+        name: &str,
+        ptr: *const u8,
+        param_count: usize,
+        returns_i64: bool,
+    ) {
+        self.native_functions.insert(name.to_string(), NativeFunction {
+            ptr,
+            param_count,
+            returns_i64,
+            func_id: None,
+        });
+    }
+
+    /// Check if a function is a registered native function
+    pub fn is_native(&self, name: &str) -> bool {
+        self.native_functions.contains_key(name)
+    }
+
+    /// Get the internal symbol name for a native function
+    fn get_native_symbol(&self, name: &str) -> Option<String> {
+        // Map Clojure-style names to Rust symbol names
+        match name {
+            "sqrt" => Some("jank_sqrt".to_string()),
+            "abs" => Some("jank_abs".to_string()),
+            "pow" => Some("jank_pow".to_string()),
+            "mod" => Some("jank_mod".to_string()),
+            "quot" => Some("jank_quot".to_string()),
+            "min" => Some("jank_min".to_string()),
+            "max" => Some("jank_max".to_string()),
+            "rand-int" => Some("jank_rand_int".to_string()),
+            "bit-and" => Some("jank_bit_and".to_string()),
+            "bit-or" => Some("jank_bit_or".to_string()),
+            "bit-xor" => Some("jank_bit_xor".to_string()),
+            "bit-not" => Some("jank_bit_not".to_string()),
+            "bit-shift-left" => Some("jank_bit_shift_left".to_string()),
+            "bit-shift-right" => Some("jank_bit_shift_right".to_string()),
+            "println-int" => Some("jank_println_int".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Declare all native functions in the JIT module (called once per compilation)
+    fn declare_native_functions(&mut self) -> JankResult<HashMap<String, (FuncId, usize)>> {
+        let mut func_ids = HashMap::new();
+
+        for (name, native) in &self.native_functions {
+            // Create signature based on param count
+            let mut sig = self.module.make_signature();
+            for _ in 0..native.param_count {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            if native.returns_i64 {
+                sig.returns.push(AbiParam::new(types::I64));
+            }
+
+            // Get the actual symbol name
+            let symbol_name = self.get_native_symbol(name)
+                .unwrap_or_else(|| name.replace('-', "_"));
+
+            // Declare as imported function
+            let func_id = self.module
+                .declare_function(&symbol_name, Linkage::Import, &sig)
+                .map_err(|e| JankError::eval(format!("Failed to declare native function {}: {}", name, e)))?;
+
+            func_ids.insert(name.clone(), (func_id, native.param_count));
+        }
+
+        self.natives_declared = true;
+        Ok(func_ids)
     }
 
     /// Compile a simple numeric function from AST
     /// This handles: (fn [x] (+ x 1)), (fn [x y] (* x y)), etc.
+    /// Also supports calling registered native Rust functions like sqrt, abs, etc.
     pub fn compile_numeric_fn(
         &mut self,
         name: &str,
         params: &[Symbol],
         body: &Value,
     ) -> JankResult<*const u8> {
+        // Declare all native functions in the module (if not already done)
+        let native_func_ids = self.declare_native_functions()?;
+
         // Create signature: all params are i64, return is i64
         let mut sig = self.module.make_signature();
         for _ in params {
@@ -133,6 +302,15 @@ impl Compiler {
         {
             let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.func_ctx);
 
+            // Import all native functions into this function
+            let mut native_refs = HashMap::new();
+            for (fn_name, (fn_id, param_count)) in &native_func_ids {
+                let func_ref = self.module.declare_func_in_func(*fn_id, builder.func);
+                native_refs.insert(fn_name.clone(), (func_ref, *param_count));
+            }
+
+            let ctx = CompileContext { native_refs };
+
             let entry = builder.create_block();
             builder.append_block_params_for_function_params(entry);
             builder.switch_to_block(entry);
@@ -146,7 +324,7 @@ impl Compiler {
             }
 
             // Compile the body expression
-            let result = compile_expr(&mut builder, body, &env)?;
+            let result = compile_expr(&mut builder, body, &env, &ctx)?;
 
             builder.ins().return_(&[result]);
             builder.finalize();
@@ -173,13 +351,28 @@ struct LoopContext {
     binding_names: Vec<String>,
 }
 
+/// Context for compiling expressions - holds native function references
+struct CompileContext {
+    /// Native function references (name -> FuncRef)
+    native_refs: HashMap<String, (FuncRef, usize)>,
+}
+
+impl CompileContext {
+    fn new() -> Self {
+        CompileContext {
+            native_refs: HashMap::new(),
+        }
+    }
+}
+
 /// Compile an expression to Cranelift IR (standalone function to avoid borrow issues)
 fn compile_expr(
     builder: &mut FunctionBuilder,
     expr: &Value,
     env: &HashMap<String, cranelift::prelude::Value>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
-    compile_expr_with_loop(builder, expr, env, None)
+    compile_expr_with_loop(builder, expr, env, None, ctx)
 }
 
 /// Compile an expression with optional loop context for recur
@@ -188,6 +381,7 @@ fn compile_expr_with_loop(
     expr: &Value,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     match expr {
         // Integer literal
@@ -218,28 +412,33 @@ fn compile_expr_with_loop(
             // Check for built-in operations
             if let Value::Symbol(sym) = &head {
                 match sym.name() {
-                    "+" => return compile_binary_arith(builder, list, env, loop_ctx, BinaryOp::Add),
-                    "-" => return compile_binary_arith(builder, list, env, loop_ctx, BinaryOp::Sub),
-                    "*" => return compile_binary_arith(builder, list, env, loop_ctx, BinaryOp::Mul),
-                    "/" => return compile_binary_arith(builder, list, env, loop_ctx, BinaryOp::Div),
-                    "inc" => return compile_inc(builder, list, env, loop_ctx),
-                    "dec" => return compile_dec(builder, list, env, loop_ctx),
-                    "<" => return compile_compare(builder, list, env, loop_ctx, IntCC::SignedLessThan),
-                    ">" => return compile_compare(builder, list, env, loop_ctx, IntCC::SignedGreaterThan),
-                    "<=" => return compile_compare(builder, list, env, loop_ctx, IntCC::SignedLessThanOrEqual),
-                    ">=" => return compile_compare(builder, list, env, loop_ctx, IntCC::SignedGreaterThanOrEqual),
-                    "=" => return compile_compare(builder, list, env, loop_ctx, IntCC::Equal),
-                    "if" => return compile_if(builder, list, env, loop_ctx),
-                    "do" => return compile_do(builder, list, env, loop_ctx),
-                    "not" => return compile_not(builder, list, env, loop_ctx),
-                    "and" => return compile_and(builder, list, env, loop_ctx),
-                    "or" => return compile_or(builder, list, env, loop_ctx),
-                    "zero?" => return compile_zero_check(builder, list, env, loop_ctx),
-                    "pos?" => return compile_pos_check(builder, list, env, loop_ctx),
-                    "neg?" => return compile_neg_check(builder, list, env, loop_ctx),
-                    "loop" => return compile_loop(builder, list, env),
-                    "recur" => return compile_recur(builder, list, env, loop_ctx),
-                    _ => {}
+                    "+" => return compile_binary_arith(builder, list, env, loop_ctx, ctx, BinaryOp::Add),
+                    "-" => return compile_binary_arith(builder, list, env, loop_ctx, ctx, BinaryOp::Sub),
+                    "*" => return compile_binary_arith(builder, list, env, loop_ctx, ctx, BinaryOp::Mul),
+                    "/" => return compile_binary_arith(builder, list, env, loop_ctx, ctx, BinaryOp::Div),
+                    "inc" => return compile_inc(builder, list, env, loop_ctx, ctx),
+                    "dec" => return compile_dec(builder, list, env, loop_ctx, ctx),
+                    "<" => return compile_compare(builder, list, env, loop_ctx, ctx, IntCC::SignedLessThan),
+                    ">" => return compile_compare(builder, list, env, loop_ctx, ctx, IntCC::SignedGreaterThan),
+                    "<=" => return compile_compare(builder, list, env, loop_ctx, ctx, IntCC::SignedLessThanOrEqual),
+                    ">=" => return compile_compare(builder, list, env, loop_ctx, ctx, IntCC::SignedGreaterThanOrEqual),
+                    "=" => return compile_compare(builder, list, env, loop_ctx, ctx, IntCC::Equal),
+                    "if" => return compile_if(builder, list, env, loop_ctx, ctx),
+                    "do" => return compile_do(builder, list, env, loop_ctx, ctx),
+                    "not" => return compile_not(builder, list, env, loop_ctx, ctx),
+                    "and" => return compile_and(builder, list, env, loop_ctx, ctx),
+                    "or" => return compile_or(builder, list, env, loop_ctx, ctx),
+                    "zero?" => return compile_zero_check(builder, list, env, loop_ctx, ctx),
+                    "pos?" => return compile_pos_check(builder, list, env, loop_ctx, ctx),
+                    "neg?" => return compile_neg_check(builder, list, env, loop_ctx, ctx),
+                    "loop" => return compile_loop(builder, list, env, ctx),
+                    "recur" => return compile_recur(builder, list, env, loop_ctx, ctx),
+                    _ => {
+                        // Check if it's a registered native function
+                        if let Some((func_ref, param_count)) = ctx.native_refs.get(sym.name()) {
+                            return compile_native_call(builder, list, env, loop_ctx, ctx, *func_ref, *param_count, sym.name());
+                        }
+                    }
                 }
             }
 
@@ -256,12 +455,49 @@ fn compile_expr_with_loop(
     }
 }
 
+/// Compile a call to a registered native Rust function
+/// This emits a direct call instruction to the native function - ZERO overhead!
+fn compile_native_call(
+    builder: &mut FunctionBuilder,
+    list: &List,
+    env: &HashMap<String, cranelift::prelude::Value>,
+    loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
+    func_ref: FuncRef,
+    param_count: usize,
+    fn_name: &str,
+) -> JankResult<cranelift::prelude::Value> {
+    let args: Vec<Value> = list.iter().skip(1).cloned().collect();
+
+    if args.len() != param_count {
+        return Err(JankError::arity(fn_name, param_count.to_string(), args.len()));
+    }
+
+    // Compile all arguments
+    let mut compiled_args = Vec::new();
+    for arg in &args {
+        compiled_args.push(compile_expr_with_loop(builder, arg, env, loop_ctx, ctx)?);
+    }
+
+    // Emit the call instruction - this is a DIRECT call to native code!
+    let call = builder.ins().call(func_ref, &compiled_args);
+    let results = builder.inst_results(call);
+
+    if results.is_empty() {
+        // Void function - return 0 (nil)
+        Ok(builder.ins().iconst(types::I64, 0))
+    } else {
+        Ok(results[0])
+    }
+}
+
 /// Compile a binary arithmetic operation
 fn compile_binary_arith(
     builder: &mut FunctionBuilder,
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
     op: BinaryOp,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
@@ -276,7 +512,7 @@ fn compile_binary_arith(
 
     if args.len() == 1 {
         // Unary: (- x) => negation, others just return x
-        let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+        let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
         return Ok(match op {
             BinaryOp::Sub => builder.ins().ineg(x),
             _ => x,
@@ -284,9 +520,9 @@ fn compile_binary_arith(
     }
 
     // Binary or n-ary
-    let mut result = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let mut result = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     for arg in &args[1..] {
-        let val = compile_expr_with_loop(builder, arg, env, loop_ctx)?;
+        let val = compile_expr_with_loop(builder, arg, env, loop_ctx, ctx)?;
         result = match op {
             BinaryOp::Add => builder.ins().iadd(result, val),
             BinaryOp::Sub => builder.ins().isub(result, val),
@@ -304,12 +540,13 @@ fn compile_inc(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.len() != 1 {
         return Err(JankError::arity("inc", "1", args.len()));
     }
-    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     let one = builder.ins().iconst(types::I64, 1);
     Ok(builder.ins().iadd(x, one))
 }
@@ -320,12 +557,13 @@ fn compile_dec(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.len() != 1 {
         return Err(JankError::arity("dec", "1", args.len()));
     }
-    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     let one = builder.ins().iconst(types::I64, 1);
     Ok(builder.ins().isub(x, one))
 }
@@ -336,6 +574,7 @@ fn compile_compare(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
     cc: IntCC,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
@@ -343,8 +582,8 @@ fn compile_compare(
         return Err(JankError::arity("comparison", "2", args.len()));
     }
 
-    let a = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
-    let b = compile_expr_with_loop(builder, &args[1], env, loop_ctx)?;
+    let a = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
+    let b = compile_expr_with_loop(builder, &args[1], env, loop_ctx, ctx)?;
 
     // Compare and convert bool to i64 (0 or 1)
     let cmp = builder.ins().icmp(cc, a, b);
@@ -359,6 +598,7 @@ fn compile_if(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.len() < 2 || args.len() > 3 {
@@ -366,7 +606,7 @@ fn compile_if(
     }
 
     // Compile condition
-    let cond_val = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let cond_val = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
 
     // Create blocks
     let then_block = builder.create_block();
@@ -382,14 +622,14 @@ fn compile_if(
     // Then block
     builder.switch_to_block(then_block);
     builder.seal_block(then_block);
-    let then_val = compile_expr_with_loop(builder, &args[1], env, loop_ctx)?;
+    let then_val = compile_expr_with_loop(builder, &args[1], env, loop_ctx, ctx)?;
     builder.ins().jump(merge_block, &[then_val]);
 
     // Else block
     builder.switch_to_block(else_block);
     builder.seal_block(else_block);
     let else_val = if args.len() == 3 {
-        compile_expr_with_loop(builder, &args[2], env, loop_ctx)?
+        compile_expr_with_loop(builder, &args[2], env, loop_ctx, ctx)?
     } else {
         builder.ins().iconst(types::I64, 0) // nil = 0
     };
@@ -408,6 +648,7 @@ fn compile_do(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.is_empty() {
@@ -416,7 +657,7 @@ fn compile_do(
 
     let mut result = builder.ins().iconst(types::I64, 0);
     for arg in &args {
-        result = compile_expr_with_loop(builder, arg, env, loop_ctx)?;
+        result = compile_expr_with_loop(builder, arg, env, loop_ctx, ctx)?;
     }
     Ok(result)
 }
@@ -427,13 +668,14 @@ fn compile_not(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.len() != 1 {
         return Err(JankError::arity("not", "1", args.len()));
     }
 
-    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     let zero = builder.ins().iconst(types::I64, 0);
     let is_falsy = builder.ins().icmp(IntCC::Equal, x, zero);
     let one = builder.ins().iconst(types::I64, 1);
@@ -447,6 +689,7 @@ fn compile_and(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.is_empty() {
@@ -454,9 +697,9 @@ fn compile_and(
     }
 
     // For now, just evaluate all and return 1 if all truthy, 0 otherwise
-    let mut result = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let mut result = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     for arg in &args[1..] {
-        let val = compile_expr_with_loop(builder, arg, env, loop_ctx)?;
+        let val = compile_expr_with_loop(builder, arg, env, loop_ctx, ctx)?;
         let zero = builder.ins().iconst(types::I64, 0);
         // result = result && val (both non-zero)
         let r_truthy = builder.ins().icmp(IntCC::NotEqual, result, zero);
@@ -475,15 +718,16 @@ fn compile_or(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.is_empty() {
         return Ok(builder.ins().iconst(types::I64, 0)); // (or) = false/nil
     }
 
-    let mut result = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let mut result = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     for arg in &args[1..] {
-        let val = compile_expr_with_loop(builder, arg, env, loop_ctx)?;
+        let val = compile_expr_with_loop(builder, arg, env, loop_ctx, ctx)?;
         let zero = builder.ins().iconst(types::I64, 0);
         // result = result || val (either non-zero)
         let r_truthy = builder.ins().icmp(IntCC::NotEqual, result, zero);
@@ -502,12 +746,13 @@ fn compile_zero_check(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.len() != 1 {
         return Err(JankError::arity("zero?", "1", args.len()));
     }
-    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     let zero = builder.ins().iconst(types::I64, 0);
     let is_zero = builder.ins().icmp(IntCC::Equal, x, zero);
     let one = builder.ins().iconst(types::I64, 1);
@@ -521,12 +766,13 @@ fn compile_pos_check(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.len() != 1 {
         return Err(JankError::arity("pos?", "1", args.len()));
     }
-    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     let zero = builder.ins().iconst(types::I64, 0);
     let is_pos = builder.ins().icmp(IntCC::SignedGreaterThan, x, zero);
     let one = builder.ins().iconst(types::I64, 1);
@@ -540,12 +786,13 @@ fn compile_neg_check(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.len() != 1 {
         return Err(JankError::arity("neg?", "1", args.len()));
     }
-    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx)?;
+    let x = compile_expr_with_loop(builder, &args[0], env, loop_ctx, ctx)?;
     let zero = builder.ins().iconst(types::I64, 0);
     let is_neg = builder.ins().icmp(IntCC::SignedLessThan, x, zero);
     let one = builder.ins().iconst(types::I64, 1);
@@ -559,6 +806,7 @@ fn compile_loop(
     builder: &mut FunctionBuilder,
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let args: Vec<Value> = list.iter().skip(1).cloned().collect();
     if args.is_empty() {
@@ -587,7 +835,7 @@ fn compile_loop(
         };
         binding_names.push(name);
         // Evaluate initial value in current env (no loop context yet)
-        init_values.push(compile_expr_with_loop(builder, &chunk[1], env, None)?);
+        init_values.push(compile_expr_with_loop(builder, &chunk[1], env, None, ctx)?);
     }
 
     // Create loop header block with block params
@@ -622,7 +870,7 @@ fn compile_loop(
     let body_forms: Vec<_> = args.iter().skip(1).cloned().collect();
     let mut result = builder.ins().iconst(types::I64, 0);
     for form in &body_forms {
-        result = compile_expr_with_loop(builder, form, &loop_env, Some(&loop_ctx))?;
+        result = compile_expr_with_loop(builder, form, &loop_env, Some(&loop_ctx), ctx)?;
     }
 
     // If we reach here without recur, jump to exit
@@ -645,6 +893,7 @@ fn compile_recur(
     list: &List,
     env: &HashMap<String, cranelift::prelude::Value>,
     loop_ctx: Option<&LoopContext>,
+    ctx: &CompileContext,
 ) -> JankResult<cranelift::prelude::Value> {
     let loop_ctx = loop_ctx.ok_or_else(|| JankError::eval("recur outside of loop"))?;
 
@@ -660,7 +909,7 @@ fn compile_recur(
     // Evaluate recur arguments
     let mut new_values = Vec::new();
     for arg in &args {
-        new_values.push(compile_expr_with_loop(builder, arg, env, Some(loop_ctx))?);
+        new_values.push(compile_expr_with_loop(builder, arg, env, Some(loop_ctx), ctx)?);
     }
 
     // Jump back to loop header with new values
@@ -981,5 +1230,224 @@ mod tests {
     fn test_tag_nil() {
         assert_eq!(tag_nil(), NIL);
         assert!(!is_tagged_integer(tag_nil()));
+    }
+
+    // =========================================================================
+    // Native Function Call Tests - Seamless Rust Integration!
+    // =========================================================================
+
+    #[test]
+    fn test_native_sqrt() {
+        // Test calling Rust sqrt from JIT code - DIRECT CALL, NO FFI OVERHEAD!
+        let mut compiler = Compiler::new().unwrap();
+        let (params, body) = parse_fn("(fn [x] (sqrt x))");
+        let ptr = compiler.compile_numeric_fn("call_sqrt", &params, &body).unwrap();
+        let call_sqrt: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        assert_eq!(call_sqrt(0), 0);
+        assert_eq!(call_sqrt(1), 1);
+        assert_eq!(call_sqrt(4), 2);
+        assert_eq!(call_sqrt(16), 4);
+        assert_eq!(call_sqrt(100), 10);
+        assert_eq!(call_sqrt(144), 12);
+    }
+
+    #[test]
+    fn test_native_abs() {
+        let mut compiler = Compiler::new().unwrap();
+        let (params, body) = parse_fn("(fn [x] (abs x))");
+        let ptr = compiler.compile_numeric_fn("call_abs", &params, &body).unwrap();
+        let call_abs: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        assert_eq!(call_abs(5), 5);
+        assert_eq!(call_abs(-5), 5);
+        assert_eq!(call_abs(0), 0);
+        assert_eq!(call_abs(-100), 100);
+    }
+
+    #[test]
+    fn test_native_pow() {
+        let mut compiler = Compiler::new().unwrap();
+        let (params, body) = parse_fn("(fn [base exp] (pow base exp))");
+        let ptr = compiler.compile_numeric_fn("call_pow", &params, &body).unwrap();
+        let call_pow: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        assert_eq!(call_pow(2, 0), 1);
+        assert_eq!(call_pow(2, 1), 2);
+        assert_eq!(call_pow(2, 10), 1024);
+        assert_eq!(call_pow(3, 3), 27);
+        assert_eq!(call_pow(10, 3), 1000);
+    }
+
+    #[test]
+    fn test_native_mod_quot() {
+        let mut compiler = Compiler::new().unwrap();
+
+        // Test mod
+        let (params, body) = parse_fn("(fn [a b] (mod a b))");
+        let ptr = compiler.compile_numeric_fn("call_mod", &params, &body).unwrap();
+        let call_mod: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+        assert_eq!(call_mod(10, 3), 1);
+        assert_eq!(call_mod(10, 5), 0);
+        assert_eq!(call_mod(17, 4), 1);
+
+        // Test quot (need a new compiler for separate function)
+        let mut compiler2 = Compiler::new().unwrap();
+        let (params2, body2) = parse_fn("(fn [a b] (quot a b))");
+        let ptr2 = compiler2.compile_numeric_fn("call_quot", &params2, &body2).unwrap();
+        let call_quot: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr2) };
+        assert_eq!(call_quot(10, 3), 3);
+        assert_eq!(call_quot(10, 5), 2);
+        assert_eq!(call_quot(17, 4), 4);
+    }
+
+    #[test]
+    fn test_native_min_max() {
+        let mut compiler = Compiler::new().unwrap();
+        let (params, body) = parse_fn("(fn [a b] (min a b))");
+        let ptr = compiler.compile_numeric_fn("call_min", &params, &body).unwrap();
+        let call_min: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        assert_eq!(call_min(3, 5), 3);
+        assert_eq!(call_min(5, 3), 3);
+        assert_eq!(call_min(-1, 1), -1);
+
+        let mut compiler2 = Compiler::new().unwrap();
+        let (params2, body2) = parse_fn("(fn [a b] (max a b))");
+        let ptr2 = compiler2.compile_numeric_fn("call_max", &params2, &body2).unwrap();
+        let call_max: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr2) };
+
+        assert_eq!(call_max(3, 5), 5);
+        assert_eq!(call_max(5, 3), 5);
+        assert_eq!(call_max(-1, 1), 1);
+    }
+
+    #[test]
+    fn test_native_bit_ops() {
+        let mut compiler = Compiler::new().unwrap();
+
+        // Test bit-and
+        let (params, body) = parse_fn("(fn [a b] (bit-and a b))");
+        let ptr = compiler.compile_numeric_fn("call_bit_and", &params, &body).unwrap();
+        let call_bit_and: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+        assert_eq!(call_bit_and(0b1010, 0b1100), 0b1000);
+        assert_eq!(call_bit_and(0xFF, 0x0F), 0x0F);
+
+        // Test bit-or
+        let mut compiler2 = Compiler::new().unwrap();
+        let (params2, body2) = parse_fn("(fn [a b] (bit-or a b))");
+        let ptr2 = compiler2.compile_numeric_fn("call_bit_or", &params2, &body2).unwrap();
+        let call_bit_or: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr2) };
+        assert_eq!(call_bit_or(0b1010, 0b1100), 0b1110);
+
+        // Test bit-shift-left
+        let mut compiler3 = Compiler::new().unwrap();
+        let (params3, body3) = parse_fn("(fn [a n] (bit-shift-left a n))");
+        let ptr3 = compiler3.compile_numeric_fn("call_bsl", &params3, &body3).unwrap();
+        let call_bsl: extern "C" fn(i64, i64) -> i64 = unsafe { std::mem::transmute(ptr3) };
+        assert_eq!(call_bsl(1, 4), 16);
+        assert_eq!(call_bsl(1, 8), 256);
+    }
+
+    #[test]
+    fn test_native_in_expression() {
+        // Test using native functions in complex expressions
+        let mut compiler = Compiler::new().unwrap();
+
+        // (fn [x] (+ (sqrt x) 10))
+        let (params, body) = parse_fn("(fn [x] (+ (sqrt x) 10))");
+        let ptr = compiler.compile_numeric_fn("sqrt_plus_10", &params, &body).unwrap();
+        let f: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        assert_eq!(f(16), 14); // sqrt(16) + 10 = 4 + 10 = 14
+        assert_eq!(f(100), 20); // sqrt(100) + 10 = 10 + 10 = 20
+    }
+
+    #[test]
+    fn test_native_nested() {
+        // Test nested native function calls
+        let mut compiler = Compiler::new().unwrap();
+
+        // (fn [x] (sqrt (abs x)))
+        let (params, body) = parse_fn("(fn [x] (sqrt (abs x)))");
+        let ptr = compiler.compile_numeric_fn("sqrt_abs", &params, &body).unwrap();
+        let f: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        assert_eq!(f(16), 4);
+        assert_eq!(f(-16), 4); // sqrt(abs(-16)) = sqrt(16) = 4
+        assert_eq!(f(-100), 10);
+    }
+
+    #[test]
+    fn test_native_in_loop() {
+        // Test calling native functions inside a loop
+        let mut compiler = Compiler::new().unwrap();
+
+        // Sum of square roots: (fn [n] (loop [i n sum 0] (if (<= i 0) sum (recur (dec i) (+ sum (sqrt i))))))
+        let (params, body) = parse_fn(
+            "(fn [n] (loop [i n sum 0] (if (<= i 0) sum (recur (dec i) (+ sum (sqrt i))))))"
+        );
+        let ptr = compiler.compile_numeric_fn("sum_sqrt", &params, &body).unwrap();
+        let sum_sqrt: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        // sqrt(1) + sqrt(2) + sqrt(3) + sqrt(4) = 1 + 1 + 1 + 2 = 5
+        assert_eq!(sum_sqrt(4), 5);
+        // sqrt(1) + ... + sqrt(9) = 1 + 1 + 1 + 2 + 2 + 2 + 2 + 2 + 3 = 16
+        assert_eq!(sum_sqrt(9), 16);
+    }
+
+    #[test]
+    fn test_native_performance() {
+        use std::time::Instant;
+
+        let mut compiler = Compiler::new().unwrap();
+
+        // Call sqrt in a tight loop
+        let (params, body) = parse_fn(
+            "(fn [n] (loop [i n sum 0] (if (<= i 0) sum (recur (dec i) (+ sum (sqrt i))))))"
+        );
+        let ptr = compiler.compile_numeric_fn("perf_sqrt", &params, &body).unwrap();
+        let sum_sqrt: extern "C" fn(i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        // Warm up
+        let _ = sum_sqrt(1000);
+
+        // Benchmark
+        let start = Instant::now();
+        let iterations = 10000;
+        for _ in 0..iterations {
+            let _ = sum_sqrt(100);
+        }
+        let elapsed = start.elapsed();
+
+        println!(
+            "Native sqrt in loop (100 iterations) x {}: {:?} ({:?} per call)",
+            iterations,
+            elapsed,
+            elapsed / iterations as u32
+        );
+
+        // Should be very fast - direct native calls!
+        assert!(elapsed.as_millis() < 500, "Native calls too slow: {:?}", elapsed);
+    }
+
+    #[test]
+    fn test_distance_formula() {
+        // Real-world example: Euclidean distance (integer approximation)
+        // distance(x1, y1, x2, y2) = sqrt((x2-x1)^2 + (y2-y1)^2)
+        let mut compiler = Compiler::new().unwrap();
+
+        let (params, body) = parse_fn(
+            "(fn [x1 y1 x2 y2] (sqrt (+ (* (- x2 x1) (- x2 x1)) (* (- y2 y1) (- y2 y1)))))"
+        );
+        let ptr = compiler.compile_numeric_fn("distance", &params, &body).unwrap();
+        let distance: extern "C" fn(i64, i64, i64, i64) -> i64 = unsafe { std::mem::transmute(ptr) };
+
+        // distance(0, 0, 3, 4) = sqrt(9 + 16) = sqrt(25) = 5
+        assert_eq!(distance(0, 0, 3, 4), 5);
+        // distance(0, 0, 6, 8) = sqrt(36 + 64) = sqrt(100) = 10
+        assert_eq!(distance(0, 0, 6, 8), 10);
+        // distance(1, 1, 4, 5) = sqrt(9 + 16) = sqrt(25) = 5
+        assert_eq!(distance(1, 1, 4, 5), 5);
     }
 }

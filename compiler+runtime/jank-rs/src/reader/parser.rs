@@ -112,7 +112,8 @@ impl<'a> Parser<'a> {
             }
             Token::Symbol(name) => {
                 self.advance()?;
-                Ok(Value::Symbol(Symbol::new(&name)))
+                // Use parse to handle qualified symbols like ns/name
+                Ok(Value::Symbol(Symbol::parse(&name)))
             }
             Token::Keyword(name) => {
                 self.advance()?;

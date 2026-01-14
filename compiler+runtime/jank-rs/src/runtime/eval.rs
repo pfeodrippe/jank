@@ -1,14 +1,18 @@
 //! Evaluator for jank-rs
 //!
 //! This module implements the interpreter that evaluates Clojure forms.
+//! Supports namespaces via (ns ...) and (require ...) forms.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::path::PathBuf;
 
-use crate::types::{Value, Symbol, Function, Arity, List};
+use crate::types::{Value, Symbol, Function, Arity, List, Keyword};
 use crate::error::{JankError, JankResult};
 use crate::runtime::env::Environment;
 use crate::runtime::compiler::Compiler;
+use crate::runtime::namespace::NamespaceRegistry;
+use crate::reader::read_string;
 
 /// Maximum recursion depth before stack overflow
 const MAX_RECURSION_DEPTH: usize = 10000;
@@ -37,6 +41,8 @@ pub struct Evaluator {
     compiled: HashMap<String, CompiledFunction>,
     /// Call counts for functions
     call_counts: HashMap<String, usize>,
+    /// Namespace registry for managing namespaces
+    namespaces: NamespaceRegistry,
 }
 
 impl Evaluator {
@@ -53,6 +59,7 @@ impl Evaluator {
             compiler: None,
             compiled: HashMap::new(),
             call_counts: HashMap::new(),
+            namespaces: NamespaceRegistry::new(),
         }
     }
 
@@ -64,7 +71,23 @@ impl Evaluator {
             compiler: None,
             compiled: HashMap::new(),
             call_counts: HashMap::new(),
+            namespaces: NamespaceRegistry::new(),
         }
+    }
+
+    /// Get the namespace registry
+    pub fn namespaces(&self) -> &NamespaceRegistry {
+        &self.namespaces
+    }
+
+    /// Get the namespace registry mutably
+    pub fn namespaces_mut(&mut self) -> &mut NamespaceRegistry {
+        &mut self.namespaces
+    }
+
+    /// Add a source path for loading .jrs files
+    pub fn add_source_path(&mut self, path: impl Into<PathBuf>) {
+        self.namespaces.add_source_path(path);
     }
 
     /// Get or initialize the JIT compiler
@@ -203,9 +226,29 @@ impl Evaluator {
             // Keywords evaluate to themselves
             Value::Keyword(_) => Ok(form.clone()),
 
-            // Symbols are looked up in the environment
+            // Symbols are looked up in the environment or namespace
             Value::Symbol(sym) => {
-                env.get_symbol(sym)
+                // First, check if it's a qualified symbol (ns/name)
+                if sym.namespace().is_some() {
+                    // Qualified symbol - resolve through namespace registry
+                    if let Some(value) = self.namespaces.resolve(sym) {
+                        return Ok(value);
+                    }
+                    return Err(JankError::undefined_symbol(&format!("{}/{}",
+                        sym.namespace().unwrap(), sym.name())));
+                }
+
+                // Try local environment first
+                if let Some(value) = env.lookup_symbol(sym) {
+                    return Ok(value);
+                }
+
+                // Try namespace registry (for referred symbols and current ns)
+                if let Some(value) = self.namespaces.resolve(sym) {
+                    return Ok(value);
+                }
+
+                Err(JankError::undefined_symbol(sym.name()))
             }
 
             // Vectors: evaluate each element
@@ -258,6 +301,9 @@ impl Evaluator {
                         "defmacro" => return self.eval_defmacro(list, Arc::clone(&env)),
                         "loop" => return self.eval_loop(list, Arc::clone(&env)),
                         "recur" => return self.eval_recur(list, Arc::clone(&env)),
+                        "ns" => return self.eval_ns(list, Arc::clone(&env)),
+                        "require" => return self.eval_require(list, Arc::clone(&env)),
+                        "in-ns" => return self.eval_in_ns(list, Arc::clone(&env)),
                         _ => {}
                     }
                 }
@@ -382,8 +428,8 @@ impl Evaluator {
                 f(args)
             }
 
-            Function::Interpreted { name, params, body, env, is_variadic, variadic_param, .. } |
-            Function::Closure { name, params, body, captured_env: env, is_variadic, variadic_param, .. } => {
+            Function::Interpreted { name, params, body, env, is_variadic, variadic_param, defining_ns, .. } |
+            Function::Closure { name, params, body, captured_env: env, is_variadic, variadic_param, defining_ns, .. } => {
                 // Check arity
                 if *is_variadic {
                     if args.len() < params.len() {
@@ -429,8 +475,19 @@ impl Evaluator {
                     variadic_param.as_ref(),
                 )?);
 
+                // Switch to defining namespace for alias resolution, then restore
+                let prev_ns = self.namespaces.current_name().to_string();
+                if let Some(def_ns) = defining_ns {
+                    self.namespaces.switch_to(def_ns);
+                }
+
                 // Evaluate body
-                self.eval_in_env(body, local_env)
+                let result = self.eval_in_env(body, local_env);
+
+                // Restore original namespace
+                self.namespaces.switch_to(&prev_ns);
+
+                result
             }
 
             Function::Macro { .. } => {
@@ -591,6 +648,7 @@ impl Evaluator {
             captured_env: env,
             is_variadic,
             variadic_param,
+            defining_ns: Some(self.namespaces.current_name().to_string()),
         })))
     }
 
@@ -611,8 +669,9 @@ impl Evaluator {
             Value::Nil
         };
 
-        // Define in global environment
-        self.global_env.define(&name, value.clone());
+        // Define in the current namespace for qualified and unqualified access
+        // We intentionally DON'T define in global_env to maintain namespace isolation
+        self.namespaces.define(&name, value.clone());
 
         Ok(Value::Symbol(Symbol::new(&name)))
     }
@@ -679,11 +738,12 @@ impl Evaluator {
             is_variadic,
             variadic_param,
             doc,
+            defining_ns: Some(self.namespaces.current_name().to_string()),
         };
 
-        // Define in global environment
+        // Define in the current namespace for qualified access
         let func_val = Value::Function(Arc::new(func));
-        self.global_env.define(name.name(), func_val);
+        self.namespaces.define(name.name(), func_val);
 
         // EAGER JIT: Compile immediately if eligible!
         // This makes the first call fast (no compilation overhead)
@@ -756,6 +816,7 @@ impl Evaluator {
             is_variadic,
             variadic_param,
             doc,
+            defining_ns: Some(self.namespaces.current_name().to_string()),
         };
 
         // Define in global environment
@@ -844,6 +905,279 @@ impl Evaluator {
             }
         }
     }
+
+    /// Evaluate (ns name (:require ...)) form
+    /// Sets up a namespace with optional requires
+    fn eval_ns(&mut self, list: &List, _env: Arc<Environment>) -> JankResult<Value> {
+        let args: Vec<Value> = list.iter().skip(1).cloned().collect();
+        if args.is_empty() {
+            return Err(JankError::parse("ns requires a namespace name", 0, 0));
+        }
+
+        // First arg must be a symbol (the namespace name)
+        let ns_name = match &args[0] {
+            Value::Symbol(sym) => sym.name().to_string(),
+            _ => return Err(JankError::parse("ns name must be a symbol", 0, 0)),
+        };
+
+        // Switch to the namespace (creates it if needed)
+        self.namespaces.switch_to(&ns_name);
+
+        // Process remaining forms (typically :require clauses)
+        for arg in args.iter().skip(1) {
+            if let Value::List(clause) = arg {
+                if let Some(Value::Keyword(kw)) = clause.head() {
+                    match kw.name() {
+                        "require" => {
+                            // Process each require spec
+                            for spec in clause.iter().skip(1) {
+                                self.process_require_spec(&spec)?;
+                            }
+                        }
+                        "use" => {
+                            // For now, treat :use like :require with :refer :all
+                            // This is a simplified version
+                            return Err(JankError::eval(":use is not yet supported, use :require instead"));
+                        }
+                        _ => {
+                            // Ignore unknown clauses
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Value::Nil)
+    }
+
+    /// Process a single require spec like [other.ns :as alias] or [other.ns :refer [foo bar]]
+    fn process_require_spec(&mut self, spec: &Value) -> JankResult<()> {
+        match spec {
+            // Simple symbol: (require other.ns)
+            Value::Symbol(sym) => {
+                self.load_namespace(sym.name())?;
+            }
+            // Vector spec: [other.ns :as alias] or [other.ns :refer [foo bar]]
+            Value::Vector(v) => {
+                if v.is_empty() {
+                    return Err(JankError::parse("require spec cannot be empty", 0, 0));
+                }
+
+                // First element is the namespace name
+                let ns_name = match &v[0] {
+                    Value::Symbol(sym) => sym.name().to_string(),
+                    _ => return Err(JankError::parse("require spec must start with a symbol", 0, 0)),
+                };
+
+                // Load the namespace
+                self.load_namespace(&ns_name)?;
+
+                // Process options (:as, :refer)
+                let mut i = 1;
+                while i < v.len() {
+                    if let Value::Keyword(kw) = &v[i] {
+                        match kw.name() {
+                            "as" => {
+                                if i + 1 >= v.len() {
+                                    return Err(JankError::parse(":as requires an alias", 0, 0));
+                                }
+                                if let Value::Symbol(alias) = &v[i + 1] {
+                                    self.namespaces.current_mut().add_alias(alias.name(), &ns_name);
+                                    i += 2;
+                                } else {
+                                    return Err(JankError::parse(":as alias must be a symbol", 0, 0));
+                                }
+                            }
+                            "refer" => {
+                                if i + 1 >= v.len() {
+                                    return Err(JankError::parse(":refer requires a vector of symbols", 0, 0));
+                                }
+                                if let Value::Vector(refers) = &v[i + 1] {
+                                    for refer in refers.iter() {
+                                        if let Value::Symbol(sym) = refer {
+                                            self.namespaces.current_mut().add_refer(
+                                                sym.name(),
+                                                &ns_name,
+                                                sym.name(),
+                                            );
+                                        }
+                                    }
+                                    i += 2;
+                                } else {
+                                    return Err(JankError::parse(":refer must be followed by a vector", 0, 0));
+                                }
+                            }
+                            _ => {
+                                i += 1;
+                            }
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            _ => return Err(JankError::parse("invalid require spec", 0, 0)),
+        }
+        Ok(())
+    }
+
+    /// Load a namespace from a .jrs file
+    fn load_namespace(&mut self, ns_name: &str) -> JankResult<()> {
+        // Check if already loaded
+        if self.namespaces.is_loaded(ns_name) {
+            return Ok(());
+        }
+
+        // Check for circular dependency
+        if self.namespaces.is_loading(ns_name) {
+            return Err(JankError::eval(format!("circular dependency detected: {}", ns_name)));
+        }
+
+        // Find the file
+        let file_path = self.namespaces.find_ns_file(ns_name)
+            .ok_or_else(|| JankError::eval(format!("namespace not found: {}", ns_name)))?;
+
+        // Mark as loading
+        self.namespaces.start_loading(ns_name);
+
+        // Read and parse the file
+        let source = std::fs::read_to_string(&file_path)
+            .map_err(|e| JankError::eval(format!("failed to read {}: {}", file_path.display(), e)))?;
+
+        // Save current namespace
+        let prev_ns = self.namespaces.current_name().to_string();
+
+        // Parse and evaluate each form
+        let result = self.eval_source(&source);
+
+        // Restore previous namespace
+        self.namespaces.switch_to(&prev_ns);
+
+        // Mark as done loading
+        self.namespaces.finish_loading(ns_name);
+
+        result?;
+        Ok(())
+    }
+
+    /// Evaluate a source string containing multiple forms
+    fn eval_source(&mut self, source: &str) -> JankResult<Value> {
+        // For now, parse and eval forms one at a time
+        // A more sophisticated reader would handle this better
+        let mut result = Value::Nil;
+        let mut remaining = source.trim();
+
+        while !remaining.is_empty() {
+            // Try to parse a form
+            match read_string(remaining) {
+                Ok(form) => {
+                    result = self.eval(&form)?;
+                    // Skip past the parsed form
+                    // This is a simplified approach - a proper reader would track position
+                    remaining = skip_form(remaining);
+                }
+                Err(e) => {
+                    if remaining.trim().is_empty() {
+                        break;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Evaluate (require ...) form - load namespaces
+    fn eval_require(&mut self, list: &List, _env: Arc<Environment>) -> JankResult<Value> {
+        for spec in list.iter().skip(1) {
+            self.process_require_spec(&spec)?;
+        }
+        Ok(Value::Nil)
+    }
+
+    /// Evaluate (in-ns 'namespace) - switch to a namespace
+    fn eval_in_ns(&mut self, list: &List, env: Arc<Environment>) -> JankResult<Value> {
+        let args: Vec<Value> = list.iter().skip(1).cloned().collect();
+        if args.len() != 1 {
+            return Err(JankError::arity("in-ns", "1", args.len()));
+        }
+
+        // Evaluate the argument (should be a quoted symbol)
+        let ns_arg = self.eval_in_env(&args[0], Arc::clone(&env))?;
+
+        let ns_name = match &ns_arg {
+            Value::Symbol(sym) => sym.name().to_string(),
+            _ => return Err(JankError::eval("in-ns requires a symbol")),
+        };
+
+        self.namespaces.switch_to(&ns_name);
+        Ok(Value::Nil)
+    }
+}
+
+/// Skip past a form in source text (simplified)
+fn skip_form(source: &str) -> &str {
+    let s = source.trim_start();
+    if s.is_empty() {
+        return "";
+    }
+
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    let mut chars = s.char_indices().peekable();
+
+    while let Some((i, c)) = chars.next() {
+        if escape {
+            escape = false;
+            continue;
+        }
+
+        if c == '\\' && in_string {
+            escape = true;
+            continue;
+        }
+
+        if c == '"' {
+            in_string = !in_string;
+            if !in_string && depth == 0 {
+                // End of string at top level
+                return &s[i + 1..];
+            }
+            continue;
+        }
+
+        if in_string {
+            continue;
+        }
+
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &s[i + 1..];
+                }
+            }
+            _ if depth == 0 && c.is_whitespace() => {
+                // End of atom
+                return &s[i..];
+            }
+            ';' if depth == 0 => {
+                // Comment - skip to end of line
+                while let Some((j, ch)) = chars.next() {
+                    if ch == '\n' {
+                        return skip_form(&s[j + 1..]);
+                    }
+                }
+                return "";
+            }
+            _ => {}
+        }
+    }
+
+    ""
 }
 
 impl Default for Evaluator {
@@ -1233,5 +1567,178 @@ mod tests {
         assert_eq!(factorial_ptr(20), 2432902008176640000);
 
         println!("==============================\n");
+    }
+
+    // ==================== NAMESPACE TESTS ====================
+
+    #[test]
+    fn test_ns_declaration() {
+        let mut evaluator = Evaluator::new();
+
+        // Declare a namespace
+        evaluator.eval(&read_string("(ns myapp.core)").unwrap()).unwrap();
+
+        // Check that we switched to the new namespace
+        assert_eq!(evaluator.namespaces().current_name(), "myapp.core");
+    }
+
+    #[test]
+    fn test_in_ns() {
+        let mut evaluator = Evaluator::new();
+
+        // Start in user namespace
+        assert_eq!(evaluator.namespaces().current_name(), "user");
+
+        // Switch to a new namespace using in-ns
+        evaluator.eval(&read_string("(in-ns 'myapp.core)").unwrap()).unwrap();
+        assert_eq!(evaluator.namespaces().current_name(), "myapp.core");
+
+        // Define something in this namespace
+        evaluator.eval(&read_string("(def x 42)").unwrap()).unwrap();
+
+        // Switch back to user
+        evaluator.eval(&read_string("(in-ns 'user)").unwrap()).unwrap();
+        assert_eq!(evaluator.namespaces().current_name(), "user");
+
+        // x should not be visible here
+        let result = evaluator.eval(&read_string("x").unwrap());
+        assert!(result.is_err());
+
+        // But we can access it with qualified name
+        let result = evaluator.eval(&read_string("myapp.core/x").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(42));
+    }
+
+    #[test]
+    fn test_qualified_symbol_resolution() {
+        let mut evaluator = Evaluator::new();
+
+        // Create another namespace with a definition
+        evaluator.eval(&read_string("(ns other.ns)").unwrap()).unwrap();
+        evaluator.eval(&read_string("(def answer 42)").unwrap()).unwrap();
+
+        // Switch to user namespace
+        evaluator.eval(&read_string("(in-ns 'user)").unwrap()).unwrap();
+
+        // Access via qualified symbol
+        let result = evaluator.eval(&read_string("other.ns/answer").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(42));
+    }
+
+    #[test]
+    fn test_defn_in_namespace() {
+        let mut evaluator = Evaluator::new();
+
+        // Create a math namespace with a function
+        evaluator.eval(&read_string("(ns myapp.math)").unwrap()).unwrap();
+        evaluator.eval(&read_string("(defn square [x] (* x x))").unwrap()).unwrap();
+
+        // Switch to user namespace
+        evaluator.eval(&read_string("(in-ns 'user)").unwrap()).unwrap();
+
+        // Call the function using qualified name
+        let result = evaluator.eval(&read_string("(myapp.math/square 5)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(25));
+    }
+
+    #[test]
+    fn test_namespace_isolation() {
+        let mut evaluator = Evaluator::new();
+
+        // Define x in user namespace
+        evaluator.eval(&read_string("(def x 1)").unwrap()).unwrap();
+
+        // Define x in another namespace
+        evaluator.eval(&read_string("(ns other)").unwrap()).unwrap();
+        evaluator.eval(&read_string("(def x 2)").unwrap()).unwrap();
+
+        // Check they're different
+        assert_eq!(
+            evaluator.eval(&read_string("x").unwrap()).unwrap(),
+            Value::Integer(2)
+        );
+        evaluator.eval(&read_string("(in-ns 'user)").unwrap()).unwrap();
+        assert_eq!(
+            evaluator.eval(&read_string("x").unwrap()).unwrap(),
+            Value::Integer(1)
+        );
+    }
+
+    // ==================== .JRS FILE LOADING TESTS ====================
+
+    #[test]
+    fn test_load_simple_jrs_file() {
+        let mut evaluator = Evaluator::new();
+
+        // Add test resources to source path
+        evaluator.add_source_path("test_resources");
+
+        // Require the simple namespace
+        evaluator.eval(&read_string("(require simple)").unwrap()).unwrap();
+
+        // Access the defined value through qualified symbol
+        let result = evaluator.eval(&read_string("simple/answer").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(42));
+    }
+
+    #[test]
+    fn test_load_jrs_with_functions() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+
+        // Require myapp.math namespace
+        evaluator.eval(&read_string("(require myapp.math)").unwrap()).unwrap();
+
+        // Call functions from the loaded namespace
+        let result = evaluator.eval(&read_string("(myapp.math/square 5)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(25));
+
+        let result = evaluator.eval(&read_string("(myapp.math/cube 3)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(27));
+    }
+
+    #[test]
+    fn test_load_jrs_with_alias() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+
+        // Require with alias
+        evaluator.eval(&read_string("(require [myapp.math :as m])").unwrap()).unwrap();
+
+        // Use the alias
+        let result = evaluator.eval(&read_string("(m/square 7)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(49));
+    }
+
+    #[test]
+    fn test_ns_with_require() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+
+        // Load myapp.core which requires myapp.math
+        evaluator.eval(&read_string("(require myapp.core)").unwrap()).unwrap();
+
+        // Call functions from myapp.core that use myapp.math
+        let result = evaluator.eval(&read_string("(myapp.core/area 6)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(36));
+
+        let result = evaluator.eval(&read_string("(myapp.core/volume 4)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(64));
+    }
+
+    #[test]
+    fn test_ns_form_with_require() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+
+        // Use ns form with :require clause
+        evaluator.eval(&read_string("(ns my.test (:require [myapp.math :as math]))").unwrap()).unwrap();
+
+        // Should be in my.test namespace now
+        assert_eq!(evaluator.namespaces().current_name(), "my.test");
+
+        // Can use the alias
+        let result = evaluator.eval(&read_string("(math/square 10)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(100));
     }
 }

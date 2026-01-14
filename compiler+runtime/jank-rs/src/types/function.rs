@@ -70,6 +70,8 @@ pub enum Function {
         is_variadic: bool,
         variadic_param: Option<Symbol>,
         doc: Option<String>,
+        /// The namespace where this function was defined (for alias resolution)
+        defining_ns: Option<String>,
     },
 
     /// A closure (captures environment)
@@ -80,6 +82,8 @@ pub enum Function {
         captured_env: Arc<crate::runtime::env::Environment>,
         is_variadic: bool,
         variadic_param: Option<Symbol>,
+        /// The namespace where this closure was defined (for alias resolution)
+        defining_ns: Option<String>,
     },
 
     /// A macro (like a function but transforms code)
@@ -91,6 +95,8 @@ pub enum Function {
         is_variadic: bool,
         variadic_param: Option<Symbol>,
         doc: Option<String>,
+        /// The namespace where this macro was defined (for alias resolution)
+        defining_ns: Option<String>,
     },
 
     /// A partially applied function

@@ -8,9 +8,12 @@ pub mod core;
 pub mod jit;
 pub mod compiler;
 pub mod tagged;
+pub mod native;
+pub mod namespace;
 
 pub use env::Environment;
 pub use eval::Evaluator;
 pub use jit::JitRuntime;
 pub use compiler::Compiler;
 pub use tagged::Tagged;
+pub use namespace::{Namespace, NamespaceRegistry};
