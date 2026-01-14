@@ -99,6 +99,26 @@ pub enum Function {
         defining_ns: Option<String>,
     },
 
+    /// A multi-arity macro
+    MacroMulti {
+        name: Symbol,
+        /// Each arity is: (params, variadic_param, body)
+        arities: Vec<(Vec<Symbol>, Option<Symbol>, Arc<super::value::Value>)>,
+        env: Arc<crate::runtime::env::Environment>,
+        doc: Option<String>,
+        defining_ns: Option<String>,
+    },
+
+    /// A multi-arity interpreted function (defined with defn with multiple arities)
+    InterpretedMulti {
+        name: Option<Symbol>,
+        /// Each arity is: (params, variadic_param, body)
+        arities: Vec<(Vec<Symbol>, Option<Symbol>, Arc<super::value::Value>)>,
+        env: Arc<crate::runtime::env::Environment>,
+        doc: Option<String>,
+        defining_ns: Option<String>,
+    },
+
     /// A partially applied function
     Partial {
         func: Arc<Function>,
@@ -142,8 +162,10 @@ impl Function {
         match self {
             Function::Native { name, .. } => Some(name),
             Function::Interpreted { name, .. } => name.as_ref().map(|s| s.name()),
+            Function::InterpretedMulti { name, .. } => name.as_ref().map(|s| s.name()),
             Function::Closure { name, .. } => name.as_ref().map(|s| s.name()),
             Function::Macro { name, .. } => Some(name.name()),
+            Function::MacroMulti { name, .. } => Some(name.name()),
             Function::Partial { func, .. } => func.name(),
             Function::Composed { .. } => None,
         }
@@ -186,6 +208,25 @@ impl Function {
                     Arity::Fixed(params.len())
                 }
             }
+            Function::MacroMulti { arities, .. } | Function::InterpretedMulti { arities, .. } => {
+                // Collect all fixed arities + check for variadic
+                let mut fixed_arities = Vec::new();
+                let mut has_variadic = false;
+                let mut variadic_min = 0;
+                for (params, variadic_param, _) in arities {
+                    if variadic_param.is_some() {
+                        has_variadic = true;
+                        variadic_min = params.len();
+                    } else {
+                        fixed_arities.push(params.len());
+                    }
+                }
+                if has_variadic {
+                    Arity::Variadic(variadic_min)
+                } else {
+                    Arity::Multi(fixed_arities)
+                }
+            }
             Function::Partial { func, applied_args } => {
                 let base_arity = func.arity();
                 match base_arity {
@@ -212,7 +253,7 @@ impl Function {
 
     /// Check if this is a macro
     pub fn is_macro(&self) -> bool {
-        matches!(self, Function::Macro { .. })
+        matches!(self, Function::Macro { .. } | Function::MacroMulti { .. })
     }
 
     /// Get the documentation string
@@ -220,9 +261,25 @@ impl Function {
         match self {
             Function::Native { doc, .. } => doc.as_deref(),
             Function::Interpreted { doc, .. } => doc.as_deref(),
+            Function::InterpretedMulti { doc, .. } => doc.as_deref(),
             Function::Closure { .. } => None,
             Function::Macro { doc, .. } => doc.as_deref(),
+            Function::MacroMulti { doc, .. } => doc.as_deref(),
             Function::Partial { func, .. } => func.doc(),
+            Function::Composed { .. } => None,
+        }
+    }
+
+    /// Get the defining namespace
+    pub fn defining_ns(&self) -> Option<&str> {
+        match self {
+            Function::Native { .. } => None,
+            Function::Interpreted { defining_ns, .. } => defining_ns.as_deref(),
+            Function::InterpretedMulti { defining_ns, .. } => defining_ns.as_deref(),
+            Function::Closure { defining_ns, .. } => defining_ns.as_deref(),
+            Function::Macro { defining_ns, .. } => defining_ns.as_deref(),
+            Function::MacroMulti { defining_ns, .. } => defining_ns.as_deref(),
+            Function::Partial { func, .. } => func.defining_ns(),
             Function::Composed { .. } => None,
         }
     }
@@ -244,6 +301,31 @@ impl fmt::Display for Function {
             }
             Function::Macro { name, params, .. } => {
                 write!(f, "#<macro {} [{} args]>", name, params.len())
+            }
+            Function::MacroMulti { name, arities, .. } => {
+                let arity_strs: Vec<String> = arities.iter()
+                    .map(|(params, var, _)| {
+                        if var.is_some() {
+                            format!("{}+", params.len())
+                        } else {
+                            params.len().to_string()
+                        }
+                    })
+                    .collect();
+                write!(f, "#<macro {} [{}]>", name, arity_strs.join(","))
+            }
+            Function::InterpretedMulti { name, arities, .. } => {
+                let name_str = name.as_ref().map(|s| s.to_string()).unwrap_or_else(|| "anonymous".to_string());
+                let arity_strs: Vec<String> = arities.iter()
+                    .map(|(params, var, _)| {
+                        if var.is_some() {
+                            format!("{}+", params.len())
+                        } else {
+                            params.len().to_string()
+                        }
+                    })
+                    .collect();
+                write!(f, "#<fn {} [{}]>", name_str, arity_strs.join(","))
             }
             Function::Partial { func, applied_args } => {
                 write!(f, "#<partial {} [{} applied]>", func, applied_args.len())

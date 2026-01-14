@@ -43,6 +43,8 @@ pub struct Evaluator {
     call_counts: HashMap<String, usize>,
     /// Namespace registry for managing namespaces
     namespaces: NamespaceRegistry,
+    /// Gensym counter for unique symbol generation
+    gensym_counter: usize,
 }
 
 impl Evaluator {
@@ -50,16 +52,39 @@ impl Evaluator {
     pub fn new() -> Self {
         let global_env = Arc::new(Environment::new());
 
-        // Load core functions
+        // Load native core functions
         crate::runtime::core::load_core(&global_env);
 
-        Evaluator {
+        let mut evaluator = Evaluator {
             global_env,
             depth: 0,
             compiler: None,
             compiled: HashMap::new(),
             call_counts: HashMap::new(),
             namespaces: NamespaceRegistry::new(),
+            gensym_counter: 0,
+        };
+
+        // Auto-load clojure.core (like Clojure does)
+        evaluator.load_clojure_core();
+
+        evaluator
+    }
+
+    /// Load clojure.core and refer all its symbols into the current namespace
+    fn load_clojure_core(&mut self) {
+        // Try to load clojure/core.jrs
+        if let Err(_) = self.load_namespace("clojure.core") {
+            // If file doesn't exist, that's OK - we'll just use native functions
+            return;
+        }
+
+        // Refer all symbols from clojure.core into the current namespace (user)
+        if let Some(core_ns) = self.namespaces.get("clojure.core") {
+            let defs: Vec<String> = core_ns.iter_defs().map(|(k, _)| k.clone()).collect();
+            for name in defs {
+                self.namespaces.current_mut().add_refer(&name, "clojure.core", &name);
+            }
         }
     }
 
@@ -72,6 +97,7 @@ impl Evaluator {
             compiled: HashMap::new(),
             call_counts: HashMap::new(),
             namespaces: NamespaceRegistry::new(),
+            gensym_counter: 0,
         }
     }
 
@@ -88,6 +114,13 @@ impl Evaluator {
     /// Add a source path for loading .jrs files
     pub fn add_source_path(&mut self, path: impl Into<PathBuf>) {
         self.namespaces.add_source_path(path);
+    }
+
+    /// Generate a unique gensym counter value
+    fn gensym_counter(&mut self) -> usize {
+        let c = self.gensym_counter;
+        self.gensym_counter += 1;
+        c
     }
 
     /// Get or initialize the JIT compiler
@@ -238,13 +271,22 @@ impl Evaluator {
                         sym.namespace().unwrap(), sym.name())));
                 }
 
-                // Try local environment first
-                if let Some(value) = env.lookup_symbol(sym) {
+                // Try local environment first (for let bindings, fn params)
+                // But NOT the global_env - we check that last as fallback for natives
+                if !Arc::ptr_eq(&env, &self.global_env) {
+                    if let Some(value) = env.lookup_local(sym) {
+                        return Ok(value);
+                    }
+                }
+
+                // Try namespace registry (for referred symbols and current ns defs)
+                // This takes priority over global_env natives
+                if let Some(value) = self.namespaces.resolve(sym) {
                     return Ok(value);
                 }
 
-                // Try namespace registry (for referred symbols and current ns)
-                if let Some(value) = self.namespaces.resolve(sym) {
+                // Fall back to global_env for native functions
+                if let Some(value) = self.global_env.lookup_symbol(sym) {
                     return Ok(value);
                 }
 
@@ -292,13 +334,16 @@ impl Evaluator {
                 if let Value::Symbol(sym) = &head {
                     match sym.name() {
                         "quote" => return self.eval_quote(list, Arc::clone(&env)),
+                        "syntax-quote" => return self.eval_syntax_quote(list, Arc::clone(&env)),
+                        "unquote" => return Err(JankError::eval("unquote outside of syntax-quote")),
+                        "unquote-splicing" => return Err(JankError::eval("unquote-splicing outside of syntax-quote")),
                         "if" => return self.eval_if(list, Arc::clone(&env)),
                         "do" => return self.eval_do(list, Arc::clone(&env)),
                         "let" => return self.eval_let(list, Arc::clone(&env)),
                         "fn" => return self.eval_fn(list, Arc::clone(&env)),
+                        "macro" => return self.eval_macro(list, Arc::clone(&env)),
                         "def" => return self.eval_def(list, Arc::clone(&env)),
-                        "defn" => return self.eval_defn(list, Arc::clone(&env)),
-                        "defmacro" => return self.eval_defmacro(list, Arc::clone(&env)),
+                        // defn and defmacro are now macros defined in clojure.core using def+fn and def+macro
                         "loop" => return self.eval_loop(list, Arc::clone(&env)),
                         "recur" => return self.eval_recur(list, Arc::clone(&env)),
                         "ns" => return self.eval_ns(list, Arc::clone(&env)),
@@ -308,10 +353,22 @@ impl Evaluator {
                     }
                 }
 
-                // Regular function call
+                // Evaluate head to get function/macro
                 let func_val = self.eval_in_env(&head, Arc::clone(&env))?;
 
-                // Collect arguments
+                // Check if it's a macro - macros receive unevaluated arguments
+                if let Value::Function(ref f) = func_val {
+                    if f.is_macro() {
+                        // Get unevaluated arguments
+                        let raw_args: Vec<Value> = list.iter().skip(1).cloned().collect();
+                        // Expand the macro
+                        let expanded = self.expand_macro(f, &raw_args)?;
+                        // Evaluate the expanded form
+                        return self.eval_in_env(&expanded, env);
+                    }
+                }
+
+                // Regular function call - evaluate arguments
                 let args: Vec<Value> = list.iter()
                     .skip(1)
                     .map(|arg| self.eval_in_env(&arg, Arc::clone(&env)))
@@ -414,6 +471,97 @@ impl Evaluator {
         }
     }
 
+    /// Expand a macro with unevaluated arguments
+    fn expand_macro(&mut self, mac: &Function, args: &[Value]) -> JankResult<Value> {
+        match mac {
+            Function::Macro { name, params, body, env, is_variadic, variadic_param, defining_ns, .. } => {
+                self.expand_macro_arity(name.name(), params, variadic_param.as_ref(), body, env, defining_ns.as_deref(), args)
+            }
+            Function::MacroMulti { name, arities, env, defining_ns, .. } => {
+                // Find matching arity
+                for (params, variadic_param, body) in arities {
+                    let is_variadic = variadic_param.is_some();
+                    let fixed_count = params.len();
+
+                    let matches = if is_variadic {
+                        args.len() >= fixed_count
+                    } else {
+                        args.len() == fixed_count
+                    };
+
+                    if matches {
+                        return self.expand_macro_arity(
+                            name.name(),
+                            params,
+                            variadic_param.as_ref(),
+                            body,
+                            env,
+                            defining_ns.as_deref(),
+                            args
+                        );
+                    }
+                }
+
+                // No matching arity found
+                let arity_strs: Vec<String> = arities.iter()
+                    .map(|(p, v, _)| if v.is_some() { format!("{}+", p.len()) } else { p.len().to_string() })
+                    .collect();
+                Err(JankError::arity(name.name(), &arity_strs.join(" or "), args.len()))
+            }
+            _ => Err(JankError::eval("expand_macro called on non-macro")),
+        }
+    }
+
+    /// Expand a single arity of a macro
+    fn expand_macro_arity(
+        &mut self,
+        name: &str,
+        params: &[Symbol],
+        variadic_param: Option<&Symbol>,
+        body: &Value,
+        env: &Arc<Environment>,
+        defining_ns: Option<&str>,
+        args: &[Value],
+    ) -> JankResult<Value> {
+        let local_env = Arc::new(Environment::with_parent(Arc::clone(env)));
+
+        // Bind parameters to unevaluated arguments
+        if variadic_param.is_some() {
+            let fixed_count = params.len();
+            if args.len() < fixed_count {
+                return Err(JankError::arity(name, &format!("at least {}", fixed_count), args.len()));
+            }
+            for (param, arg) in params.iter().zip(args.iter()) {
+                local_env.define(param.name(), arg.clone());
+            }
+            if let Some(rest_param) = variadic_param {
+                let rest: Vec<Value> = args.iter().skip(fixed_count).cloned().collect();
+                local_env.define(rest_param.name(), Value::list(rest));
+            }
+        } else {
+            if args.len() != params.len() {
+                return Err(JankError::arity(name, &params.len().to_string(), args.len()));
+            }
+            for (param, arg) in params.iter().zip(args.iter()) {
+                local_env.define(param.name(), arg.clone());
+            }
+        }
+
+        // Switch to defining namespace for alias resolution
+        let prev_ns = self.namespaces.current_name().to_string();
+        if let Some(def_ns) = defining_ns {
+            self.namespaces.switch_to(def_ns);
+        }
+
+        // Evaluate the macro body to get the expanded form
+        let result = self.eval_in_env(body, local_env);
+
+        // Restore original namespace
+        self.namespaces.switch_to(&prev_ns);
+
+        result
+    }
+
     /// Apply a Function to arguments
     fn apply_function(&mut self, func: &Function, args: &[Value]) -> JankResult<Value> {
         match func {
@@ -490,7 +638,53 @@ impl Evaluator {
                 result
             }
 
-            Function::Macro { .. } => {
+            Function::InterpretedMulti { name, arities, env, defining_ns, .. } => {
+                // Find the matching arity
+                let arg_count = args.len();
+                let mut matched_arity = None;
+                let mut variadic_match = None;
+
+                for (params, variadic_param, body) in arities {
+                    if variadic_param.is_some() {
+                        // Variadic arity - matches if arg_count >= params.len()
+                        if arg_count >= params.len() {
+                            variadic_match = Some((params, variadic_param, body));
+                        }
+                    } else if arg_count == params.len() {
+                        matched_arity = Some((params, variadic_param, body));
+                        break;
+                    }
+                }
+
+                let (params, variadic_param, body) = matched_arity
+                    .or(variadic_match)
+                    .ok_or_else(|| JankError::arity(
+                        name.as_ref().map(|s| s.name()).unwrap_or("anonymous"),
+                        format!("multi-arity"),
+                        arg_count,
+                    ))?;
+
+                // Create local environment with args
+                let local_env = Arc::new(Environment::with_fn_args(
+                    Arc::clone(env),
+                    params,
+                    args,
+                    variadic_param.as_ref(),
+                )?);
+
+                // Switch to defining namespace for alias resolution
+                let prev_ns = self.namespaces.current_name().to_string();
+                if let Some(def_ns) = defining_ns {
+                    self.namespaces.switch_to(def_ns);
+                }
+
+                let result = self.eval_in_env(body, local_env);
+
+                self.namespaces.switch_to(&prev_ns);
+                result
+            }
+
+            Function::Macro { .. } | Function::MacroMulti { .. } => {
                 Err(JankError::eval("cannot call macro as function - must be expanded"))
             }
 
@@ -521,6 +715,133 @@ impl Evaluator {
             return Err(JankError::arity("quote", "1", args.len()));
         }
         Ok(args[0].clone())
+    }
+
+    fn eval_syntax_quote(&mut self, list: &List, env: Arc<Environment>) -> JankResult<Value> {
+        let args: Vec<Value> = list.iter().skip(1).cloned().collect();
+        if args.len() != 1 {
+            return Err(JankError::arity("syntax-quote", "1", args.len()));
+        }
+        self.syntax_quote_expand(&args[0], env)
+    }
+
+    /// Recursively expand a syntax-quoted form
+    fn syntax_quote_expand(&mut self, form: &Value, env: Arc<Environment>) -> JankResult<Value> {
+        match form {
+            // Lists need special handling for unquote and unquote-splicing
+            Value::List(list) => {
+                if list.is_empty() {
+                    return Ok(Value::list(vec![]));
+                }
+
+                // Check for (unquote x)
+                if let Some(Value::Symbol(sym)) = list.head() {
+                    if sym.name() == "unquote" {
+                        let args: Vec<Value> = list.iter().skip(1).cloned().collect();
+                        if args.len() != 1 {
+                            return Err(JankError::arity("unquote", "1", args.len()));
+                        }
+                        // Evaluate the unquoted expression
+                        return self.eval_in_env(&args[0], env);
+                    }
+                }
+
+                // Process list elements, handling unquote-splicing
+                let mut result = Vec::new();
+                for item in list.iter() {
+                    if let Value::List(inner_list) = &item {
+                        if let Some(Value::Symbol(sym)) = inner_list.head() {
+                            if sym.name() == "unquote-splicing" {
+                                let splice_args: Vec<Value> = inner_list.iter().skip(1).cloned().collect();
+                                if splice_args.len() != 1 {
+                                    return Err(JankError::arity("unquote-splicing", "1", splice_args.len()));
+                                }
+                                // Evaluate and splice
+                                let spliced = self.eval_in_env(&splice_args[0], Arc::clone(&env))?;
+                                // Convert to sequence and add elements
+                                match spliced {
+                                    Value::List(l) => {
+                                        for v in l.iter() {
+                                            result.push(v.clone());
+                                        }
+                                    }
+                                    Value::Vector(v) => {
+                                        for item in v.iter() {
+                                            result.push(item.clone());
+                                        }
+                                    }
+                                    Value::Nil => {} // Empty splice
+                                    other => result.push(other),
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    // Regular element - recursively expand
+                    result.push(self.syntax_quote_expand(&item, Arc::clone(&env))?);
+                }
+                Ok(Value::list(result))
+            }
+
+            // Vectors: recursively expand elements
+            Value::Vector(v) => {
+                let mut result = imbl::Vector::new();
+                for item in v.iter() {
+                    if let Value::List(inner_list) = item {
+                        if let Some(Value::Symbol(sym)) = inner_list.head() {
+                            if sym.name() == "unquote-splicing" {
+                                let splice_args: Vec<Value> = inner_list.iter().skip(1).cloned().collect();
+                                if splice_args.len() != 1 {
+                                    return Err(JankError::arity("unquote-splicing", "1", splice_args.len()));
+                                }
+                                let spliced = self.eval_in_env(&splice_args[0], Arc::clone(&env))?;
+                                match spliced {
+                                    Value::List(l) => {
+                                        for v in l.iter() {
+                                            result.push_back(v.clone());
+                                        }
+                                    }
+                                    Value::Vector(vec) => {
+                                        for item in vec.iter() {
+                                            result.push_back(item.clone());
+                                        }
+                                    }
+                                    Value::Nil => {}
+                                    other => result.push_back(other),
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    result.push_back(self.syntax_quote_expand(item, Arc::clone(&env))?);
+                }
+                Ok(Value::Vector(Arc::new(result)))
+            }
+
+            // Maps: recursively expand keys and values
+            Value::Map(m) => {
+                let mut result = imbl::HashMap::new();
+                for (k, v) in m.iter() {
+                    let key = self.syntax_quote_expand(k, Arc::clone(&env))?;
+                    let val = self.syntax_quote_expand(v, Arc::clone(&env))?;
+                    result.insert(key, val);
+                }
+                Ok(Value::Map(Arc::new(result)))
+            }
+
+            // Sets: recursively expand elements
+            Value::Set(s) => {
+                let mut result = imbl::HashSet::new();
+                for item in s.iter() {
+                    result.insert(self.syntax_quote_expand(item, Arc::clone(&env))?);
+                }
+                Ok(Value::Set(Arc::new(result)))
+            }
+
+            // Symbols in syntax-quote should be fully qualified (optional enhancement for later)
+            // For now, just return as-is like regular quote
+            _ => Ok(form.clone()),
+        }
     }
 
     fn eval_if(&mut self, list: &List, env: Arc<Environment>) -> JankResult<Value> {
@@ -596,60 +917,224 @@ impl Evaluator {
         // Check for optional name
         let (name, params_idx) = match &args[0] {
             Value::Symbol(s) => (Some(s.clone()), 1),
-            Value::Vector(_) => (None, 0),
-            _ => return Err(JankError::type_error("symbol or vector", args[0].type_name())),
+            Value::Vector(_) | Value::List(_) => (None, 0),
+            _ => return Err(JankError::type_error("symbol, vector, or list", args[0].type_name())),
         };
 
         if params_idx >= args.len() {
             return Err(JankError::parse("fn requires parameters vector", 0, 0));
         }
 
-        // Get parameters
-        let params_vec = match &args[params_idx] {
-            Value::Vector(v) => v,
-            _ => return Err(JankError::type_error("vector", args[params_idx].type_name())),
-        };
+        // Check if this is multi-arity or single-arity
+        // Multi-arity: (fn name ([p1] b1) ([p2] b2) ...)
+        // Single-arity: (fn name [params] body)
+        let is_multi_arity = matches!(&args[params_idx], Value::List(_));
 
-        // Parse parameters, looking for & for variadic
-        let mut params = Vec::new();
-        let mut is_variadic = false;
-        let mut variadic_param = None;
+        if is_multi_arity {
+            // Multi-arity function
+            let mut arities: Vec<(Vec<Symbol>, Option<Symbol>, Arc<Value>)> = Vec::new();
 
-        let mut iter = params_vec.iter().peekable();
-        while let Some(param) = iter.next() {
-            match param {
-                Value::Symbol(s) if s.name() == "&" => {
-                    is_variadic = true;
-                    if let Some(Value::Symbol(rest)) = iter.next() {
-                        variadic_param = Some(rest.clone());
-                    } else {
-                        return Err(JankError::parse("& must be followed by symbol", 0, 0));
-                    }
-                    break;
+            for arity_form in args.iter().skip(params_idx) {
+                let arity_list = match arity_form {
+                    Value::List(l) => l,
+                    _ => return Err(JankError::parse("multi-arity clause must be a list", 0, 0)),
+                };
+
+                if arity_list.is_empty() {
+                    return Err(JankError::parse("arity clause cannot be empty", 0, 0));
                 }
-                Value::Symbol(s) => params.push(s.clone()),
-                _ => return Err(JankError::type_error("symbol", param.type_name())),
+
+                let arity_vec: Vec<Value> = arity_list.iter().cloned().collect();
+
+                // First element is parameters vector
+                let params_vec = match &arity_vec[0] {
+                    Value::Vector(v) => v,
+                    _ => return Err(JankError::type_error("vector", arity_vec[0].type_name())),
+                };
+
+                // Parse parameters
+                let mut params = Vec::new();
+                let mut variadic_param = None;
+                let mut iter = params_vec.iter().peekable();
+                while let Some(param) = iter.next() {
+                    match param {
+                        Value::Symbol(s) if s.name() == "&" => {
+                            if let Some(Value::Symbol(rest)) = iter.next() {
+                                variadic_param = Some(rest.clone());
+                            } else {
+                                return Err(JankError::parse("& must be followed by symbol", 0, 0));
+                            }
+                            break;
+                        }
+                        Value::Symbol(s) => params.push(s.clone()),
+                        _ => return Err(JankError::type_error("symbol", param.type_name())),
+                    }
+                }
+
+                // Rest is the body
+                let body = if arity_vec.len() == 2 {
+                    arity_vec[1].clone()
+                } else {
+                    let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
+                    do_list.extend(arity_vec.iter().skip(1).cloned());
+                    Value::list(do_list)
+                };
+
+                arities.push((params, variadic_param, Arc::new(body)));
             }
+
+            Ok(Value::Function(Arc::new(Function::InterpretedMulti {
+                name,
+                arities,
+                env,
+                doc: None,
+                defining_ns: Some(self.namespaces.current_name().to_string()),
+            })))
+        } else {
+            // Single-arity function
+            let params_vec = match &args[params_idx] {
+                Value::Vector(v) => v,
+                _ => return Err(JankError::type_error("vector", args[params_idx].type_name())),
+            };
+
+            // Parse parameters, looking for & for variadic
+            let mut params = Vec::new();
+            let mut is_variadic = false;
+            let mut variadic_param = None;
+
+            let mut iter = params_vec.iter().peekable();
+            while let Some(param) = iter.next() {
+                match param {
+                    Value::Symbol(s) if s.name() == "&" => {
+                        is_variadic = true;
+                        if let Some(Value::Symbol(rest)) = iter.next() {
+                            variadic_param = Some(rest.clone());
+                        } else {
+                            return Err(JankError::parse("& must be followed by symbol", 0, 0));
+                        }
+                        break;
+                    }
+                    Value::Symbol(s) => params.push(s.clone()),
+                    _ => return Err(JankError::type_error("symbol", param.type_name())),
+                }
+            }
+
+            // Create body (do block if multiple expressions)
+            let body = if args.len() - params_idx - 1 == 1 {
+                args[params_idx + 1].clone()
+            } else {
+                let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
+                do_list.extend(args.iter().skip(params_idx + 1).cloned());
+                Value::list(do_list)
+            };
+
+            Ok(Value::Function(Arc::new(Function::Closure {
+                name,
+                params,
+                body: Arc::new(body),
+                captured_env: env,
+                is_variadic,
+                variadic_param,
+                defining_ns: Some(self.namespaces.current_name().to_string()),
+            })))
+        }
+    }
+
+    /// Evaluate (macro name [params] body...) - creates a macro
+    /// Similar to fn but creates a Function::Macro
+    fn eval_macro(&mut self, list: &List, env: Arc<Environment>) -> JankResult<Value> {
+        let args: Vec<Value> = list.iter().skip(1).cloned().collect();
+        if args.is_empty() {
+            return Err(JankError::parse("macro requires name and parameters", 0, 0));
         }
 
-        // Create body (do block if multiple expressions)
-        let body = if args.len() - params_idx - 1 == 1 {
-            args[params_idx + 1].clone()
-        } else {
-            let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
-            do_list.extend(args.iter().skip(params_idx + 1).cloned());
-            Value::list(do_list)
+        // Macro requires a name (for error messages and debugging)
+        let (name, params_idx) = match &args[0] {
+            Value::Symbol(s) => (s.clone(), 1),
+            Value::Vector(_) => {
+                // Anonymous macro - create a gensym name
+                (Symbol::new(&format!("macro__{}", self.gensym_counter())), 0)
+            }
+            _ => return Err(JankError::type_error("symbol or vector", args[0].type_name())),
         };
 
-        Ok(Value::Function(Arc::new(Function::Closure {
-            name,
-            params,
-            body: Arc::new(body),
-            captured_env: env,
-            is_variadic,
-            variadic_param,
-            defining_ns: Some(self.namespaces.current_name().to_string()),
-        })))
+        if params_idx >= args.len() && params_idx > 0 {
+            return Err(JankError::parse("macro requires parameters vector", 0, 0));
+        }
+
+        // Check if this is multi-arity or single-arity
+        let actual_params_idx = if params_idx == 0 { 0 } else { params_idx };
+        let is_multi_arity = matches!(&args[actual_params_idx], Value::List(_));
+
+        if is_multi_arity {
+            // Multi-arity macro
+            let mut arities: Vec<(Vec<Symbol>, Option<Symbol>, Arc<Value>)> = Vec::new();
+
+            for arity_form in args.iter().skip(actual_params_idx) {
+                let arity_list = match arity_form {
+                    Value::List(l) => l,
+                    _ => return Err(JankError::parse("multi-arity clause must be a list", 0, 0)),
+                };
+
+                let arity_items: Vec<Value> = arity_list.iter().cloned().collect();
+                if arity_items.is_empty() {
+                    return Err(JankError::parse("arity clause cannot be empty", 0, 0));
+                }
+
+                let params_vec = match &arity_items[0] {
+                    Value::Vector(v) => v,
+                    _ => return Err(JankError::type_error("vector", arity_items[0].type_name())),
+                };
+
+                let (params, variadic_param) = self.parse_params(params_vec)?;
+
+                let body = if arity_items.len() == 2 {
+                    arity_items[1].clone()
+                } else {
+                    let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
+                    do_list.extend(arity_items.iter().skip(1).cloned());
+                    Value::list(do_list)
+                };
+
+                arities.push((params, variadic_param, Arc::new(body)));
+            }
+
+            Ok(Value::Function(Arc::new(Function::MacroMulti {
+                name,
+                arities,
+                env,
+                doc: None,
+                defining_ns: Some(self.namespaces.current_name().to_string()),
+            })))
+        } else {
+            // Single-arity macro
+            let params_vec = match &args[actual_params_idx] {
+                Value::Vector(v) => v,
+                _ => return Err(JankError::type_error("vector", args[actual_params_idx].type_name())),
+            };
+
+            let (params, variadic_param) = self.parse_params(params_vec)?;
+            let is_variadic = variadic_param.is_some();
+
+            let body = if args.len() - actual_params_idx - 1 == 1 {
+                args[actual_params_idx + 1].clone()
+            } else {
+                let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
+                do_list.extend(args.iter().skip(actual_params_idx + 1).cloned());
+                Value::list(do_list)
+            };
+
+            Ok(Value::Function(Arc::new(Function::Macro {
+                name,
+                params,
+                body: Arc::new(body),
+                env,
+                is_variadic,
+                variadic_param,
+                doc: None,
+                defining_ns: Some(self.namespaces.current_name().to_string()),
+            })))
+        }
     }
 
     fn eval_def(&mut self, list: &List, env: Arc<Environment>) -> JankResult<Value> {
@@ -673,6 +1158,27 @@ impl Evaluator {
         // We intentionally DON'T define in global_env to maintain namespace isolation
         self.namespaces.define(&name, value.clone());
 
+        // EAGER JIT: If defining a function, try to compile it immediately!
+        // This makes the first call fast (no compilation overhead)
+        if let Value::Function(ref f) = value {
+            match f.as_ref() {
+                Function::Closure { params, body, is_variadic: false, .. } |
+                Function::Interpreted { params, body, is_variadic: false, .. } => {
+                    let _ = self.try_jit_compile(&name, params, body);
+                }
+                Function::InterpretedMulti { arities, .. } => {
+                    // Try to compile the first non-variadic arity
+                    for (params, variadic_param, body) in arities {
+                        if variadic_param.is_none() {
+                            let _ = self.try_jit_compile(&name, params, body);
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         Ok(Value::Symbol(Symbol::new(&name)))
     }
 
@@ -688,67 +1194,101 @@ impl Evaluator {
         };
 
         // Check for docstring
-        let (doc, params_idx) = match &args[1] {
+        let (doc, body_start_idx) = match &args[1] {
             Value::String(s) if args.len() > 2 => (Some(s.as_ref().clone()), 2),
             _ => (None, 1),
         };
 
-        // Get parameters
-        let params_vec = match &args[params_idx] {
-            Value::Vector(v) => v,
-            _ => return Err(JankError::type_error("vector", args[params_idx].type_name())),
-        };
+        // Check if this is multi-arity or single-arity
+        // Multi-arity: (defn name ([params1] body1) ([params2] body2) ...)
+        // Single-arity: (defn name [params] body ...)
+        let is_multi_arity = matches!(&args[body_start_idx], Value::List(_));
 
-        // Parse parameters
-        let mut params = Vec::new();
-        let mut is_variadic = false;
-        let mut variadic_param = None;
+        if is_multi_arity {
+            // Parse each arity clause
+            let mut arities: Vec<(Vec<Symbol>, Option<Symbol>, Arc<Value>)> = Vec::new();
 
-        let mut iter = params_vec.iter().peekable();
-        while let Some(param) = iter.next() {
-            match param {
-                Value::Symbol(s) if s.name() == "&" => {
-                    is_variadic = true;
-                    if let Some(Value::Symbol(rest)) = iter.next() {
-                        variadic_param = Some(rest.clone());
-                    } else {
-                        return Err(JankError::parse("& must be followed by symbol", 0, 0));
-                    }
-                    break;
+            for arity_form in args.iter().skip(body_start_idx) {
+                let arity_list = match arity_form {
+                    Value::List(l) => l,
+                    _ => return Err(JankError::parse("multi-arity clause must be a list", 0, 0)),
+                };
+
+                let arity_items: Vec<Value> = arity_list.iter().cloned().collect();
+                if arity_items.is_empty() {
+                    return Err(JankError::parse("arity clause cannot be empty", 0, 0));
                 }
-                Value::Symbol(s) => params.push(s.clone()),
-                _ => return Err(JankError::type_error("symbol", param.type_name())),
+
+                // First element is params vector
+                let params_vec = match &arity_items[0] {
+                    Value::Vector(v) => v,
+                    _ => return Err(JankError::type_error("vector", arity_items[0].type_name())),
+                };
+
+                // Parse parameters
+                let (params, variadic_param) = self.parse_params(params_vec)?;
+
+                // Rest is body
+                let body = if arity_items.len() == 2 {
+                    arity_items[1].clone()
+                } else {
+                    let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
+                    do_list.extend(arity_items.iter().skip(1).cloned());
+                    Value::list(do_list)
+                };
+
+                arities.push((params, variadic_param, Arc::new(body)));
             }
-        }
 
-        // Create body
-        let body = if args.len() - params_idx - 1 == 1 {
-            args[params_idx + 1].clone()
+            let func = Function::InterpretedMulti {
+                name: Some(name.clone()),
+                arities,
+                env,
+                doc,
+                defining_ns: Some(self.namespaces.current_name().to_string()),
+            };
+
+            let func_val = Value::Function(Arc::new(func));
+            self.namespaces.define(name.name(), func_val);
         } else {
-            let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
-            do_list.extend(args.iter().skip(params_idx + 1).cloned());
-            Value::list(do_list)
-        };
+            // Single-arity: (defn name [params] body ...)
+            let params_vec = match &args[body_start_idx] {
+                Value::Vector(v) => v,
+                _ => return Err(JankError::type_error("vector", args[body_start_idx].type_name())),
+            };
 
-        let func = Function::Interpreted {
-            name: Some(name.clone()),
-            params: params.clone(),
-            body: Arc::new(body.clone()),
-            env,
-            is_variadic,
-            variadic_param,
-            doc,
-            defining_ns: Some(self.namespaces.current_name().to_string()),
-        };
+            let (params, variadic_param) = self.parse_params(params_vec)?;
+            let is_variadic = variadic_param.is_some();
 
-        // Define in the current namespace for qualified access
-        let func_val = Value::Function(Arc::new(func));
-        self.namespaces.define(name.name(), func_val);
+            // Create body
+            let body = if args.len() - body_start_idx - 1 == 1 {
+                args[body_start_idx + 1].clone()
+            } else {
+                let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
+                do_list.extend(args.iter().skip(body_start_idx + 1).cloned());
+                Value::list(do_list)
+            };
 
-        // EAGER JIT: Compile immediately if eligible!
-        // This makes the first call fast (no compilation overhead)
-        if !is_variadic {
-            let _ = self.try_jit_compile(name.name(), &params, &body);
+            let func = Function::Interpreted {
+                name: Some(name.clone()),
+                params: params.clone(),
+                body: Arc::new(body.clone()),
+                env,
+                is_variadic,
+                variadic_param,
+                doc,
+                defining_ns: Some(self.namespaces.current_name().to_string()),
+            };
+
+            // Define in the current namespace for qualified access
+            let func_val = Value::Function(Arc::new(func));
+            self.namespaces.define(name.name(), func_val);
+
+            // EAGER JIT: Compile immediately if eligible!
+            // This makes the first call fast (no compilation overhead)
+            if !is_variadic {
+                let _ = self.try_jit_compile(name.name(), &params, &body);
+            }
         }
 
         Ok(Value::Symbol(name))
@@ -766,27 +1306,108 @@ impl Evaluator {
         };
 
         // Check for docstring
-        let (doc, params_idx) = match &args[1] {
+        let (doc, body_start_idx) = match &args[1] {
             Value::String(s) if args.len() > 2 => (Some(s.as_ref().clone()), 2),
             _ => (None, 1),
         };
 
-        // Get parameters
-        let params_vec = match &args[params_idx] {
-            Value::Vector(v) => v,
-            _ => return Err(JankError::type_error("vector", args[params_idx].type_name())),
-        };
+        // Check if this is multi-arity or single-arity
+        // Multi-arity: (defmacro name ([params1] body1) ([params2] body2) ...)
+        // Single-arity: (defmacro name [params] body ...)
+        let is_multi_arity = matches!(&args[body_start_idx], Value::List(_));
 
-        // Parse parameters
+        if is_multi_arity {
+            // Parse each arity clause
+            let mut arities: Vec<(Vec<Symbol>, Option<Symbol>, Arc<Value>)> = Vec::new();
+
+            for arity_form in args.iter().skip(body_start_idx) {
+                let arity_list = match arity_form {
+                    Value::List(l) => l,
+                    _ => return Err(JankError::parse("multi-arity clause must be a list", 0, 0)),
+                };
+
+                let arity_items: Vec<Value> = arity_list.iter().cloned().collect();
+                if arity_items.is_empty() {
+                    return Err(JankError::parse("arity clause cannot be empty", 0, 0));
+                }
+
+                // First element is params vector
+                let params_vec = match &arity_items[0] {
+                    Value::Vector(v) => v,
+                    _ => return Err(JankError::type_error("vector", arity_items[0].type_name())),
+                };
+
+                // Parse parameters
+                let (params, variadic_param) = self.parse_params(params_vec)?;
+
+                // Rest is body
+                let body = if arity_items.len() == 2 {
+                    arity_items[1].clone()
+                } else {
+                    let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
+                    do_list.extend(arity_items.iter().skip(1).cloned());
+                    Value::list(do_list)
+                };
+
+                arities.push((params, variadic_param, Arc::new(body)));
+            }
+
+            let mac = Function::MacroMulti {
+                name: name.clone(),
+                arities,
+                env,
+                doc,
+                defining_ns: Some(self.namespaces.current_name().to_string()),
+            };
+
+            let macro_val = Value::Function(Arc::new(mac));
+            self.namespaces.define(name.name(), macro_val);
+        } else {
+            // Single-arity: (defmacro name [params] body ...)
+            let params_vec = match &args[body_start_idx] {
+                Value::Vector(v) => v,
+                _ => return Err(JankError::type_error("vector", args[body_start_idx].type_name())),
+            };
+
+            let (params, variadic_param) = self.parse_params(params_vec)?;
+            let is_variadic = variadic_param.is_some();
+
+            // Create body
+            let body = if args.len() - body_start_idx - 1 == 1 {
+                args[body_start_idx + 1].clone()
+            } else {
+                let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
+                do_list.extend(args.iter().skip(body_start_idx + 1).cloned());
+                Value::list(do_list)
+            };
+
+            let mac = Function::Macro {
+                name: name.clone(),
+                params,
+                body: Arc::new(body),
+                env,
+                is_variadic,
+                variadic_param,
+                doc,
+                defining_ns: Some(self.namespaces.current_name().to_string()),
+            };
+
+            let macro_val = Value::Function(Arc::new(mac));
+            self.namespaces.define(name.name(), macro_val);
+        }
+
+        Ok(Value::Symbol(name))
+    }
+
+    /// Parse a parameter vector into (params, variadic_param)
+    fn parse_params(&self, params_vec: &imbl::Vector<Value>) -> JankResult<(Vec<Symbol>, Option<Symbol>)> {
         let mut params = Vec::new();
-        let mut is_variadic = false;
         let mut variadic_param = None;
 
         let mut iter = params_vec.iter().peekable();
         while let Some(param) = iter.next() {
             match param {
                 Value::Symbol(s) if s.name() == "&" => {
-                    is_variadic = true;
                     if let Some(Value::Symbol(rest)) = iter.next() {
                         variadic_param = Some(rest.clone());
                     } else {
@@ -799,31 +1420,7 @@ impl Evaluator {
             }
         }
 
-        // Create body
-        let body = if args.len() - params_idx - 1 == 1 {
-            args[params_idx + 1].clone()
-        } else {
-            let mut do_list = vec![Value::Symbol(Symbol::new("do"))];
-            do_list.extend(args.iter().skip(params_idx + 1).cloned());
-            Value::list(do_list)
-        };
-
-        let mac = Function::Macro {
-            name: name.clone(),
-            params,
-            body: Arc::new(body),
-            env,
-            is_variadic,
-            variadic_param,
-            doc,
-            defining_ns: Some(self.namespaces.current_name().to_string()),
-        };
-
-        // Define in global environment
-        let macro_val = Value::Function(Arc::new(mac));
-        self.global_env.define(name.name(), macro_val);
-
-        Ok(Value::Symbol(name))
+        Ok((params, variadic_param))
     }
 
     fn eval_recur(&mut self, list: &List, env: Arc<Environment>) -> JankResult<Value> {
@@ -1740,5 +2337,234 @@ mod tests {
         // Can use the alias
         let result = evaluator.eval(&read_string("(math/square 10)").unwrap()).unwrap();
         assert_eq!(result, Value::Integer(100));
+    }
+
+    // ==================== MACRO TESTS ====================
+
+    #[test]
+    fn test_syntax_quote_basic() {
+        let mut evaluator = Evaluator::new();
+
+        // Simple syntax-quote returns the form
+        let result = evaluator.eval(&read_string("`(a b c)").unwrap()).unwrap();
+        assert_eq!(result.to_string(), "(a b c)");
+
+        // With unquote
+        let result = evaluator.eval(&read_string("(let [x 42] `(a ~x c))").unwrap()).unwrap();
+        assert_eq!(result.to_string(), "(a 42 c)");
+    }
+
+    #[test]
+    fn test_syntax_quote_unquote_splice() {
+        let mut evaluator = Evaluator::new();
+
+        // Unquote-splicing
+        let result = evaluator.eval(&read_string("(let [xs [1 2 3]] `(a ~@xs b))").unwrap()).unwrap();
+        assert_eq!(result.to_string(), "(a 1 2 3 b)");
+    }
+
+    #[test]
+    fn test_defmacro_basic() {
+        let mut evaluator = Evaluator::new();
+
+        // Define a simple macro
+        evaluator.eval(&read_string("(defmacro when [test body] `(if ~test ~body nil))").unwrap()).unwrap();
+
+        // Use the macro - should expand and evaluate
+        let result = evaluator.eval(&read_string("(when true 42)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(42));
+
+        let result = evaluator.eval(&read_string("(when false 42)").unwrap()).unwrap();
+        assert_eq!(result, Value::Nil);
+    }
+
+    #[test]
+    fn test_defmacro_with_body() {
+        let mut evaluator = Evaluator::new();
+
+        // Define 'when' macro with multiple body forms
+        evaluator.eval(&read_string(
+            "(defmacro my-when [test & body] `(if ~test (do ~@body) nil))"
+        ).unwrap()).unwrap();
+
+        // Use it
+        evaluator.eval(&read_string("(def result 0)").unwrap()).unwrap();
+        evaluator.eval(&read_string("(my-when true (def result 1) (def result 2))").unwrap()).unwrap();
+        let result = evaluator.eval(&read_string("result").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(2));
+    }
+
+    #[test]
+    fn test_defmacro_when_not() {
+        let mut evaluator = Evaluator::new();
+
+        // Define when-not macro
+        evaluator.eval(&read_string(
+            "(defmacro when-not [test & body] `(if ~test nil (do ~@body)))"
+        ).unwrap()).unwrap();
+
+        let result = evaluator.eval(&read_string("(when-not false 42)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(42));
+
+        let result = evaluator.eval(&read_string("(when-not true 42)").unwrap()).unwrap();
+        assert_eq!(result, Value::Nil);
+    }
+
+    // ==================== CORE.JRS TESTS ====================
+
+    #[test]
+    fn test_core_jrs_load() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+
+        // Load clojure.core
+        evaluator.eval(&read_string("(require clojure.core)").unwrap()).unwrap();
+
+        // Test that it loaded
+        assert!(evaluator.namespaces().get("clojure.core").is_some());
+    }
+
+    #[test]
+    fn test_core_jrs_when_macro() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+        evaluator.eval(&read_string("(require [clojure.core :refer [when when-not]])").unwrap()).unwrap();
+
+        let result = evaluator.eval(&read_string("(when true 42)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(42));
+
+        let result = evaluator.eval(&read_string("(when false 42)").unwrap()).unwrap();
+        assert_eq!(result, Value::Nil);
+
+        let result = evaluator.eval(&read_string("(when-not false 42)").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(42));
+    }
+
+    #[test]
+    fn test_core_jrs_sequence_functions() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+        evaluator.eval(&read_string("(require [clojure.core :refer [second ffirst nnext]])").unwrap()).unwrap();
+
+        let result = evaluator.eval(&read_string("(second [1 2 3])").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(2));
+
+        let result = evaluator.eval(&read_string("(ffirst [[1 2] [3 4]])").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(1));
+
+        // nnext returns a list (from next), not a vector
+        let result = evaluator.eval(&read_string("(nnext [1 2 3 4])").unwrap()).unwrap();
+        match result {
+            Value::List(l) => assert_eq!(l.len(), 2),
+            Value::Vector(v) => assert_eq!(v.len(), 2),
+            _ => panic!("Expected list or vector, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_core_jrs_map_function() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+        evaluator.eval(&read_string("(require [clojure.core :refer [map]])").unwrap()).unwrap();
+
+        // Define a simple function to use
+        evaluator.eval(&read_string("(defn double [x] (* x 2))").unwrap()).unwrap();
+
+        let result = evaluator.eval(&read_string("(map double [1 2 3])").unwrap()).unwrap();
+        if let Value::Vector(v) = result {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v[0], Value::Integer(2));
+            assert_eq!(v[1], Value::Integer(4));
+            assert_eq!(v[2], Value::Integer(6));
+        } else {
+            panic!("Expected vector, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_core_jrs_filter_function() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+        evaluator.eval(&read_string("(require [clojure.core :refer [filter]])").unwrap()).unwrap();
+
+        let result = evaluator.eval(&read_string("(filter even? [1 2 3 4 5 6])").unwrap()).unwrap();
+        if let Value::Vector(v) = result {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v[0], Value::Integer(2));
+            assert_eq!(v[1], Value::Integer(4));
+            assert_eq!(v[2], Value::Integer(6));
+        } else {
+            panic!("Expected vector, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_core_jrs_reduce_function() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+        evaluator.eval(&read_string("(require [clojure.core :refer [reduce]])").unwrap()).unwrap();
+
+        let result = evaluator.eval(&read_string("(reduce + 0 [1 2 3 4 5])").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(15));
+
+        let result = evaluator.eval(&read_string("(reduce * 1 [1 2 3 4 5])").unwrap()).unwrap();
+        assert_eq!(result, Value::Integer(120));
+    }
+
+    #[test]
+    fn test_core_jrs_every_and_some() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+        evaluator.eval(&read_string("(require [clojure.core :refer [every? some]])").unwrap()).unwrap();
+
+        let result = evaluator.eval(&read_string("(every? even? [2 4 6 8])").unwrap()).unwrap();
+        assert_eq!(result, Value::Bool(true));
+
+        let result = evaluator.eval(&read_string("(every? even? [2 3 6 8])").unwrap()).unwrap();
+        assert_eq!(result, Value::Bool(false));
+
+        let result = evaluator.eval(&read_string("(some even? [1 3 5 6])").unwrap()).unwrap();
+        assert_eq!(result, Value::Bool(true));
+
+        let result = evaluator.eval(&read_string("(some even? [1 3 5 7])").unwrap()).unwrap();
+        assert_eq!(result, Value::Nil);
+    }
+
+    #[test]
+    fn test_core_jrs_take_drop() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("test_resources");
+        evaluator.eval(&read_string("(require [clojure.core :refer [take drop]])").unwrap()).unwrap();
+
+        // take builds a new vector
+        let result = evaluator.eval(&read_string("(take 3 [1 2 3 4 5])").unwrap()).unwrap();
+        match &result {
+            Value::Vector(v) => {
+                assert_eq!(v.len(), 3);
+                assert_eq!(v[0], Value::Integer(1));
+                assert_eq!(v[2], Value::Integer(3));
+            }
+            Value::List(l) => {
+                assert_eq!(l.len(), 3);
+            }
+            _ => panic!("Expected vector or list, got {:?}", result),
+        }
+
+        // drop returns remaining sequence (list from rest)
+        let result = evaluator.eval(&read_string("(drop 2 [1 2 3 4 5])").unwrap()).unwrap();
+        match &result {
+            Value::Vector(v) => {
+                assert_eq!(v.len(), 3);
+                assert_eq!(v[0], Value::Integer(3));
+            }
+            Value::List(l) => {
+                assert_eq!(l.len(), 3);
+                // First element should be 3
+                if let Some(first) = l.head() {
+                    assert_eq!(first.clone(), Value::Integer(3));
+                }
+            }
+            _ => panic!("Expected vector or list, got {:?}", result),
+        }
     }
 }

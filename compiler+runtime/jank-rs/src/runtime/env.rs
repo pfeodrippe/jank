@@ -80,6 +80,24 @@ impl Environment {
         self.lookup(symbol.name())
     }
 
+    /// Look up a binding in local scope chain, excluding the root (global_env)
+    /// This is used to find let bindings and fn params without finding global natives
+    pub fn lookup_local(&self, symbol: &Symbol) -> Option<Value> {
+        // Check current bindings
+        if let Some(value) = self.bindings.read().get(symbol.name()) {
+            return Some(value.clone());
+        }
+
+        // Check parent if it has a parent (meaning it's not the root/global_env)
+        if let Some(parent) = &self.parent {
+            if parent.parent.is_some() {
+                return parent.lookup_local(symbol);
+            }
+        }
+
+        None
+    }
+
     /// Get a binding by Symbol or return an error
     pub fn get_symbol(&self, symbol: &Symbol) -> JankResult<Value> {
         self.get(symbol.name())

@@ -101,17 +101,15 @@ impl NamespaceRegistry {
         let mut registry = NamespaceRegistry {
             namespaces: HashMap::new(),
             current: "user".to_string(),
-            source_paths: vec![PathBuf::from(".")],
+            source_paths: vec![PathBuf::from("."), PathBuf::from("src")],
             loading: Vec::new(),
         };
 
         // Create the default "user" namespace
         registry.namespaces.insert("user".to_string(), Namespace::new("user"));
 
-        // Create the "clojure.core" namespace (placeholder for core functions)
-        let mut core = Namespace::new("clojure.core");
-        // Core functions are defined elsewhere, but we register the namespace
-        registry.namespaces.insert("clojure.core".to_string(), core);
+        // Note: clojure.core is NOT pre-created here - it will be loaded from
+        // clojure/core.jrs by Evaluator::load_clojure_core()
 
         registry
     }
