@@ -5,12 +5,110 @@
 ;; by the Rust runtime.
 ;;
 ;; BOOTSTRAP SEQUENCE:
-;; 1. Define defmacro using def + macro (primitive)
-;; 2. Define defn using defmacro
-;; 3. Define fundamental functions using defn
-;; 4. Define remaining macros using defmacro
+;; 1. Define type predicates using fn* (wrapping native/ functions)
+;; 2. Define defmacro using def + macro (primitive)
+;; 3. Define defn using defmacro
+;; 4. Define fundamental functions using defn
+;; 5. Define remaining macros using defmacro
 
 (ns clojure.core)
+
+;; ============================================================================
+;; BOOTSTRAP PHASE 0: Type Predicates (using fn* to wrap native functions)
+;; ============================================================================
+;; These must be defined before defmacro since it uses string? and list?
+
+(def ^{:doc "Returns true if x is nil, false otherwise."}
+  nil?
+  (fn* nil? [x] (native/nil? x)))
+
+(def ^{:doc "Returns true if x is the value true, false otherwise."}
+  true?
+  (fn* true? [x] (native/true? x)))
+
+(def ^{:doc "Returns true if x is the value false, false otherwise."}
+  false?
+  (fn* false? [x] (native/false? x)))
+
+(def ^{:doc "Returns true if x is a Boolean."}
+  boolean?
+  (fn* boolean? [x] (native/boolean? x)))
+
+(def ^{:doc "Returns true if x is a Number."}
+  number?
+  (fn* number? [x] (native/number? x)))
+
+(def ^{:doc "Returns true if x is an integer."}
+  integer?
+  (fn* integer? [x] (native/integer? x)))
+
+(def ^{:doc "Returns true if x is a floating point number."}
+  float?
+  (fn* float? [x] (native/float? x)))
+
+(def ^{:doc "Returns true if x is a String."}
+  string?
+  (fn* string? [x] (native/string? x)))
+
+(def ^{:doc "Returns true if x is a Symbol."}
+  symbol?
+  (fn* symbol? [x] (native/symbol? x)))
+
+(def ^{:doc "Returns true if x is a Keyword."}
+  keyword?
+  (fn* keyword? [x] (native/keyword? x)))
+
+(def ^{:doc "Returns true if x is a list."}
+  list?
+  (fn* list? [x] (native/list? x)))
+
+(def ^{:doc "Returns true if x is a vector."}
+  vector?
+  (fn* vector? [x] (native/vector? x)))
+
+(def ^{:doc "Returns true if x is a map."}
+  map?
+  (fn* map? [x] (native/map? x)))
+
+(def ^{:doc "Returns true if x is a set."}
+  set?
+  (fn* set? [x] (native/set? x)))
+
+(def ^{:doc "Returns true if x is a function."}
+  fn?
+  (fn* fn? [x] (native/fn? x)))
+
+(def ^{:doc "Returns true if x is a collection (list, vector, map, or set)."}
+  coll?
+  (fn* coll? [x] (native/coll? x)))
+
+(def ^{:doc "Returns true if x is a seq."}
+  seq?
+  (fn* seq? [x] (native/seq? x)))
+
+(def ^{:doc "Returns true if coll has no items."}
+  empty?
+  (fn* empty? [x] (native/empty? x)))
+
+(def ^{:doc "Returns true if n is even."}
+  even?
+  (fn* even? [x] (native/even? x)))
+
+(def ^{:doc "Returns true if n is odd."}
+  odd?
+  (fn* odd? [x] (native/odd? x)))
+
+(def ^{:doc "Returns true if n is zero."}
+  zero?
+  (fn* zero? [x] (native/zero? x)))
+
+(def ^{:doc "Returns true if n is greater than zero."}
+  pos?
+  (fn* pos? [x] (native/pos? x)))
+
+(def ^{:doc "Returns true if n is less than zero."}
+  neg?
+  (fn* neg? [x] (native/neg? x)))
 
 ;; ============================================================================
 ;; BOOTSTRAP PHASE 1: Define defmacro using primitive def + macro
@@ -80,11 +178,6 @@
   "Returns a function that takes any number of arguments and returns x."
   [x]
   (fn [& args] x))
-
-(defn nil?
-  "Returns true if x is nil, false otherwise."
-  [x]
-  (if (= x nil) true false))
 
 ;; ============================================================================
 ;; Logical Macros (multi-arity)
@@ -279,11 +372,6 @@
   "If coll is empty, returns nil, else coll."
   [coll]
   (if (empty? coll) nil coll))
-
-(defn seq?
-  "Returns true if x is a seq (list or nil)."
-  [x]
-  (or (list? x) (nil? x)))
 
 ;; ============================================================================
 ;; Higher-Order Functions using loop/recur
@@ -742,16 +830,6 @@
   "Coerce to boolean. Everything except false and nil is true."
   [x]
   (if x true false))
-
-(defn true?
-  "Returns true if x is the value true, false otherwise."
-  [x]
-  (= x true))
-
-(defn false?
-  "Returns true if x is the value false, false otherwise."
-  [x]
-  (= x false))
 
 ;; ============================================================================
 ;; String Functions

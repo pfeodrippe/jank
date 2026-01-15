@@ -32,30 +32,30 @@ pub fn load_core(env: &Environment) {
     env.define("and", native_fn("and", core_and, Arity::Variadic(0)));
     env.define("or", native_fn("or", core_or, Arity::Variadic(0)));
 
-    // Predicates
-    env.define("nil?", native_fn("nil?", core_nil_p, Arity::Fixed(1)));
-    env.define("true?", native_fn("true?", core_true_p, Arity::Fixed(1)));
-    env.define("false?", native_fn("false?", core_false_p, Arity::Fixed(1)));
-    env.define("boolean?", native_fn("boolean?", core_boolean_p, Arity::Fixed(1)));
-    env.define("number?", native_fn("number?", core_number_p, Arity::Fixed(1)));
-    env.define("integer?", native_fn("integer?", core_integer_p, Arity::Fixed(1)));
-    env.define("float?", native_fn("float?", core_float_p, Arity::Fixed(1)));
-    env.define("string?", native_fn("string?", core_string_p, Arity::Fixed(1)));
-    env.define("symbol?", native_fn("symbol?", core_symbol_p, Arity::Fixed(1)));
-    env.define("keyword?", native_fn("keyword?", core_keyword_p, Arity::Fixed(1)));
-    env.define("list?", native_fn("list?", core_list_p, Arity::Fixed(1)));
-    env.define("vector?", native_fn("vector?", core_vector_p, Arity::Fixed(1)));
-    env.define("map?", native_fn("map?", core_map_p, Arity::Fixed(1)));
-    env.define("set?", native_fn("set?", core_set_p, Arity::Fixed(1)));
-    env.define("fn?", native_fn("fn?", core_fn_p, Arity::Fixed(1)));
-    env.define("coll?", native_fn("coll?", core_coll_p, Arity::Fixed(1)));
-    env.define("seq?", native_fn("seq?", core_seq_p, Arity::Fixed(1)));
-    env.define("empty?", native_fn("empty?", core_empty_p, Arity::Fixed(1)));
-    env.define("even?", native_fn("even?", core_even_p, Arity::Fixed(1)));
-    env.define("odd?", native_fn("odd?", core_odd_p, Arity::Fixed(1)));
-    env.define("zero?", native_fn("zero?", core_zero_p, Arity::Fixed(1)));
-    env.define("pos?", native_fn("pos?", core_pos_p, Arity::Fixed(1)));
-    env.define("neg?", native_fn("neg?", core_neg_p, Arity::Fixed(1)));
+    // Predicates (native/ prefix - public versions defined in core.jrs)
+    env.define("native/nil?", native_fn("native/nil?", core_nil_p, Arity::Fixed(1)));
+    env.define("native/true?", native_fn("native/true?", core_true_p, Arity::Fixed(1)));
+    env.define("native/false?", native_fn("native/false?", core_false_p, Arity::Fixed(1)));
+    env.define("native/boolean?", native_fn("native/boolean?", core_boolean_p, Arity::Fixed(1)));
+    env.define("native/number?", native_fn("native/number?", core_number_p, Arity::Fixed(1)));
+    env.define("native/integer?", native_fn("native/integer?", core_integer_p, Arity::Fixed(1)));
+    env.define("native/float?", native_fn("native/float?", core_float_p, Arity::Fixed(1)));
+    env.define("native/string?", native_fn("native/string?", core_string_p, Arity::Fixed(1)));
+    env.define("native/symbol?", native_fn("native/symbol?", core_symbol_p, Arity::Fixed(1)));
+    env.define("native/keyword?", native_fn("native/keyword?", core_keyword_p, Arity::Fixed(1)));
+    env.define("native/list?", native_fn("native/list?", core_list_p, Arity::Fixed(1)));
+    env.define("native/vector?", native_fn("native/vector?", core_vector_p, Arity::Fixed(1)));
+    env.define("native/map?", native_fn("native/map?", core_map_p, Arity::Fixed(1)));
+    env.define("native/set?", native_fn("native/set?", core_set_p, Arity::Fixed(1)));
+    env.define("native/fn?", native_fn("native/fn?", core_fn_p, Arity::Fixed(1)));
+    env.define("native/coll?", native_fn("native/coll?", core_coll_p, Arity::Fixed(1)));
+    env.define("native/seq?", native_fn("native/seq?", core_seq_p, Arity::Fixed(1)));
+    env.define("native/empty?", native_fn("native/empty?", core_empty_p, Arity::Fixed(1)));
+    env.define("native/even?", native_fn("native/even?", core_even_p, Arity::Fixed(1)));
+    env.define("native/odd?", native_fn("native/odd?", core_odd_p, Arity::Fixed(1)));
+    env.define("native/zero?", native_fn("native/zero?", core_zero_p, Arity::Fixed(1)));
+    env.define("native/pos?", native_fn("native/pos?", core_pos_p, Arity::Fixed(1)));
+    env.define("native/neg?", native_fn("native/neg?", core_neg_p, Arity::Fixed(1)));
 
     // Sequences
     env.define("first", native_fn("first", core_first, Arity::Fixed(1)));
@@ -120,6 +120,10 @@ pub fn load_core(env: &Environment) {
     env.define("type", native_fn("type", core_type, Arity::Fixed(1)));
     env.define("assert", native_fn("assert", core_assert, Arity::Multi(vec![1, 2])));
     env.define("range", native_fn("range", core_range, Arity::Multi(vec![0, 1, 2, 3])));
+
+    // Metadata (basic support - metadata is currently not stored on values)
+    env.define("with-meta", native_fn("with-meta", core_with_meta, Arity::Fixed(2)));
+    env.define("meta", native_fn("meta", core_meta, Arity::Fixed(1)));
 }
 
 /// Helper to create a native function value
@@ -1328,4 +1332,25 @@ fn core_range(args: &[Value]) -> JankResult<Value> {
     }
 
     Ok(Value::list(result))
+}
+
+// ============================================================================
+// Metadata
+// ============================================================================
+
+/// with-meta: Returns object with metadata attached
+/// For now, since Value doesn't store metadata, this just returns the object unchanged
+/// TODO: Add proper metadata support to Value types
+fn core_with_meta(args: &[Value]) -> JankResult<Value> {
+    // args[0] is the object, args[1] is the metadata map
+    // For now, just return the object - metadata is not stored
+    Ok(args[0].clone())
+}
+
+/// meta: Returns the metadata of an object
+/// For now, since Value doesn't store metadata, this always returns nil
+/// TODO: Add proper metadata support to Value types
+fn core_meta(args: &[Value]) -> JankResult<Value> {
+    // For now, always return nil since we don't store metadata
+    Ok(Value::Nil)
 }

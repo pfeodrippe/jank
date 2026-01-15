@@ -74,8 +74,10 @@ impl Evaluator {
     /// Load clojure.core and refer all its symbols into the current namespace
     fn load_clojure_core(&mut self) {
         // Try to load clojure/core.jrs
-        if let Err(_) = self.load_namespace("clojure.core") {
+        if let Err(e) = self.load_namespace("clojure.core") {
             // If file doesn't exist, that's OK - we'll just use native functions
+            // But print other errors for debugging
+            eprintln!("Warning: Failed to load clojure.core: {:?}", e);
             return;
         }
 
@@ -267,6 +269,10 @@ impl Evaluator {
                     if let Some(value) = self.namespaces.resolve(sym) {
                         return Ok(value);
                     }
+                    // Also check global_env for native/ prefixed functions
+                    if let Some(value) = self.global_env.lookup_symbol(sym) {
+                        return Ok(value);
+                    }
                     return Err(JankError::undefined_symbol(&format!("{}/{}",
                         sym.namespace().unwrap(), sym.name())));
                 }
@@ -339,8 +345,8 @@ impl Evaluator {
                         "unquote-splicing" => return Err(JankError::eval("unquote-splicing outside of syntax-quote")),
                         "if" => return self.eval_if(list, Arc::clone(&env)),
                         "do" => return self.eval_do(list, Arc::clone(&env)),
-                        "let" => return self.eval_let(list, Arc::clone(&env)),
-                        "fn" => return self.eval_fn(list, Arc::clone(&env)),
+                        "let" | "let*" => return self.eval_let(list, Arc::clone(&env)),
+                        "fn" | "fn*" => return self.eval_fn(list, Arc::clone(&env)),
                         "macro" => return self.eval_macro(list, Arc::clone(&env)),
                         "def" => return self.eval_def(list, Arc::clone(&env)),
                         // defn and defmacro are now macros defined in clojure.core using def+fn and def+macro
@@ -1143,8 +1149,32 @@ impl Evaluator {
             return Err(JankError::arity("def", "1 or 2", args.len()));
         }
 
-        let name = match &args[0] {
-            Value::Symbol(s) => s.name().to_string(),
+        // Handle metadata: (def (with-meta sym meta) value) -> extract sym
+        // The ^{:doc "..."} reader macro expands to (with-meta sym {:doc "..."})
+        let (name, _metadata) = match &args[0] {
+            Value::Symbol(s) => (s.name().to_string(), None),
+            Value::List(l) => {
+                // Check if it's (with-meta sym meta)
+                let items: Vec<Value> = l.iter().cloned().collect();
+                if items.len() == 3 {
+                    if let Value::Symbol(s) = &items[0] {
+                        if s.name() == "with-meta" {
+                            if let Value::Symbol(name_sym) = &items[1] {
+                                // Extract the symbol name and metadata
+                                (name_sym.name().to_string(), Some(items[2].clone()))
+                            } else {
+                                return Err(JankError::type_error("symbol", items[1].type_name()));
+                            }
+                        } else {
+                            return Err(JankError::type_error("symbol", args[0].type_name()));
+                        }
+                    } else {
+                        return Err(JankError::type_error("symbol", args[0].type_name()));
+                    }
+                } else {
+                    return Err(JankError::type_error("symbol", args[0].type_name()));
+                }
+            }
             _ => return Err(JankError::type_error("symbol", args[0].type_name())),
         };
 
@@ -1806,6 +1836,12 @@ fn is_jit_eligible(expr: &Value) -> bool {
 
             // Check if it's a supported operation
             if let Value::Symbol(sym) = &head {
+                // Only bare symbols are supported (no namespace)
+                // This prevents native/zero? from matching "zero?"
+                if sym.has_namespace() {
+                    return false;
+                }
+
                 let supported = matches!(
                     sym.name(),
                     "+" | "-" | "*" | "/" | "inc" | "dec" |

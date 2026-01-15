@@ -76,8 +76,14 @@ impl Environment {
     }
 
     /// Look up a binding by Symbol
+    /// Uses full_name() to handle namespaced symbols like native/nil?
     pub fn lookup_symbol(&self, symbol: &Symbol) -> Option<Value> {
-        self.lookup(symbol.name())
+        // For namespaced symbols, use the full name
+        if symbol.has_namespace() {
+            self.lookup(&symbol.full_name())
+        } else {
+            self.lookup(symbol.name())
+        }
     }
 
     /// Look up a binding in local scope chain, excluding the root (global_env)
@@ -99,8 +105,13 @@ impl Environment {
     }
 
     /// Get a binding by Symbol or return an error
+    /// Uses full_name() to handle namespaced symbols like native/nil?
     pub fn get_symbol(&self, symbol: &Symbol) -> JankResult<Value> {
-        self.get(symbol.name())
+        if symbol.has_namespace() {
+            self.get(&symbol.full_name())
+        } else {
+            self.get(symbol.name())
+        }
     }
 
     /// Set a binding (must already exist in some scope)
