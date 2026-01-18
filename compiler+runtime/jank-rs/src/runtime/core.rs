@@ -124,6 +124,11 @@ pub fn load_core(env: &Environment) {
     // Metadata (basic support - metadata is currently not stored on values)
     env.define("with-meta", native_fn("with-meta", core_with_meta, Arity::Fixed(2)));
     env.define("meta", native_fn("meta", core_meta, Arity::Fixed(1)));
+
+    // Compiler introspection (jank.compiler namespace)
+    env.define("native/rust-source", native_fn("native/rust-source", core_rust_source, Arity::Fixed(1)));
+    env.define("native/rust-source-formatted", native_fn("native/rust-source-formatted", core_rust_source_formatted, Arity::Fixed(1)));
+    env.define("native/jit-eligible?", native_fn("native/jit-eligible?", core_jit_eligible_p, Arity::Fixed(1)));
 }
 
 /// Helper to create a native function value
@@ -1353,4 +1358,85 @@ fn core_with_meta(args: &[Value]) -> JankResult<Value> {
 fn core_meta(args: &[Value]) -> JankResult<Value> {
     // For now, always return nil since we don't store metadata
     Ok(Value::Nil)
+}
+
+// ============================================================================
+// Compiler Introspection (jank.compiler namespace)
+// ============================================================================
+
+/// rust-source: Generate Rust-like pseudocode from a form
+/// Useful for debugging and understanding how jank-rs evaluates code
+fn core_rust_source(args: &[Value]) -> JankResult<Value> {
+    use crate::runtime::rust_codegen::generate_rust_source;
+    let source = generate_rust_source(&args[0]);
+    Ok(Value::String(Arc::new(source)))
+}
+
+/// rust-source-formatted: Generate formatted Rust-like pseudocode from a form
+/// Same as rust-source but with nice indentation
+fn core_rust_source_formatted(args: &[Value]) -> JankResult<Value> {
+    use crate::runtime::rust_codegen::generate_rust_source_formatted;
+    let source = generate_rust_source_formatted(&args[0]);
+    Ok(Value::String(Arc::new(source)))
+}
+
+/// jit-eligible?: Check if a form is eligible for JIT compilation
+/// Returns true if the form uses only supported operations
+fn core_jit_eligible_p(args: &[Value]) -> JankResult<Value> {
+    // Use the same eligibility check as the evaluator
+    Ok(Value::Bool(is_jit_eligible(&args[0])))
+}
+
+/// Check if a function body is eligible for JIT compilation
+/// A body is eligible if it only uses supported operations
+fn is_jit_eligible(expr: &Value) -> bool {
+    match expr {
+        Value::Integer(_) => true,
+        Value::Bool(_) => true,
+        Value::Symbol(sym) => {
+            // Namespaced symbols (like native/zero?) are not JIT-eligible
+            !sym.has_namespace()
+        }
+        Value::List(list) => {
+            if list.is_empty() {
+                return false;
+            }
+
+            let head = list.head().unwrap();
+
+            // Check if it's a supported operation
+            if let Value::Symbol(sym) = &head {
+                // Only bare symbols are supported (no namespace)
+                if sym.has_namespace() {
+                    return false;
+                }
+
+                let supported = matches!(
+                    sym.name(),
+                    "+" | "-" | "*" | "/" | "inc" | "dec" |
+                    "<" | ">" | "<=" | ">=" | "=" |
+                    "if" | "do" | "loop" | "recur" |
+                    "not" | "and" | "or" |
+                    "zero?" | "pos?" | "neg?"
+                );
+
+                if !supported {
+                    return false;
+                }
+
+                // Check that all arguments are also eligible
+                list.iter().skip(1).all(|arg| is_jit_eligible(&arg))
+            } else {
+                false
+            }
+        }
+        Value::Vector(v) => {
+            // Vectors in loop bindings should be checked for eligible init expressions
+            v.iter().all(|elem| {
+                matches!(elem, Value::Symbol(_) | Value::Integer(_) | Value::Bool(_))
+                    || is_jit_eligible(elem)
+            })
+        }
+        _ => false,
+    }
 }

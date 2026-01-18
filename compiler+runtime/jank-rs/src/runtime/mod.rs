@@ -10,6 +10,8 @@ pub mod compiler;
 pub mod tagged;
 pub mod native;
 pub mod namespace;
+pub mod rust_codegen;
+pub mod jit_native;
 
 pub use env::Environment;
 pub use eval::Evaluator;

@@ -82,3 +82,16 @@ To run specific test cases:
 
 nREPL tests are in `/Users/pfeodrippe/dev/jank/compiler+runtime/test/cpp/jank/nrepl/engine.cpp`
 - To fix pch header corruption, use `./bin/configure -GNinja -DCMAKE_BUILD_TYPE=Debug -Djank_test=on -Djank_local_clang=on && ./bin/compile`
+
+## CRITICAL 4: jank-rs JIT - USE Cranelift, don't reinvent it!
+
+For jank-rs (`compiler+runtime/jank-rs/`):
+
+**The JIT compiler uses Cranelift. It already exists in `src/runtime/compiler.rs`.**
+
+- **USE the existing Cranelift JIT** - don't create alternative JIT implementations
+- **NO interpreter fallback** - everything must go through JIT compilation
+- The flow is: `Clojure code → Cranelift IR → Native code`
+- To add new operations: add `extern "C"` functions to `native.rs`, register them with the Cranelift compiler, and emit calls to them from `compile_expr`
+- The compiler emits Cranelift IR that calls these native functions - ZERO interpreter overhead
+- Remove `is_jit_eligible` checks - compile EVERYTHING

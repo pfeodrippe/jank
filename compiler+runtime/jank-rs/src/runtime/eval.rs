@@ -2603,4 +2603,58 @@ mod tests {
             _ => panic!("Expected vector or list, got {:?}", result),
         }
     }
+
+    #[test]
+    fn test_jank_compiler_namespace() {
+        let mut evaluator = Evaluator::new();
+        evaluator.add_source_path("src/clojure");
+
+        // Load jank.compiler namespace
+        evaluator.eval(&read_string("(require jank.compiler)").unwrap()).unwrap();
+
+        // Test rust-source - generates Rust-like code from a form
+        let result = evaluator.eval(&read_string("(jank.compiler/rust-source '(+ 1 2))").unwrap()).unwrap();
+        match result {
+            Value::String(s) => {
+                assert!(s.contains("1") && s.contains("2") && s.contains("+"),
+                    "rust-source should generate code with 1, 2, and + for (+ 1 2), got: {}", s);
+            }
+            _ => panic!("Expected string from rust-source, got {:?}", result),
+        }
+
+        // Test rust-source for if expression
+        let result = evaluator.eval(&read_string("(jank.compiler/rust-source '(if x 1 2))").unwrap()).unwrap();
+        match result {
+            Value::String(s) => {
+                assert!(s.contains("if") && s.contains("1") && s.contains("2"),
+                    "rust-source should generate if statement, got: {}", s);
+            }
+            _ => panic!("Expected string from rust-source"),
+        }
+
+        // Test jit-eligible? for simple arithmetic
+        let result = evaluator.eval(&read_string("(jank.compiler/jit-eligible? '(+ 1 2))").unwrap()).unwrap();
+        assert_eq!(result, Value::Bool(true), "Simple arithmetic should be JIT eligible");
+
+        // Test jit-eligible? for function call (not eligible)
+        let result = evaluator.eval(&read_string("(jank.compiler/jit-eligible? '(println \"hello\"))").unwrap()).unwrap();
+        assert_eq!(result, Value::Bool(false), "println should not be JIT eligible");
+
+        // Test jit-eligible? for namespaced symbol (not eligible)
+        let result = evaluator.eval(&read_string("(jank.compiler/jit-eligible? '(native/nil? x))").unwrap()).unwrap();
+        assert_eq!(result, Value::Bool(false), "Namespaced symbols should not be JIT eligible");
+
+        // Test analyze-form helper
+        let result = evaluator.eval(&read_string("(jank.compiler/analyze-form '(fn [x] (* x x)))").unwrap()).unwrap();
+        match result {
+            Value::Map(m) => {
+                // Should have :rust-source, :jit-eligible, :type keys
+                let rust_src_key = Value::Keyword(crate::types::Keyword::new("rust-source"));
+                let jit_key = Value::Keyword(crate::types::Keyword::new("jit-eligible"));
+                assert!(m.contains_key(&rust_src_key), "analyze-form should have :rust-source");
+                assert!(m.contains_key(&jit_key), "analyze-form should have :jit-eligible");
+            }
+            _ => panic!("Expected map from analyze-form, got {:?}", result),
+        }
+    }
 }

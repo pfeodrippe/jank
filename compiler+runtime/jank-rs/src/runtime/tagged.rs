@@ -183,6 +183,12 @@ impl Tagged {
         self.0
     }
 
+    /// Get the raw u64 bits (alias for bits())
+    #[inline]
+    pub fn to_bits(&self) -> u64 {
+        self.0
+    }
+
     /// Create from raw u64 bits
     #[inline]
     pub fn from_bits(bits: u64) -> Self {
@@ -193,6 +199,49 @@ impl Tagged {
     #[inline]
     pub fn is_truthy(&self) -> bool {
         self.0 != NIL && self.0 != FALSE
+    }
+
+    /// Check if this is true
+    #[inline]
+    pub fn is_true(&self) -> bool {
+        self.0 == TRUE
+    }
+
+    /// Check if this is false
+    #[inline]
+    pub fn is_false(&self) -> bool {
+        self.0 == FALSE
+    }
+
+    /// Check if this is a float/double
+    #[inline]
+    pub fn is_float(&self) -> bool {
+        self.is_double()
+    }
+
+    /// Extract as float (returns 0.0 if not a float)
+    #[inline]
+    pub fn as_float(&self) -> f64 {
+        if self.is_double() {
+            f64::from_bits(self.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// Extract as integer (returns 0 if not an integer)
+    /// Use this for JIT code where we know the type
+    #[inline]
+    pub fn as_integer_unchecked(&self) -> i64 {
+        let payload = self.0 & PAYLOAD_MASK;
+        let shifted = (payload as i64) << 16;
+        shifted >> 16
+    }
+
+    /// Extract as pointer (returns null if not a pointer)
+    #[inline]
+    pub fn as_pointer_unchecked(&self) -> *const () {
+        (self.0 & PAYLOAD_MASK) as *const ()
     }
 }
 
