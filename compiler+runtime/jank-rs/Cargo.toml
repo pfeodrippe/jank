@@ -1,0 +1,66 @@
+[package]
+name = "jank-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A Clojure dialect implemented in pure Rust"
+license = "MIT"
+
+[lib]
+name = "jank_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jank-repl"
+path = "src/main.rs"
+
+[dependencies]
+# JIT Compilation (Cranelift)
+cranelift = "0.111"
+cranelift-jit = "0.111"
+cranelift-codegen = "0.111"
+cranelift-frontend = "0.111"
+cranelift-module = "0.111"
+cranelift-native = "0.111"
+target-lexicon = "0.12"
+
+# Garbage Collection
+gc-arena = "0.5"
+
+# Persistent Data Structures
+imbl = "3.0"
+
+# String Interning
+lasso = { version = "0.7", features = ["multi-threaded"] }
+
+# Error Handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utilities
+parking_lot = "0.12"
+hashbrown = "0.14"
+once_cell = "1.19"
+num-traits = "0.2"
+
+# REPL
+rustyline = "14.0"
+dirs = "5.0"
+
+# Serialization (for debugging)
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+# Benchmarks - uncomment when ready
+# [[bench]]
+# name = "benchmarks"
+# harness = false

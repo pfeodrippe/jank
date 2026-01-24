@@ -1,0 +1,8 @@
+(ns myapp.core
+  (:require [myapp.math :as math]))
+
+(defn area [side]
+  (math/square side))
+
+(defn volume [side]
+  (math/cube side))
