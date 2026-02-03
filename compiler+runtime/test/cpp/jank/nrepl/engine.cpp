@@ -133,7 +133,9 @@ namespace jank::nrepl_server::asio
         {      "file", file_contents },
         { "file-path",     file_path }
       })));
-      REQUIRE(responses.size() == 3);
+      /* Note: responses may include "out" messages with captured stderr from C++ compilation,
+       * so we check >= 3 rather than == 3. The required responses are: eval-error, err, done. */
+      REQUIRE(responses.size() >= 3);
       auto eval_error_payload
         = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
             auto const statuses(extract_status(payload));

@@ -118,7 +118,9 @@ namespace jank::nrepl_server::asio
         {   "op",         "eval" },
         { "code", "(printjln 4)" }
       })));
-      REQUIRE(responses.size() == 3);
+      /* Note: responses may include "out" messages with captured stderr from C++ compilation,
+       * so we check >= 3 rather than == 3. The required responses are: eval-error, err, done. */
+      REQUIRE(responses.size() >= 3);
       auto eval_error_payload
         = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
             auto const statuses(extract_status(payload));
@@ -134,8 +136,8 @@ namespace jank::nrepl_server::asio
           });
       REQUIRE(err_payload != responses.end());
       auto const &err_value(err_payload->at("err").as_string());
-      /* Error message format changed - no longer includes "Syntax error compiling at (" prefix */
-      CHECK(err_value.find("Unable to resolve symbol") != std::string::npos);
+      /* Error message changed to "Unable to resolve '...' as either a jank symbol or C++ symbol." */
+      CHECK(err_value.find("Unable to resolve") != std::string::npos);
       CHECK(err_value.find("printjln") != std::string::npos);
       if(auto const line_it = err_payload->find("line"); line_it != err_payload->end())
       {
@@ -156,7 +158,9 @@ namespace jank::nrepl_server::asio
         { "code",   code },
         { "path",   path }
       })));
-      REQUIRE(responses.size() == 3);
+      /* Note: responses may include "out" messages with captured stderr from C++ compilation,
+       * so we check >= 3 rather than == 3. The required responses are: eval-error, err, done. */
+      REQUIRE(responses.size() >= 3);
       auto eval_error_payload
         = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
             auto const statuses(extract_status(payload));
@@ -196,7 +200,9 @@ namespace jank::nrepl_server::asio
         { "code",      code },
         { "file", file_hint }
       })));
-      REQUIRE(responses.size() == 3);
+      /* Note: responses may include "out" messages with captured stderr from C++ compilation,
+       * so we check >= 3 rather than == 3. The required responses are: eval-error, err, done. */
+      REQUIRE(responses.size() >= 3);
       auto eval_error_payload
         = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
             auto const statuses(extract_status(payload));
@@ -237,7 +243,9 @@ namespace jank::nrepl_server::asio
       }));
       msg.data.emplace("line", bencode::value{ static_cast<std::int64_t>(36) });
       auto responses(eng.handle(msg));
-      REQUIRE(responses.size() == 3);
+      /* Note: responses may include "out" messages with captured stderr from C++ compilation,
+       * so we check >= 3 rather than == 3. The required responses are: eval-error, err, done. */
+      REQUIRE(responses.size() >= 3);
 
       auto err_payload
         = std::ranges::find_if(responses.begin(), responses.end(), [](auto const &payload) {
@@ -292,8 +300,8 @@ namespace jank::nrepl_server::asio
       REQUIRE(structured_it != err_payload->end());
       auto const &error_dict(structured_it->second.as_dict());
       CHECK(error_dict.at("kind").as_string() == "analyze/unresolved-symbol");
-      CHECK(error_dict.at("message").as_string().find("Unable to resolve symbol")
-            != std::string::npos);
+      /* Error message changed to "Unable to resolve '...' as either a jank symbol or C++ symbol." */
+      CHECK(error_dict.at("message").as_string().find("Unable to resolve") != std::string::npos);
       if(auto const source_it = error_dict.find("source"); source_it != error_dict.end())
       {
         INFO("error source keys: " << dict_keys(source_it->second.as_dict()));
