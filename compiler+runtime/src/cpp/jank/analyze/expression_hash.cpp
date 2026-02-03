@@ -163,7 +163,7 @@ namespace jank::analyze
       h = hash_combine(h, e->pairs.size());
       for(auto const &[sym, val] : e->pairs)
       {
-        h = hash_combine(h, sym->to_hash());
+        h = hash_combine(h, sym->name->to_hash());
         h = hash_combine(h, hash_impl(val));
       }
       h = hash_combine(h, hash_impl(e->body));
@@ -176,7 +176,7 @@ namespace jank::analyze
       h = hash_combine(h, e->pairs.size());
       for(auto const &[sym, fn] : e->pairs)
       {
-        h = hash_combine(h, sym->to_hash());
+        h = hash_combine(h, sym->name->to_hash());
         h = hash_combine(h, hash_impl(fn));
       }
       h = hash_combine(h, hash_impl(e->body));
@@ -217,9 +217,9 @@ namespace jank::analyze
     {
       u64 h{ static_cast<u64>(e->kind) };
       h = hash_combine(h, hash_impl(e->body));
-      if(e->catch_body.is_some())
+      h = hash_combine(h, e->catch_bodies.size());
+      for(auto const &catch_ : e->catch_bodies)
       {
-        auto const &catch_ = e->catch_body.unwrap();
         h = hash_combine(h, catch_.sym->to_hash());
         h = hash_combine(h, hash_impl(catch_.body));
       }

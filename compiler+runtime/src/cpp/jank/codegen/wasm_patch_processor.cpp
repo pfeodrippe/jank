@@ -4,6 +4,7 @@
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core/munge.hpp>
 #include <jank/analyze/visit.hpp>
+#include <jank/analyze/local_frame.hpp>
 #include <jank/analyze/expr/primitive_literal.hpp>
 #include <jank/analyze/expr/call.hpp>
 #include <jank/analyze/expr/local_reference.hpp>
@@ -429,10 +430,10 @@ struct patch_symbol {
   jtl::immutable_string wasm_patch_processor::gen_let(analyze::expr::let_ref const &expr)
   {
     /* Generate bindings */
-    for(auto const &[name, init_expr] : expr->pairs)
+    for(auto const &[binding, init_expr] : expr->pairs)
     {
       auto const init_tmp{ gen_expr(init_expr) };
-      auto const local_name{ munge_name(name->name) };
+      auto const local_name{ munge_name(binding->name->name) };
       util::format_to(*current_output_, "  void *{} = {};\n", local_name, init_tmp);
     }
 

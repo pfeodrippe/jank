@@ -2129,9 +2129,7 @@ namespace jank::codegen
       else
       {
         /* For void-returning functions, call the function first, then set return temp to nil. */
-        util::format_to(body_buffer,
-                        ";jank::runtime::object_ref const {}{ jank::runtime::jank_nil() };",
-                        ret_tmp);
+        util::format_to(body_buffer, ";");
       }
 
       if(expr->position == expression_position::tail)
@@ -2184,9 +2182,7 @@ namespace jank::codegen
       else
       {
         /* For void-returning functions, call the function first, then set return temp to nil. */
-        util::format_to(body_buffer,
-                        ";jank::runtime::object_ref const {}{ jank::runtime::jank_nil() };",
-                        ret_tmp);
+        util::format_to(body_buffer, ";");
       }
 
       if(expr->position == expression_position::tail)

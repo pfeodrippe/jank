@@ -211,7 +211,7 @@ namespace jank::runtime
     return eval_string(file.expect_ok().view());
   }
 
-  jtl::option<object_ref> context::eval_string(jtl::immutable_string const &code) const
+  jtl::option<object_ref> context::eval_string(jtl::immutable_string const &code)
   {
     return eval_string(code, 1, 1);
   }

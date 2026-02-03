@@ -412,3 +412,22 @@ cd compiler+runtime && ./bin/compile
 **Fix:** Added a check using `Cpp::IsComplete(type_scope)` before calling `Cpp::GetAllCppNames()`. Incomplete types (forward declarations, templates not yet instantiated, etc.) are now skipped, preventing the crash.
 
 **File Modified:** `compiler+runtime/src/cpp/jank/nrepl_server/native_header_completion.cpp`
+
+## 2026-02-02 - C++ codegen: void calls emitted invalid jank_nil temp
+
+### Symptom
+- C++ compile error: `function definition is not allowed here` with generated code like
+  `jank::runtime::object_ref const jank::runtime::jank_nil(){ jank::runtime::jank_nil() };`.
+
+### Discovery
+- In `codegen::processor::gen(cpp_call_ref)`, void-returning calls set `ret_tmp` to
+  `jank::runtime::jank_nil()` and then still emitted a `object_ref const {ret_tmp}{...}`
+  declaration, which becomes a function definition when `ret_tmp` is a call expression.
+
+### Fix
+- For void-returning C++ calls, emit only the call statement and skip the temporary
+  `object_ref` declaration. The `ret_tmp` still resolves to `jank::runtime::jank_nil()`
+  for tail/non-tail return uses, so behavior is preserved while the generated C++ is valid.
+
+### Files changed
+- compiler+runtime/src/cpp/jank/codegen/processor.cpp

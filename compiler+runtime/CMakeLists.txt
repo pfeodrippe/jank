@@ -886,6 +886,7 @@ elseif(jank_target_ios AND NOT jank_ios_jit)
       src/cpp/jank/analyze/expr/cpp_type.cpp
       src/cpp/jank/analyze/expr/cpp_value.cpp
       src/cpp/jank/analyze/expr/cpp_cast.cpp
+      src/cpp/jank/analyze/expr/cpp_unsafe_cast.cpp
       src/cpp/jank/analyze/expr/cpp_call.cpp
       src/cpp/jank/analyze/expr/cpp_constructor_call.cpp
       src/cpp/jank/analyze/expr/cpp_member_call.cpp
@@ -1013,6 +1014,7 @@ else()
     src/cpp/jank/analyze/expr/cpp_type.cpp
     src/cpp/jank/analyze/expr/cpp_value.cpp
     src/cpp/jank/analyze/expr/cpp_cast.cpp
+    src/cpp/jank/analyze/expr/cpp_unsafe_cast.cpp
     src/cpp/jank/analyze/expr/cpp_call.cpp
     src/cpp/jank/analyze/expr/cpp_constructor_call.cpp
     src/cpp/jank/analyze/expr/cpp_member_call.cpp

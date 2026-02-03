@@ -1933,15 +1933,18 @@ namespace jank::nrepl_server::asio
       }
 
       /* Then, collect available modules from the module path */
-      for(auto const &[module_name, entry] : __rt_ctx->module_loader.entries)
       {
-        auto const name(to_std_string(module_name));
-        if(prefix.empty() || starts_with(name, prefix))
+        auto const locked_state{ __rt_ctx->module_loader.state.rlock() };
+        for(auto const &[module_name, entry] : locked_state->entries)
         {
-          /* Check if we already have this namespace */
-          if(std::ranges::find(matches, name) == matches.end())
+          auto const name(to_std_string(module_name));
+          if(prefix.empty() || starts_with(name, prefix))
           {
-            matches.push_back(name);
+            /* Check if we already have this namespace */
+            if(std::ranges::find(matches, name) == matches.end())
+            {
+              matches.push_back(name);
+            }
           }
         }
       }

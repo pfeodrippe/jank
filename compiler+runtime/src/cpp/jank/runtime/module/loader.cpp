@@ -183,7 +183,12 @@ namespace jank::runtime::module
     {
       for(size_t dollar_pos{}; (dollar_pos = module.find('$')) != jtl::immutable_string::npos;)
       {
-        module_parts.emplace_back(munge(module.substr(0, dollar_pos)));
+        /* Skip empty parts (e.g., from consecutive $$ which can happen when
+         * a function name starts with / and gets munged to $). */
+        if(dollar_pos > 0)
+        {
+          module_parts.emplace_back(munge(module.substr(0, dollar_pos)));
+        }
         module.erase(0, dollar_pos + 1);
       }
     }
@@ -196,6 +201,12 @@ namespace jank::runtime::module
     for(auto &part : module_parts)
     {
       part = std::regex_replace(part, dollar, "::");
+
+      /* Skip empty parts after regex replacement as well. */
+      if(part.empty())
+      {
+        continue;
+      }
 
       if(!ret.empty())
       {

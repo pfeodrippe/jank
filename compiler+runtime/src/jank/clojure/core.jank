@@ -2224,11 +2224,11 @@
   (let [i (first bindings)
         n (second bindings)]
     `(let [n# (int ~n)]
-       (loop [~i 0]
+       (loop [~i (int 0)]
          (when (< ~i n#)
            ~@body
            ; TODO: unchecked-inc
-           (recur (inc ~i)))))))
+           (recur (int (inc ~i))))))))
 
 (defmacro doseq
   "Repeatedly executes body (presumably for side-effects) with
