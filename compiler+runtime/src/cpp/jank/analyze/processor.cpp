@@ -477,9 +477,26 @@ namespace jank::analyze
       Cpp::GetPointeeType(Cpp::GetNonReferenceType(args[0].m_Type)));
   }
 
-  /* Returns the native type for a primitive literal expression (integer -> long, real -> double).
-   * Also works for local_references that refer to primitive literal bindings.
-   * Returns nullptr if the expression is not a primitive literal or has no native equivalent. */
+  /* Helper to check if a type is a numeric native type that can be auto-unboxed to. */
+  static bool is_unboxable_numeric_type(jtl::ptr<void> type)
+  {
+    if(!type || cpp_util::is_any_object(type))
+    {
+      return false;
+    }
+
+    /* Check for integral and floating point types. */
+    return cpp_util::is_numeric_type(type);
+  }
+
+  /* Returns the native type for an expression that can be auto-unboxed.
+   * Works for:
+   * - Primitive literals (integer -> long, real -> double)
+   * - Local references to primitive literal bindings
+   * - Local references with native numeric binding types (from cpp/int. etc)
+   * - Local references bound to cpp_call/cpp_constructor_call with numeric return types
+   * - Local references bound to calls to int/long/float/double coercion functions
+   * Returns nullptr if the expression cannot be auto-unboxed. */
   static jtl::ptr<void> get_primitive_native_type(expression_ref const expr)
   {
     runtime::object_type data_type{};
@@ -492,13 +509,72 @@ namespace jank::analyze
     else if(expr->kind == expression_kind::local_reference)
     {
       auto const ref = llvm::cast<expr::local_reference>(expr.data);
+
+      /* First, check if binding already has a native numeric type.
+       * This handles cases like bindings to cpp_call/cpp_constructor_call expressions,
+       * where the binding type was set during analysis. */
+      if(is_unboxable_numeric_type(ref->binding->type))
+      {
+        return ref->binding->type;
+      }
+
+      /* Then check the value expression for patterns we can infer types from. */
       if(ref->binding->value_expr.is_some())
       {
         auto const val_expr = ref->binding->value_expr.unwrap();
+
+        /* Direct primitive literal */
         if(val_expr->kind == expression_kind::primitive_literal)
         {
           auto const lit = llvm::cast<expr::primitive_literal>(val_expr.data);
           data_type = lit->data->type;
+        }
+        /* cpp_call with numeric return type (e.g., cpp function returning int) */
+        else if(val_expr->kind == expression_kind::cpp_call)
+        {
+          auto const call = llvm::cast<expr::cpp_call>(val_expr.data);
+          if(is_unboxable_numeric_type(call->type))
+          {
+            return call->type;
+          }
+          return nullptr;
+        }
+        /* cpp_constructor_call with numeric return type (e.g., cpp/int., cpp/float.) */
+        else if(val_expr->kind == expression_kind::cpp_constructor_call)
+        {
+          auto const ctor = llvm::cast<expr::cpp_constructor_call>(val_expr.data);
+          if(is_unboxable_numeric_type(ctor->type))
+          {
+            return ctor->type;
+          }
+          return nullptr;
+        }
+        /* call to jank function - check for known coercion functions */
+        else if(val_expr->kind == expression_kind::call)
+        {
+          auto const call = llvm::cast<expr::call>(val_expr.data);
+          /* Check if this is a call to int/long/float/double coercion functions */
+          if(call->source_expr->kind == expression_kind::var_deref)
+          {
+            auto const var = llvm::cast<expr::var_deref>(call->source_expr.data);
+            auto const &var_name = var->qualified_name->name;
+            auto const &var_ns = var->qualified_name->ns;
+
+            /* clojure.core/int, clojure.core/long, etc -> long */
+            if((var_ns.empty() || var_ns == "clojure.core")
+               && (var_name == "int" || var_name == "long" || var_name == "short"
+                   || var_name == "byte"))
+            {
+              return Cpp::GetType("long");
+            }
+            /* clojure.core/float, clojure.core/double -> double */
+            if((var_ns.empty() || var_ns == "clojure.core")
+               && (var_name == "float" || var_name == "double"))
+            {
+              return Cpp::GetType("double");
+            }
+          }
+          return nullptr;
         }
         else
         {
@@ -752,11 +828,19 @@ namespace jank::analyze
       auto const is_addressof{ op == Cpp::OP_Amp && arg_types.size() == 1 };
       auto const always_use_builtin{ is_addressof };
 
-      if(always_use_builtin || cpp_util::is_primitive(obj_type))
+      /* Check if args can be auto-unboxed to primitive types.
+       * This allows (let [n 5] (cpp/+ n 10)) to work with boxed primitive literals. */
+      auto const can_auto_unbox_arg0 = get_primitive_native_type(arg_exprs[0]) != nullptr;
+      auto const can_auto_unbox_arg1
+        = arg_exprs.size() > 1 && get_primitive_native_type(arg_exprs[1]) != nullptr;
+      auto const has_primitive_arg0 = cpp_util::is_primitive(obj_type) || can_auto_unbox_arg0;
+      auto const has_primitive_arg1 = arg_types.size() == 1
+        || cpp_util::is_primitive(Cpp::GetNonReferenceType(arg_types[1].m_Type))
+        || can_auto_unbox_arg1;
+
+      if(always_use_builtin || has_primitive_arg0)
       {
-        if(always_use_builtin
-           || (arg_types.size() == 1
-               || cpp_util::is_primitive(Cpp::GetNonReferenceType(arg_types[1].m_Type))))
+        if(always_use_builtin || has_primitive_arg1)
         {
           return build_builtin_operator_call(val,
                                              op,
