@@ -348,10 +348,10 @@ namespace jank::analyze::cpp_util
         auto alias_name{ alias_decl->getQualifiedNameAsString() };
         if(!alias_name.empty())
         {
-          if(Cpp::IsPointerType(type))
-          {
-            alias_name += " *";
-          }
+          /* NOTE: We intentionally do NOT add " *" for pointer types here.
+           * If the typedef defines a pointer type (e.g., `using foo_ptr = int (*)(int);`),
+           * the alias name `foo_ptr` already represents the complete type.
+           * Adding " *" would incorrectly produce `foo_ptr *` (pointer to pointer). */
           return alias_name;
         }
       }
