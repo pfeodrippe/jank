@@ -56,9 +56,9 @@ namespace jank::compile_server
   // Constant metadata for pre-allocation (iOS JIT BSS fix)
   struct constant_info
   {
-    std::string qualified_name;  // e.g., "vybe_ui::const_117" (C++ qualified name)
-    size_t size{ sizeof(void*) };  // sizeof(object_ref)
-    size_t alignment{ alignof(void*) };  // alignof(object_ref)
+    std::string qualified_name; // e.g., "vybe_ui::const_117" (C++ qualified name)
+    size_t size{ sizeof(void *) }; // sizeof(object_ref)
+    size_t alignment{ alignof(void *) }; // alignof(object_ref)
   };
 
   // Compile response from macOS to iOS

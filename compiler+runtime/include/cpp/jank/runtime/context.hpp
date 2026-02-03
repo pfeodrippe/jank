@@ -180,20 +180,6 @@ namespace jank::runtime
       jtl::option<std::int64_t> origin_column;
     };
 
-    folly::Synchronized<native_unordered_map<obj::symbol_ref, ns_ref>> namespaces;
-    folly::Synchronized<native_unordered_map<jtl::immutable_string, obj::keyword_ref>> keywords;
-    /* Constant registry for iOS JIT compatibility.
-     * On iOS JIT, BSS namespace-scope globals have ADRP relocation issues with ORC JIT ARM64.
-     * Constants are stored here and accessed via jank_constant_set/get C API. */
-    folly::Synchronized<native_unordered_map<jtl::immutable_string, object_ref>> constants;
-    folly::Synchronized<
-      native_unordered_map<jtl::immutable_string, native_vector<cpp_function_metadata>>>
-      global_cpp_functions;
-    folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_type_metadata>>
-      global_cpp_types;
-    folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_variable_metadata>>
-      global_cpp_variables;
-
     struct binding_scope
     {
       binding_scope();
@@ -219,11 +205,13 @@ namespace jank::runtime
     /* TODO: This needs to be synchronized, if it's kept. */
     analyze::processor an_prc;
 #endif
+
+    /*** XXX: Everything here is immutable after initialization. ***/
     jtl::immutable_string binary_version;
     /* TODO: This needs to be a dynamic var. */
     native_unordered_map<jtl::immutable_string, native_vector<jtl::immutable_string>>
       module_dependencies;
-    folly::Synchronized<native_deque<jtl::immutable_string>> loaded_modules_in_order;
+
     jtl::immutable_string binary_cache_dir;
     module::loader module_loader;
 
@@ -239,6 +227,27 @@ namespace jank::runtime
 
     /* Hold onto the CLI Options for use at runtime */
     util::cli::options opts;
+
+    /*** XXX: Everything here is thread-safe. ***/
+    folly::Synchronized<native_unordered_map<obj::symbol_ref, ns_ref>> namespaces;
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, obj::keyword_ref>> keywords;
+    /* Constant registry for iOS JIT compatibility.
+     * On iOS JIT, BSS namespace-scope globals have ADRP relocation issues with ORC JIT ARM64.
+     * Constants are stored here and accessed via jank_constant_set/get C API. */
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, object_ref>> constants;
+    folly::Synchronized<
+      native_unordered_map<jtl::immutable_string, native_vector<cpp_function_metadata>>>
+      global_cpp_functions;
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_type_metadata>>
+      global_cpp_types;
+    folly::Synchronized<native_unordered_map<jtl::immutable_string, cpp_variable_metadata>>
+      global_cpp_variables;
+
+    /* TODO: Remove this in favor of calling module's `jank_load` functions
+     * on demand. At the moment it is being used to load all the compiled modules
+     * in ahead of time compiled binaries at startup (which is not an ideal way to
+     * achieve that). */
+    folly::Synchronized<native_deque<jtl::immutable_string>> loaded_modules_in_order;
 
     /* XXX: We can't use thread_local here, due to bdwgc not supporting it. */
     static native_unordered_map<std::thread::id, native_list<thread_binding_frame>>

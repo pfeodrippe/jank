@@ -43,12 +43,16 @@ namespace jank::analyze::cpp_util
     static_cast<void>(jit::get_interpreter()->Parse("1"));
   }
 
-  jtl::string_result<void> instantiate_if_needed(jtl::ptr<void> const scope)
+  jtl::string_result<void> instantiate_if_needed(jtl::ptr<void> scope)
   {
     if(!scope)
     {
       return ok();
     }
+
+    /* We might have a type alias, which will not be considered a template, so we want
+     * to get to the bottom of it. */
+    scope = Cpp::GetUnderlyingScope(scope);
 
     /* If we have a template specialization and we want to access one of its members, we
      * need to be sure that it's fully instantiated. If we don't, the member won't
@@ -65,6 +69,7 @@ namespace jank::analyze::cpp_util
 
       if(Cpp::IsTemplatedFunction(scope))
       {
+        //util::println("\tinstantiating fn return type");
         return instantiate_if_needed(Cpp::GetScopeFromType(Cpp::GetFunctionReturnType(scope)));
       }
     }
@@ -88,6 +93,16 @@ namespace jank::analyze::cpp_util
 
   jtl::ptr<void> resolve_type(jtl::immutable_string const &sym, u8 const ptr_count)
   {
+    /* Clang canonicalizes "char" to "signed char" on some platforms, which breaks exception
+     * handling since they are distinct types. We use resolve_literal_type to get the
+     * exact type for "char". */
+    static auto const char_literal_type{ resolve_literal_type("char").expect_ok() };
+
+    if(sym == "char")
+    {
+      return apply_pointers(char_literal_type, ptr_count);
+    }
+
     auto const type{ Cpp::GetType(sym) };
     if(type)
     {
@@ -660,6 +675,12 @@ namespace jank::analyze::cpp_util
     return Cpp::IsImplicitlyConvertible(from, to);
   }
 
+  bool is_pointer_to_void_conversion(jtl::ptr<void> const from, jtl::ptr<void> const to)
+  {
+    return (Cpp::IsPointerType(from) && Cpp::IsPointerType(to))
+      && (Cpp::IsVoid(Cpp::GetPointeeType(from)) || Cpp::IsVoid(Cpp::GetPointeeType(to)));
+  }
+
   bool is_untyped_object(jtl::ptr<void> const type)
   {
     auto const can_type{ Cpp::GetCanonicalType(
@@ -826,13 +847,13 @@ namespace jank::analyze::cpp_util
         {
           if(typed_expr->values.empty())
           {
-            return untyped_object_ptr_type();
+            return untyped_object_ref_type();
           }
           return expression_type(typed_expr->values.back());
         }
         else
         {
-          return untyped_object_ptr_type();
+          return untyped_object_ref_type();
         }
       },
       expr);
@@ -863,7 +884,7 @@ namespace jank::analyze::cpp_util
     jank_debug_assert(type);
     if(Cpp::IsVoid(type))
     {
-      return untyped_object_ptr_type();
+      return untyped_object_ref_type();
     }
     return type;
   }
@@ -894,7 +915,7 @@ namespace jank::analyze::cpp_util
 
     /* If any arg can be implicitly converted to multiple functions, we have an ambiguity.
      * The user will need to specify the correct type by using a cast. */
-    for(usize arg_idx{}; arg_idx < max_arg_count; ++arg_idx)
+    for(usize arg_idx{}; arg_idx < arg_count; ++arg_idx)
     {
       /* If this argument index is beyond what we were given (i.e., the caller is using
        * default parameters for this position), skip to the next argument. */
@@ -1230,8 +1251,14 @@ namespace jank::analyze::cpp_util
     if((Cpp::IsPointerType(expr_type) || Cpp::IsArrayType(expr_type))
        && (Cpp::IsPointerType(expected_type) || Cpp::IsArrayType(expected_type)))
     {
-      auto const res{ determine_implicit_conversion(Cpp::GetPointeeType(expr_type),
-                                                    Cpp::GetPointeeType(expected_type)) };
+      auto const expr_pointee_type{ Cpp::GetPointeeType(expr_type) };
+      auto const expected_pointee_type{ Cpp::GetPointeeType(expected_type) };
+      if(Cpp::IsVoid(expr_pointee_type) || Cpp::IsVoid(expected_pointee_type))
+      {
+        return implicit_conversion_action::none;
+      }
+
+      auto const res{ determine_implicit_conversion(expr_pointee_type, expected_pointee_type) };
       switch(res)
       {
         case implicit_conversion_action::none:

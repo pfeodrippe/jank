@@ -106,9 +106,10 @@ namespace jank::jit
     /* Pre-allocate BSS storage for constants before loading object files.
      * Required for iOS JIT to avoid ADRP relocation distance violations.
      * Must be called BEFORE load_object() for objects that reference these symbols. */
-    bool preallocate_constants(
-      native_vector<compile_server::constant_info> const &constants) const;
+    bool preallocate_constants(native_vector<compile_server::constant_info> const &constants) const;
 
+    /*** XXX: Everything here is immutable after initialization. ***/
+    /*** XXX: Calls through the interpreter and LLVM JIT runtime are thread-safe. ***/
     std::unique_ptr<Cpp::Interpreter> interpreter;
     native_vector<std::filesystem::path> library_dirs;
 

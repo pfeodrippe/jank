@@ -134,6 +134,8 @@ OPTIONS
           --save-llvm-ir      Save generated LLVM IR to a file (useful for WASM/cross-compilation).
           --save-llvm-ir-path <path>
                               Path to save generated LLVM IR code.
+          --eagerness <lazy, eager> [default: lazy]
+                              How eagerly to JIT compile functions.
   -I,     --include-dir <path>
                               Absolute or relative path to the directory for includes
                               resolution. Can be specified multiple times.
@@ -195,6 +197,7 @@ RUN-MAIN SPECIFIC OPTIONS
         /**** These are all of the global flags which can apply to any command. ****/
         if(check_flag(it, end, value, "--", false))
         {
+          ++it;
           /* This implies that everything coming after is meant for the running program. */
           std::copy(it, end, std::back_inserter(opts.extra_opts));
           break;
@@ -218,6 +221,10 @@ RUN-MAIN SPECIFIC OPTIONS
         else if(check_flag(it, end, value, "--perf", false))
         {
           opts.perf_profiling_enabled = true;
+        }
+        else if(check_flag(it, end, value, "--debug", false))
+        {
+          opts.debug = true;
         }
         else if(check_flag(it, end, value, "--direct-call", false))
         {
@@ -284,6 +291,21 @@ RUN-MAIN SPECIFIC OPTIONS
         else if(check_flag(it, end, value, "--save-llvm-ir-path", true))
         {
           opts.save_llvm_ir_path = value;
+        }
+        else if(check_flag(it, end, value, "--eagerness", true))
+        {
+          if(value == "lazy")
+          {
+            opts.eagerness = compilation_eagerness::lazy;
+          }
+          else if(value == "eager")
+          {
+            opts.eagerness = compilation_eagerness::eager;
+          }
+          else
+          {
+            throw util::format("Invalid eagerness type '{}'.", value);
+          }
         }
         else if(check_flag(it, end, value, "-I", "--include-dir", true))
         {
@@ -467,6 +489,14 @@ RUN-MAIN SPECIFIC OPTIONS
           util::format_to(sb, " {}", arg);
         }
         throw sb.release();
+      }
+
+      /* Regardless of what's requested, if we're generating IR, we need to force eagerness.
+       * This is because deferred fns only support C++ compilation AND laziness doesn't buy
+       * us very much for IR gen, since we don't have the cost of C++ compilation to pay. */
+      if(opts.codegen == codegen_type::llvm_ir)
+      {
+        opts.eagerness = compilation_eagerness::eager;
       }
     }
     catch(jtl::immutable_string const &msg)

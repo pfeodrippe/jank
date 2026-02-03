@@ -416,7 +416,7 @@
   "Like var-get but returns nil if the var is unbound."
   [v]
   (try (var-get v)
-       (catch _)))
+       (catch cpp/jank.runtime.object_ref _)))
 
 (defn function?
   "Returns true if argument is a function or a symbol that resolves to
@@ -510,7 +510,7 @@
           (do-report {:type :fail :message ~msg
                       :expected '~form :actual nil
                       :file ~file :line ~line})
-          (catch e#
+          (catch cpp/jank.runtime.object_ref e#
             (do-report {:type :pass :message ~msg
                         :expected '~form :actual e#
                         :file ~file :line ~line})
@@ -526,7 +526,7 @@
     `(try (do ~@body)
           (do-report {:type :fail :message ~msg :expected '~form :actual nil
                       :file ~file :line ~line})
-          (catch e#
+          (catch cpp/jank.runtime.object_ref e#
             (let [m# (ex-message e#)]
               (if (and (string? m#) (re-find ~re m#))
                 (do-report {:type :pass :message ~msg
@@ -543,7 +543,7 @@
   You don't call this."
   [msg form file line]
   `(try (do ~(assert-expr msg form file line))
-        (catch t#
+        (catch cpp/jank.runtime.object_ref t#
           (do-report {:type :error :message ~msg
                       :expected '~form :actual t#
                       :file ~file :line ~line}))))
@@ -741,7 +741,7 @@
       (do-report {:type :begin-test-var :var v})
       (inc-report-counter :test)
       (try (t)
-           (catch e
+           (catch cpp/jank.runtime.object_ref e
              (do-report {:type :error :message "Uncaught exception, not in assertion."
                          :expected nil :actual e})))
       (do-report {:type :end-test-var :var v}))))

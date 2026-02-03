@@ -67,6 +67,29 @@ namespace jank::util::cli
     }
   }
 
+  enum class compilation_eagerness : u8
+  {
+    lazy,
+    eager,
+    /* TODO: We can support a batch mode which lazily creates proxy fns during eval
+     * and then batches them all together into one compilation to replace the proxies.
+     * This would then be the default for run and run-main, whereas lazy would be
+     * the default for everything else. */
+  };
+
+  constexpr char const *compilation_eagerness_str(compilation_eagerness const eagerness)
+  {
+    switch(eagerness)
+    {
+      case compilation_eagerness::lazy:
+        return "lazy";
+      case compilation_eagerness::eager:
+        return "eager";
+      default:
+        return "unknown";
+    }
+  }
+
   struct options
   {
     /* Runtime. */
@@ -100,6 +123,7 @@ namespace jank::util::cli
     std::string save_cpp_path;
     bool save_llvm_ir{};
     std::string save_llvm_ir_path;
+    compilation_eagerness eagerness{ compilation_eagerness::lazy };
 
     /* Run command. */
     jtl::immutable_string target_file;

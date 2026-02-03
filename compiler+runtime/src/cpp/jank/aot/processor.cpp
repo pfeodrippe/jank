@@ -940,7 +940,6 @@ namespace
   auto const fn{ [](int const argc, char const **argv) {
     jank_load_clojure_core_native();
     jank_load_clojure_core();
-    jank_module_set_loaded("/clojure.core");
     jank_load_jank_compiler_native();
           jank_load_jank_nrepl_server_asio();
           jank_module_set_loaded("/jank.nrepl-server.asio");
@@ -972,6 +971,7 @@ namespace
     for(auto const &it : *modules_rlocked)
     {
       util::format_to(sb, "{}();\n", module::module_to_load_function(it));
+      util::format_to(sb, "jank_module_set_loaded(\"{}\");\n", it);
     }
 
     sb(R"(auto const apply{ jank_var_intern_c("clojure.core", "apply") };)");

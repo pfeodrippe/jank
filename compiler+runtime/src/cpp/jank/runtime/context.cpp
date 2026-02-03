@@ -89,13 +89,20 @@ namespace jank::runtime
 
     auto const loaded_libs_sym(make_box<obj::symbol>("*loaded-libs*"));
     loaded_libs_var = core->intern_var(loaded_libs_sym);
-    loaded_libs_var->bind_root(make_box<obj::atom>(obj::persistent_sorted_set::empty()));
+    loaded_libs_var->bind_root(make_box<obj::atom>(
+      obj::persistent_sorted_set::create_from_seq(make_box<obj::persistent_vector>(
+        runtime::detail::native_persistent_vector{ make_box<obj::symbol>("clojure.core") }))));
     loaded_libs_var->dynamic.store(true);
 
     auto const assert_sym(make_box<obj::symbol>("*assert*"));
     assert_var = core->intern_var(assert_sym);
     assert_var->bind_root(jank_true);
     assert_var->dynamic.store(true);
+
+    auto const command_line_args_sym(make_box<obj::symbol>("*command-line-args*"));
+    auto const command_line_args_var{ core->intern_var(command_line_args_sym) };
+    command_line_args_var->bind_root(jank_nil());
+    command_line_args_var->dynamic.store(true);
 
     /* These are not actually interned. They're extra private. */
     current_module_var
@@ -204,7 +211,7 @@ namespace jank::runtime
     return eval_string(file.expect_ok().view());
   }
 
-  jtl::option<object_ref> context::eval_string(jtl::immutable_string const &code)
+  jtl::option<object_ref> context::eval_string(jtl::immutable_string const &code) const
   {
     return eval_string(code, 1, 1);
   }
@@ -417,6 +424,7 @@ namespace jank::runtime
                                     obj::persistent_vector::empty()),
                       make_box<obj::symbol>(name)),
         make_box<obj::symbol>("fn*")) };
+      analyze::processor an_prc;
       auto const expr(analyze::pass::optimize(
         an_prc.analyze(form, analyze::expression_position::statement).expect_ok()));
       auto const fn{ static_box_cast<analyze::expr::function>(expr) };
@@ -679,6 +687,7 @@ namespace jank::runtime
     read::lex::processor l_prc{ code };
     read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
 
+    analyze::processor an_prc;
     native_vector<analyze::expression_ref> ret{};
     for(auto const &form : p_prc)
     {
@@ -747,8 +756,6 @@ namespace jank::runtime
 
   jtl::result<void, error_ref> context::compile_module(jtl::immutable_string const &module)
   {
-    module_dependencies.clear();
-
     binding_scope const preserve{ obj::persistent_hash_map::create_unique(
       std::make_pair(compile_files_var, jank_true)) };
 
@@ -779,6 +786,7 @@ namespace jank::runtime
     }
   #endif
 
+    analyze::processor an_prc;
     auto const expr(
       analyze::pass::optimize(an_prc.analyze(o, analyze::expression_position::value).expect_ok()));
     return evaluate::eval(expr);

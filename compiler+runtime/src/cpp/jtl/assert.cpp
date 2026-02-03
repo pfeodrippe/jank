@@ -4,11 +4,11 @@
 #include <jank/util/fmt/print.hpp>
 
 #if defined(__APPLE__)
-#  include <TargetConditionals.h>
-#  if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-#    include <os/log.h>
-#    define JANK_IOS_LOGGING 1
-#  endif
+  #include <TargetConditionals.h>
+  #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    #include <os/log.h>
+    #define JANK_IOS_LOGGING 1
+  #endif
 #endif
 
 namespace jtl

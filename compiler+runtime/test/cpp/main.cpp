@@ -39,7 +39,6 @@ try
 
 #ifdef JANK_PHASE_2
     jank_load_clojure_core();
-    jank::runtime::__rt_ctx->module_loader.set_is_loaded("/clojure.core");
 #else
     /* We're loading from source always due to a bug in how we generate symbols which is
      * leading to duplicate symbols being generated. */

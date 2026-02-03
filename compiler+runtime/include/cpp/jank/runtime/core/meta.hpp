@@ -78,4 +78,6 @@ namespace jank::runtime
     debug_trace_guard(debug_trace_guard const &) = delete;
     debug_trace_guard &operator=(debug_trace_guard const &) = delete;
   };
+
+  object_ref with_source_meta(object_ref const o, read::source const &source);
 }

@@ -396,7 +396,7 @@ if(NOT jank_no_jit)
   else()
     # Desktop: Extract includes from the compiler
     execute_process(
-      COMMAND bash -c "${CMAKE_CXX_COMPILER} -xc++ -E -v /dev/null 2>&1 | sed -n -e '/^.include/,\${' -e '/^ \\/.*/p' -e '}' | sed 's/^[[:space:]]\\{1,\\}/-I/' | sed 's/ (framework directory)//'"
+      COMMAND bash -c "${CMAKE_CXX_COMPILER} -xc++ -E -v /dev/null 2>&1 | sed -n -e '/^.include/,\${' -e '/^ \\/.*/p' -e '}' | sed 's/^[[:space:]]\\{1,\\}/-isystem/' | sed 's/ (framework directory)//'"
       RESULT_VARIABLE clang_system_includes_result
       OUTPUT_VARIABLE clang_system_includes_unescaped
       OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -495,41 +495,6 @@ if(NOT jank_target_wasm AND NOT jank_target_ios)
   set_target_properties(nanobench_lib PROPERTIES ENABLE_EXPORTS 1)
   # ---- libnanobench.a ----
 endif()
-
-list(APPEND jank_common_compiler_flags
-  -DJANK_RESOURCE_DIR="${jank_resource_dir}"
-  -DJANK_CLANG_PATH="${CMAKE_CXX_COMPILER}"
-  -DJANK_CLANG_MAJOR_VERSION="${CLANG_VERSION_MAJOR}"
-  -DJANK_CLANG_RESOURCE_DIR="${clang_resource_dir}"
-)
-
-# Platform-specific filtering of system include paths for JIT flags
-# On macOS, filter out SDK paths that should come from -isysroot at JIT time
-# This prevents baking absolute SDK paths into the binary's JIT flags
-set(clang_jit_include_flags "${clang_system_include_flags}")
-if(APPLE)
-  set(_filtered_jit_flags "")
-  foreach(flag ${clang_system_include_flags})
-    if(NOT flag MATCHES "/SDKs/")
-      list(APPEND _filtered_jit_flags "${flag}")
-    endif()
-  endforeach()
-  set(clang_jit_include_flags "${_filtered_jit_flags}")
-endif()
-
-set(
-  jank_jit_compiler_flags
-  # We don't actually want to see any warnings for JIT compiled code.
-  -w
-  -fwrapv
-  -fno-stack-protector
-  -fPIC
-  -Xclang -fno-validate-pch
-  -Xclang -fno-pch-timestamp
-  ${LLVM_DEFINITIONS_LIST}
-  ${clang_jit_include_flags}
-)
-# ---- Clang JIT environment ----
 
 # ---- libjankzip.a ----
 
@@ -790,6 +755,7 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/obj/native_function_wrapper.cpp
   src/cpp/jank/runtime/obj/jit_function.cpp
   src/cpp/jank/runtime/obj/jit_closure.cpp
+  src/cpp/jank/runtime/obj/deferred_cpp_function.cpp
   src/cpp/jank/runtime/obj/multi_function.cpp
   src/cpp/jank/runtime/obj/native_pointer_wrapper.cpp
   src/cpp/jank/runtime/obj/symbol.cpp
@@ -839,6 +805,7 @@ set(jank_runtime_common_sources
   src/cpp/jank/runtime/obj/arena.cpp
   src/cpp/jank/runtime/obj/volatile.cpp
   src/cpp/jank/runtime/obj/delay.cpp
+  src/cpp/jank/runtime/obj/future.cpp
   src/cpp/jank/runtime/obj/reduced.cpp
   src/cpp/jank/runtime/behavior/callable.cpp
   src/cpp/jank/runtime/behavior/metadatable.cpp
@@ -1326,6 +1293,7 @@ foreach(lib ${jank_lib_link_dirs_prop})
 endforeach()
 list(APPEND jank_lib_linker_flags_list ${jank_linker_flags})
 list(APPEND jank_lib_linker_flags_list ${CMAKE_CXX_FLAGS})
+list(APPEND jank_lib_linker_flags_list ${CMAKE_SHARED_LINKER_FLAGS})
 list(JOIN jank_lib_linker_flags_list " " jank_lib_linker_flags_unescaped)
 string(REPLACE "\"" "\\\"" jank_lib_linker_flags_str "${jank_lib_linker_flags_unescaped}")
 
@@ -1633,6 +1601,19 @@ if(NOT jank_target_wasm AND NOT jank_target_ios)
   # Build a string of all of our AOT compilation flags so we can share them with our incremental PCH.
   set(jank_incremental_pch_flag ${CMAKE_BINARY_DIR}/incremental.pch)
 
+  # We pass the macOS SDK root into the JIT runtime, but the same path
+  # needs to be used when compiling the incremental PCH. Without this, you
+  # will see lots of include errors and, in particular, this guy:
+  # > We don't know how to get the definition of mbstate_t on your platform.
+  if(APPLE)
+    execute_process(
+      COMMAND /usr/bin/xcrun --show-sdk-path
+      OUTPUT_VARIABLE jank_xcrun_sysroot
+      ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    set(jank_additional_pch_flags -isysroot ${jank_xcrun_sysroot})
+  endif()
+
   separate_arguments(jank_incremental_pch_cxx_flags UNIX_COMMAND ${CMAKE_CXX_FLAGS})
   list(REMOVE_ITEM jank_incremental_pch_cxx_flags -fPIC)
   add_custom_command(
@@ -1643,6 +1624,7 @@ if(NOT jank_target_wasm AND NOT jank_target_ios)
     COMMAND ${CMAKE_CXX_COMPILER}
             #${jank_incremental_pch_cxx_flags}
             ${jank_common_compiler_flags} ${jank_jit_compiler_flags} ${jank_lib_includes}
+            ${jank_additional_pch_flags}
             -Xclang -fincremental-extensions
             -Xclang -emit-pch
             -Xclang -fmodules-embed-all-files

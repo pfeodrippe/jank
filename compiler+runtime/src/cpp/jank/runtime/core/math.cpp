@@ -424,11 +424,30 @@ namespace jank::runtime
 
   object_ref div(object_ref const l, object_ref const r)
   {
+    if(is_zero(r))
+    {
+      throw make_box("Illegal divide by zero in '/'").erase();
+    }
+
     return visit_number_like(
       [](auto const typed_l, auto const r) -> object_ref {
         return visit_number_like(
-          [](auto const typed_r, auto const &typed_l) -> object_ref {
-            return make_box(typed_l / typed_r->data).erase();
+          []<typename T>(auto const typed_r, T const &typed_l_data) -> object_ref {
+            using LeftType = std::decay_t<T>;
+            using RightType = std::decay_t<decltype(typed_r->data)>;
+
+            constexpr bool left_is_int_like{ std::is_same_v<LeftType, i64>
+                                             || std::is_same_v<LeftType, native_big_integer> };
+            constexpr bool right_is_int_like{ std::is_same_v<RightType, i64>
+                                              || std::is_same_v<RightType, native_big_integer> };
+
+            if constexpr(left_is_int_like && right_is_int_like)
+            {
+              return obj::ratio::create(native_big_integer(typed_l_data),
+                                        native_big_integer(typed_r->data));
+            }
+
+            return make_box(typed_l_data / typed_r->data).erase();
           },
           r,
           typed_l->data);
@@ -2044,7 +2063,7 @@ namespace jank::runtime
 
   obj::big_integer_ref to_big_integer(object_ref const o)
   {
-    return visit_number_like(
+    return visit_object(
       [&](auto const typed_o) -> obj::big_integer_ref {
         using T = typename decltype(typed_o)::value_type;
 
@@ -2052,7 +2071,7 @@ namespace jank::runtime
         {
           return typed_o;
         }
-        else if constexpr(std::same_as<T, obj::integer>)
+        else if constexpr(std::same_as<T, obj::integer> || std::same_as<T, obj::persistent_string>)
         {
           return make_box<obj::big_integer>(typed_o->data);
         }
@@ -2077,7 +2096,7 @@ namespace jank::runtime
 
   obj::big_decimal_ref to_big_decimal(object_ref const o)
   {
-    return visit_number_like(
+    return visit_object(
       [&](auto const typed_o) -> obj::big_decimal_ref {
         using T = typename jtl::decay_t<decltype(typed_o)>::value_type;
 
@@ -2086,7 +2105,7 @@ namespace jank::runtime
           return make_box<obj::big_decimal>(typed_o->to_real());
         }
         else if constexpr(std::same_as<T, obj::big_integer> || std::same_as<T, obj::real>
-                          || std::same_as<T, obj::ratio>)
+                          || std::same_as<T, obj::ratio> || std::same_as<T, obj::persistent_string>)
         {
           return make_box<obj::big_decimal>(typed_o->data);
         }

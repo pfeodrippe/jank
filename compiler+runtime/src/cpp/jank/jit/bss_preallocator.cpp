@@ -40,7 +40,10 @@ namespace jank::jit
 
       if(storage == nullptr)
       {
-        util::println(stderr, "[bss_preallocator] Failed to allocate {} bytes for {}", c.size, c.qualified_name);
+        util::println(stderr,
+                      "[bss_preallocator] Failed to allocate {} bytes for {}",
+                      c.size,
+                      c.qualified_name);
         return false;
       }
 
@@ -54,15 +57,19 @@ namespace jank::jit
         llvm::orc::ExecutorAddr(reinterpret_cast<uintptr_t>(storage)),
         llvm::JITSymbolFlags::Exported);
 
-      util::println(stderr, "[bss_preallocator] Pre-allocated {} at {:p} for symbol {}",
-                    c.size, storage, c.qualified_name);
+      util::println(stderr,
+                    "[bss_preallocator] Pre-allocated {} at {:p} for symbol {}",
+                    c.size,
+                    storage,
+                    c.qualified_name);
     }
 
     /* Define all symbols at once in the JITDylib */
     auto err{ dylib.define(llvm::orc::absoluteSymbols(symbols)) };
     if(err)
     {
-      util::println(stderr, "[bss_preallocator] Failed to define symbols: {}",
+      util::println(stderr,
+                    "[bss_preallocator] Failed to define symbols: {}",
                     llvm::toString(std::move(err)));
       return false;
     }

@@ -107,9 +107,12 @@ namespace jank::evaluate
     else if constexpr(std::same_as<T, expr::try_>)
     {
       walk(expr.body, f);
-      if(expr.catch_body.is_some())
+      if(!expr.catch_bodies.empty())
       {
-        walk(expr.catch_body.unwrap().body, f);
+        for(auto const &catch_body : expr.catch_bodies)
+        {
+          walk(catch_body.body, f);
+        }
       }
       if(expr.finally_body.is_some())
       {
@@ -195,7 +198,7 @@ namespace jank::evaluate
     arity.fn_ctx->param_count = arity.params.size();
     for(auto const &sym : arity.params)
     {
-      arity.frame->locals.emplace(sym, local_binding{ sym, sym->name, none, arity.frame });
+      arity.frame->locals[sym].emplace_back(sym, sym->name, none, arity.frame);
     }
 
     auto const expr_type{ cpp_util::expression_type(expr) };
@@ -206,7 +209,7 @@ namespace jank::evaluate
       expr_to_add = jtl::make_ref<expr::cpp_cast>(expr->position,
                                                   expr->frame,
                                                   expr->needs_box,
-                                                  cpp_util::untyped_object_ptr_type(),
+                                                  cpp_util::untyped_object_ref_type(),
                                                   expr_type,
                                                   conversion_policy::into_object,
                                                   expr);
@@ -222,7 +225,9 @@ namespace jank::evaluate
         auto found_local(expr->frame->find_local_or_capture(form.name));
         if(found_local && !found_local.unwrap().crossed_fns.empty())
         {
-          arity.frame->captures[form.name] = *found_local.unwrap().binding;
+          arity.frame->captures.emplace(
+            form.name,
+            local_capture{ *found_local.unwrap().binding, found_local.unwrap().binding });
         }
       }
     });
@@ -297,6 +302,12 @@ namespace jank::evaluate
     return ret;
   }
 
+  /* If we're directly evaluating the value for a def, this will be set to the var the
+   * def has interned. This is used when creating deferred functions, since they need
+   * to know the var which owns the function they're proxying. */
+  /* NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables) */
+  thread_local var_ref current_def_var;
+
   object_ref eval(expr::def_ref const expr)
   {
     profile::timer const timer{ "eval:def" };
@@ -311,6 +322,7 @@ namespace jank::evaluate
     {
       return var;
     }
+
 
     /* Incremental JIT: Check if we can skip compilation by using cached version.
      * Only applies when JIT cache is enabled. */
@@ -341,8 +353,19 @@ namespace jank::evaluate
     }
 
     /* JIT cache disabled - always compile. */
-    auto const evaluated_value(eval(expr->value.unwrap()));
-    var->bind_root(evaluated_value);
+    auto const value{ expr->value.unwrap() };
+    if(value->kind == analyze::expression_kind::function)
+    {
+      current_def_var = var;
+      auto const evaluated_value(eval(value));
+      var->bind_root(evaluated_value);
+      current_def_var = jank_nil();
+    }
+    else
+    {
+      auto const evaluated_value(eval(value));
+      var->bind_root(evaluated_value);
+    }
 
     return var;
   }
@@ -635,6 +658,11 @@ namespace jank::evaluate
 
   object_ref eval(expr::function_ref const expr)
   {
+    return eval(expr, "");
+  }
+
+  object_ref eval(expr::function_ref const expr, jtl::immutable_string const &)
+  {
     profile::timer const timer{ util::format("eval jit function {}", expr->name) };
 #if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     auto const &module(
@@ -774,28 +802,7 @@ namespace jank::evaluate
 
   object_ref eval(expr::try_ref const expr)
   {
-    util::scope_exit const finally{ [=]() {
-      if(expr->finally_body)
-      {
-        eval(expr->finally_body.unwrap());
-      }
-    } };
-
-    if(!expr->catch_body)
-    {
-      return eval(expr->body);
-    }
-    try
-    {
-      return eval(expr->body);
-    }
-    catch(object_ref const e)
-    {
-      return dynamic_call(eval(wrap_expression(expr->catch_body.unwrap().body,
-                                               "catch",
-                                               { expr->catch_body.unwrap().sym })),
-                          e);
-    }
+    return dynamic_call(eval(wrap_expression(expr, "try", {})));
   }
 
   object_ref eval(expr::case_ref const expr)
@@ -1164,6 +1171,13 @@ namespace jank::evaluate
     /* TODO: How do we get source info here? Or can we detect this earlier? */
     cpp_util::ensure_convertible(expr).expect_ok();
     return dynamic_call(eval(wrap_expression(expr, "cpp_cast", {})));
+  }
+
+  object_ref eval(expr::cpp_unsafe_cast_ref const expr)
+  {
+    /* TODO: How do we get source info here? Or can we detect this earlier? */
+    cpp_util::ensure_convertible(expr).expect_ok();
+    return dynamic_call(eval(wrap_expression(expr, "cpp_unsafe_cast", {})));
   }
 
   object_ref eval(expr::cpp_call_ref const expr)

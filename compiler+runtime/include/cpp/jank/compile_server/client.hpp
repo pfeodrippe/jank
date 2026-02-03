@@ -183,8 +183,8 @@ namespace jank::compile_server
         response.constants = parse_constants_array(line);
 
         std::cout << "[compile-client] Compiled successfully, object size: "
-                  << response.object_data.size() << " bytes, constants: "
-                  << response.constants.size() << std::endl;
+                  << response.object_data.size()
+                  << " bytes, constants: " << response.constants.size() << std::endl;
       }
       else if(op == "error")
       {
