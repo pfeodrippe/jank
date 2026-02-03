@@ -2,7 +2,7 @@
 
 #include <filesystem>
 
-#include <folly/Synchronized.h>
+#include <jank/util/folly_shim.hpp>
 
 #include <jtl/result.hpp>
 

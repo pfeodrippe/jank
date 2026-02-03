@@ -1,6 +1,6 @@
 #pragma once
 
-#include <folly/Synchronized.h>
+#include <jank/util/folly_shim.hpp>
 
 #include <jtl/option.hpp>
 

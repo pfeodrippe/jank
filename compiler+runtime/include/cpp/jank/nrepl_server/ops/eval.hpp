@@ -2,18 +2,22 @@
 
 #include <iostream>
 #include <fstream>
-#include <csignal>
-#include <unistd.h>
 #include <cstring>
-#include <setjmp.h>
-#include <execinfo.h>
 #include <cstdlib>
+
+#ifndef __EMSCRIPTEN__
+  #include <csignal>
+  #include <unistd.h>
+  #include <setjmp.h>
+  #include <execinfo.h>
+#endif
 
 #include <jank/error.hpp>
 #include <jank/jit/processor.hpp>
 
 namespace jank::nrepl_server::asio
 {
+#ifndef __EMSCRIPTEN__
   // Global state for signal handling - thread-local to handle multiple connections
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
   inline thread_local jmp_buf eval_jmp_buf;
@@ -68,6 +72,7 @@ namespace jank::nrepl_server::asio
     // NOLINTNEXTLINE(modernize-avoid-setjmp-longjmp)
     longjmp(eval_jmp_buf, sig);
   }
+#endif
 
   inline std::vector<bencode::value::dict> engine::handle_eval(message const &msg)
   {

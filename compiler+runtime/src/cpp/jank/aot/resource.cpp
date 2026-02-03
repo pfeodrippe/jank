@@ -1,4 +1,4 @@
-#include <folly/Synchronized.h>
+#include <jank/util/folly_shim.hpp>
 
 #include <jank/aot/resource.hpp>
 

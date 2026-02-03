@@ -7,9 +7,11 @@
 #include <iostream>
 #include <string>
 #include <sstream>
-#include <execinfo.h>
-#include <cxxabi.h>
-#include <dlfcn.h>
+#ifndef JANK_TARGET_EMSCRIPTEN
+  #include <execinfo.h>
+  #include <cxxabi.h>
+  #include <dlfcn.h>
+#endif
 
 namespace jank::runtime
 {
@@ -84,6 +86,7 @@ namespace jank::runtime
       // Print debug execution trace
       sb(runtime::debug_trace_dump());
 
+#ifndef JANK_TARGET_EMSCRIPTEN
       // Print stack trace for debugging using execinfo (works on iOS)
       sb("\n=== C++ Stack Trace ===\n");
       void *callstack[64];
@@ -134,6 +137,12 @@ namespace jank::runtime
       }
       free(strs);
       sb("=== End Stack Trace ===\n");
+#else
+      // Stack traces not available in WASM builds
+      sb("\n=== C++ Stack Trace ===\n");
+      sb("(Stack traces not available in WASM builds)\n");
+      sb("=== End Stack Trace ===\n");
+#endif
 
       throw std::runtime_error{ sb.str() };
     }
