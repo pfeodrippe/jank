@@ -1024,7 +1024,12 @@ namespace jank::runtime
 
     /* We need to hold this lock the whole time we're checking, to ensure the thread
      * doesn't finish while we're here checking. */
+#if defined(JANK_TARGET_WASM)
+    /* WASM: folly::Synchronized doesn't support ulock(). Use wlock() instead. */
+    auto locked_state{ fut->state.wlock() };
+#else
     auto locked_state{ fut->state.ulock() };
+#endif
     switch(locked_state->status)
     {
       case obj::future_status::done:
@@ -1035,11 +1040,11 @@ namespace jank::runtime
         break;
     }
 
-#ifdef JANK_MACOS_LIKE
-    /* macOS doesn't have pthread_tryjoin_np, or any similar function, so we can only
+#if defined(JANK_MACOS_LIKE) || defined(JANK_TARGET_WASM)
+    /* macOS and WASM don't have pthread_tryjoin_np, or any similar function, so we can only
      * pthread_join, to get the cancellation state, which is blocking. So we just have
      * to return false here. That means it's not currently possible to know if a thread
-     * was cancelled on macOS. */
+     * was cancelled on macOS or WASM. */
     return false;
 #else
     void *thread_state{};
@@ -1071,7 +1076,12 @@ namespace jank::runtime
 
     /* Our join succeeded, but we can only join once, so we need to save the result here
      * so we can short circuit next time. */
+#if defined(JANK_TARGET_WASM)
+    /* WASM: already have write lock, no need to upgrade */
+    auto const write_locked_state{ std::move(locked_state) };
+#else
     auto const write_locked_state{ locked_state.moveFromUpgradeToWrite() };
+#endif
     if(thread_state == PTHREAD_CANCELED)
     {
       write_locked_state->status = obj::future_status::cancelled;

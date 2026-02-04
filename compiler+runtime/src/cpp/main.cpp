@@ -79,6 +79,13 @@ namespace jank
         std::filesystem::path const file_path{ util::cli::opts.target_file.c_str() };
         auto const module_name{ file_path.stem().string() };
 
+        /* For WASM AOT, track the root module so we only save C++ for it, not dependencies.
+         * This prevents duplicate symbol errors when linking multiple compiled modules. */
+        if(util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
+        {
+          util::cli::opts.wasm_aot_root_module = module_name;
+        }
+
         context::binding_scope const compile_scope{ obj::persistent_hash_map::create_unique(
           std::make_pair(__rt_ctx->compile_files_var, jank_true),
           std::make_pair(__rt_ctx->current_module_var, make_box(module_name))) };

@@ -370,7 +370,8 @@ namespace jank::runtime
 
       profile::enter("phase:analyze");
       analyze::processor an_prc;
-      auto expr = an_prc.analyze(parsed_form, analyze::expression_position::statement).expect_ok();
+      auto expr_result = an_prc.analyze(parsed_form, analyze::expression_position::statement);
+      auto expr = expr_result.expect_ok();
       profile::exit("phase:analyze");
 
       profile::enter("phase:optimize");
@@ -482,12 +483,32 @@ namespace jank::runtime
         auto const code{ cg_prc.declaration_str() };
         auto module_name{ runtime::to_string(current_module_var->deref()) };
 
+        /* For WASM AOT, save each module to its own separate file to prevent duplicate symbols.
+         * Root module goes to the specified output path, dependencies go to separate files
+         * in the same directory with names like <module_name>_generated.cpp */
+        bool const is_wasm_aot = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
+        bool const is_wasm_dependency = is_wasm_aot
+          && !util::cli::opts.wasm_aot_root_module.empty()
+          && module_name != jtl::immutable_string{ util::cli::opts.wasm_aot_root_module };
+
         /* Save generated C++ to a file for inspection/WASM compilation. */
         if(util::cli::opts.save_cpp || !util::cli::opts.save_cpp_path.empty()
            || util::cli::opts.codegen == util::cli::codegen_type::wasm_aot)
         {
           jtl::immutable_string cpp_path;
-          if(!util::cli::opts.save_cpp_path.empty())
+          if(is_wasm_dependency)
+          {
+            /* For WASM dependencies, save to a separate file in the same directory as the root module.
+             * Convert module name like "vybe.util" to "vybe_util_generated.cpp" */
+            auto const output_dir = std::filesystem::path{ util::cli::opts.save_cpp_path.c_str() }.parent_path();
+            std::string munged_name{ module_name };
+            std::replace(munged_name.begin(), munged_name.end(), '.', '_');
+            std::replace(munged_name.begin(), munged_name.end(), '-', '_');
+            cpp_path = util::format("{}/{}_generated.cpp", output_dir.string(), munged_name);
+            std::cerr << "[jank] WASM AOT: saving dependency module " << module_name
+                      << " to separate file: " << cpp_path << "\n";
+          }
+          else if(!util::cli::opts.save_cpp_path.empty())
           {
             cpp_path = util::cli::opts.save_cpp_path;
           }
@@ -501,15 +522,16 @@ namespace jank::runtime
             std::filesystem::create_directories(parent_path);
           }
 
-          /* For WASM AOT, we need to add includes at the top of the file. */
-          bool const is_wasm_aot = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
+          /* For WASM AOT dependencies, each module gets its own file - never append.
+           * For non-WASM or root module, check if we should append to existing file. */
+          bool const file_exists = std::filesystem::exists(cpp_path.c_str());
+          bool const should_append = is_wasm_aot && file_exists && !is_wasm_dependency;
 
-          /* Use truncate mode to overwrite the file each time, not append */
-          std::ofstream cpp_out(cpp_path.c_str(), std::ios::trunc);
+          std::ofstream cpp_out(cpp_path.c_str(), should_append ? std::ios::app : std::ios::trunc);
           if(cpp_out.is_open())
           {
-            /* Write WASM AOT includes at the start of file */
-            if(is_wasm_aot)
+            /* Write WASM AOT includes at the start of file (only for first module) */
+            if(is_wasm_aot && !should_append)
             {
               cpp_out << "// WASM AOT generated code - requires jank runtime headers\n";
               cpp_out << "#include <jank/runtime/context.hpp>\n";
@@ -538,8 +560,18 @@ namespace jank::runtime
               cpp_out << "#include <jank/runtime/obj/opaque_box.hpp>\n";
               /* Include C API for jank_unbox_lazy_source used by cpp/unbox */
               cpp_out << "#include <jank/c_api.h>\n";
+              cpp_out << "\n";
+            }
 
-              /* Include native headers from (:require ["header.h" :as alias]) */
+            /* For appended modules, add a separator comment */
+            if(should_append)
+            {
+              cpp_out << "\n/* === Module: " << module_name << " === */\n";
+            }
+
+            /* Include native headers from (:require ["header.h" :as alias]) */
+            if(is_wasm_aot)
+            {
               auto const curr_ns{ current_ns() };
               auto const native_aliases{ curr_ns->native_aliases_snapshot() };
               if(!native_aliases.empty())
@@ -554,13 +586,13 @@ namespace jank::runtime
                     cpp_out << "#include " << alias.include_directive.c_str() << "\n";
                   }
                 }
+                cpp_out << "\n";
               }
-              cpp_out << "\n";
             }
 
             cpp_out << code << "\n\n";
             cpp_out.close();
-            std::cerr << "[jank] Saved generated C++ to: " << cpp_path << "\n";
+            std::cerr << "[jank] Saved generated C++ to: " << cpp_path << (should_append ? " (appended)" : "") << "\n";
           }
         }
 

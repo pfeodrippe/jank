@@ -1,4 +1,8 @@
-#include <clang/Interpreter/Value.h>
+#include <stdexcept>
+
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+  #include <clang/Interpreter/Value.h>
+#endif
 
 #include <jank/runtime/obj/deferred_cpp_function.hpp>
 #include <jank/runtime/obj/jit_function.hpp>
@@ -58,6 +62,10 @@ namespace jank::runtime::obj
 
   object_ref deferred_cpp_function::call(object_ref const args)
   {
+#if defined(JANK_TARGET_WASM)
+    (void)args;
+    throw std::runtime_error{ "deferred_cpp_function is not supported in WASM builds" };
+#else
     std::lock_guard<std::recursive_mutex> const lock{ compilation_mutex };
     /* It's possible that we're called again, even after we've compiled our actual function.
      * This can happen if the value of this function is captured, rather than used directly
@@ -86,6 +94,7 @@ namespace jank::runtime::obj
     expression_code = "";
 
     return apply_to(compiled_fn, args);
+#endif
   }
 
   behavior::callable::arity_flag_t deferred_cpp_function::get_arity_flags() const

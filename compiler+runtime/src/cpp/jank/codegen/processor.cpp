@@ -530,6 +530,13 @@ namespace jank::codegen
     auto const existing{ lifted_vars.find(qualified_name) };
     if(existing != lifted_vars.end())
     {
+      /* If this call marks the var as owned (e.g., from a def), update the existing entry.
+       * This handles the case where a var is first referenced (lifted with owned=false)
+       * and later defined (needs owned=true). */
+      if(owned && !existing->second.owned)
+      {
+        existing->second.owned = true;
+      }
       return existing->second.native_name;
     }
 
@@ -547,7 +554,14 @@ namespace jank::codegen
      * it'll be re-interned here as an owned var. This needs to happen at the point
      * of the def, rather than prior (i.e. due to lifting), since there could be
      * some other var-related effects such as refer which need to happen before
-     * def. */
+     * def.
+     *
+     * However, we DO need to mark the var as owned in lifted_vars so that when
+     * var refs are initialized, they use intern_owned_var instead of intern_var.
+     * This is critical for WASM AOT where referred vars from clojure.core-native
+     * need to be replaced by owned vars. */
+    lift_var(lifted_vars, expr->name->to_string(), true);
+
     auto var_tmp(runtime::munge(__rt_ctx->unique_string("var")));
     util::format_to(
       body_buffer,

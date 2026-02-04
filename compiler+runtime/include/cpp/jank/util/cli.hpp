@@ -123,6 +123,10 @@ namespace jank::util::cli
     std::string save_cpp_path;
     bool save_llvm_ir{};
     std::string save_llvm_ir_path;
+    /* For WASM AOT: track the root module being compiled.
+     * When set, only C++ for this module (not dependencies) is saved.
+     * This prevents duplicate symbols when linking multiple compiled modules. */
+    std::string wasm_aot_root_module;
     compilation_eagerness eagerness{ compilation_eagerness::lazy };
 
     /* Run command. */

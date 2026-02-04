@@ -479,5 +479,6 @@ namespace jank
     /* This can be used by jtl helpers which can't reach into jank but which fail. */
     [[noreturn]]
     void throw_internal_failure(jtl::immutable_string const &message);
+    void warn(jtl::immutable_string const &message);
   }
 }

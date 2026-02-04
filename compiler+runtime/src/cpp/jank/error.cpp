@@ -1,3 +1,5 @@
+#include <iostream>
+
 #include <jank/util/cpptrace.hpp>
 
 #include <jank/error.hpp>
@@ -504,4 +506,12 @@ namespace jank::error
   {
     throw internal_failure(message);
   }
+
+/* For WASM and iOS builds, report.cpp is not included, so we need a simple warn implementation here. */
+#if defined(JANK_TARGET_WASM) || defined(JANK_IOS_JIT)
+  void warn(jtl::immutable_string const &message)
+  {
+    std::cerr << "Warning: " << message << std::endl;
+  }
+#endif
 }

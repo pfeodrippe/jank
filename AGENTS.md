@@ -7,7 +7,8 @@
 
 - **Never use `/dev/null`** - Do not redirect output to `/dev/null`. Always capture and show output for debugging purposes.
 - Put the raw prompt inside a PROMPTS.md file, always update it with exactly my instructions (and nothing else!), append each new instruction to the end
-- For the jank -> wasm work, also read AGENTS_CONTEXT.md. In the end, add the output for a given instruction for what was learnt (one for each thinking, context, barriers, discoveries, ideas you have, commands you have learnt etc) 
+- For the jank -> wasm work, also read AGENTS_CONTEXT.md. In the end, add the output for a given instruction for what was learnt (one for each thinking, context, barriers, discoveries, ideas you have, commands you have learnt etc)
+- **ALWAYS format generated C++ files BEFORE reading them!** Generated files like `*_generated.cpp` are minified single-line code. Run `clang-format -i <file>` BEFORE reading or grepping. This saves massive tokens! 
 
 ## Command Log
 

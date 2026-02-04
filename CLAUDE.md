@@ -82,3 +82,22 @@ To run specific test cases:
 
 nREPL tests are in `/Users/pfeodrippe/dev/jank/compiler+runtime/test/cpp/jank/nrepl/engine.cpp`
 - To fix pch header corruption, use `./bin/configure -GNinja -DCMAKE_BUILD_TYPE=Debug -Djank_test=on -Djank_local_clang=on && ./bin/compile`
+
+## Rule 4: ALWAYS format generated C++ files BEFORE reading them!
+
+**CRITICAL: Generated C++ files (e.g., `*_generated.cpp` in build directories) are minified/single-line and will consume MASSIVE tokens if read directly!**
+
+Before reading or searching any generated C++ file:
+1. **Format it first** using clang-format or similar:
+   ```bash
+   clang-format -i /path/to/generated_file.cpp
+   ```
+2. Only THEN read specific lines with offset/limit
+3. NEVER use grep to dump raw content from generated files - format first!
+
+This applies to ALL files in:
+- `build-wasm/*_generated.cpp`
+- `build/*_generated.cpp`
+- Any AOT-compiled output files
+
+Failure to format first wastes thousands of tokens on single-line minified C++ code!

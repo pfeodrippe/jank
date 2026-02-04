@@ -15,6 +15,9 @@
 #include <jank/runtime/sequence_range.hpp>
 #include <jank/util/scope_exit.hpp>
 #include <jank/util/fmt.hpp>
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+  #include <jank/analyze/processor.hpp>
+#endif
 
 /* TODO: Make common symbol boxes once and reuse those. */
 namespace jank::read::parse
@@ -1311,15 +1314,19 @@ namespace jank::read::parse
   {
     object_ref ret{};
 
-    /* Specials, such as fn*, let*, try, etc. just get left alone. We can't qualify them more. */
+    /* Specials, such as fn*, let*, try, etc. just get left alone. We can't qualify them more.
+     * Note: analyze module is not available in WASM builds. */
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
     if(analyze::processor::is_special(form))
     {
       ret = make_box<obj::persistent_list>(std::in_place, make_box<obj::symbol>("quote"), form);
     }
+    else
+#endif
     /* By default, all symbols get qualified. However, any symbol ending in # does not get
      * qualified, but instead gets a gensym (a unique name). The unique names are kept in
      * a bound map for reproducibility. */
-    else if(form->type == object_type::symbol)
+    if(form->type == object_type::symbol)
     {
       auto sym(expect_object<obj::symbol>(form));
       if(sym->ns.empty() && sym->name.ends_with('#'))

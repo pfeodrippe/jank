@@ -538,6 +538,8 @@ if [[ -n "${jank_source}" ]]; then
       need_entrypoint_regen=true
     elif [[ "${cpp_output}" -nt "${entrypoint_cpp}" ]]; then
       need_entrypoint_regen=true
+    elif [[ "${here}/emscripten-bundle" -nt "${entrypoint_cpp}" ]]; then
+      need_entrypoint_regen=true
     fi
 
     if [[ "${need_entrypoint_regen}" == "true" ]]; then
@@ -551,13 +553,20 @@ if [[ -n "${jank_source}" ]]; then
       # Find all jank_load_X functions in the generated code that are module loaders
       # These are defined as "void* jank_load_X()" at the top level
       while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]*void\*[[:space:]]+jank_load_([a-zA-Z_][a-zA-Z0-9_]*)\(\)[[:space:]]*\{ ]]; then
-          dep_func="jank_load_${BASH_REMATCH[1]}"
+        dep_symbol=""
+        if [[ "$line" =~ ^[[:space:]]*struct[[:space:]]+jank_load_([a-zA-Z_][a-zA-Z0-9_]*) ]]; then
+          dep_symbol="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^[[:space:]]*(extern[[:space:]]+\"C\"[[:space:]]+)?void[[:space:]]*\*?[[:space:]]+jank_load_([a-zA-Z_][a-zA-Z0-9_]*)\(\)[[:space:]]*\{? ]]; then
+          dep_symbol="${BASH_REMATCH[2]}"
+        fi
+
+        if [[ -n "${dep_symbol}" ]]; then
+          dep_func="jank_load_${dep_symbol}"
           # Skip the main module itself
           if [[ "$dep_func" != "jank_load_${munged_module_name}" ]]; then
             # Convert underscores back to dots for display
-            dep_name="${BASH_REMATCH[1]//_/.}"
-            deps_extern+="  void* ${dep_func}();\\n"
+            dep_name="${dep_symbol//_/.}"
+            deps_extern+="  void ${dep_func}();\\n"
             deps_load+="  printf(\"[jank-wasm] Loading dependency: ${dep_name}...\\\\n\");\\n"
             deps_load+="  ${dep_func}();\\n"
           fi
@@ -577,39 +586,35 @@ if [[ -n "${jank_source}" ]]; then
 // jank C API
 extern "C" {
   int jank_init(int argc, char const** argv, bool init_ctx, int (*fn)(int, char const**));
-  void* jank_load_clojure_core_native();
-  void* jank_load_core();
-  void* jank_load_set();
-  void* jank_load_string();
-  void* jank_load_walk();
-  void* jank_load_template__();  // 'template' is C++ keyword, gets munged
-  void* jank_load_test();
+  void jank_load_clojure_core_native();
+  void jank_load_core();
+  void jank_load_set();
+  void jank_load_string();
+  void jank_load_clojure_walk();
+  void jank_load_clojure_template();
+  void jank_load_test();
   void* jank_setup_clojure_core_for_wasm();
 
   // Dependency module init functions
 $(echo -e "${deps_extern}")
-  // Main module init function (returns void* which is an erased object_ref)
-  void* jank_load_${munged_module_name}();
+  // Main module init function (returns void)
+  void jank_load_${munged_module_name}();
 }
 
-static void* safe_load_module() {
+static void safe_load_module() {
   using namespace jank;
   using namespace jank::runtime;
   try {
-    printf("[jank-wasm] Now calling the actual load function...\\n");
-    return jank_load_${munged_module_name}();
+    printf("[jank-wasm] Now calling the actual load function...\n");
+    jank_load_${munged_module_name}();
   } catch(error_ref const& e) {
-    printf("[jank-wasm] jank error during load: %s\\n", e->message.c_str());
-    return nullptr;
+    printf("[jank-wasm] jank error during load: %s\n", e->message.c_str());
   } catch(oref<object> const& e) {
-    printf("[jank-wasm] jank oref exception during load: %s\\n", to_string(e).c_str());
-    return nullptr;
+    printf("[jank-wasm] jank oref exception during load: %s\n", to_string(e).c_str());
   } catch(std::exception const& e) {
-    printf("[jank-wasm] C++ std::exception during load: %s\\n", e.what());
-    return nullptr;
+    printf("[jank-wasm] C++ std::exception during load: %s\n", e.what());
   } catch(...) {
-    printf("[jank-wasm] Unknown C++ exception during load\\n");
-    return nullptr;
+    printf("[jank-wasm] Unknown C++ exception during load\n");
   }
 }
 
@@ -649,13 +654,13 @@ static int jank_main(int argc, char const** argv) {
 
     // Load clojure.walk if available
     printf("[jank-wasm] Loading clojure.walk...\\n");
-    jank_load_walk();
+    jank_load_clojure_walk();
     __rt_ctx->module_loader.set_is_loaded("clojure.walk");
     printf("[jank-wasm] clojure.walk loaded!\\n");
 
     // Load clojure.template if available
     printf("[jank-wasm] Loading clojure.template...\\n");
-    jank_load_template__();  // 'template' is C++ keyword, gets munged
+    jank_load_clojure_template();
     __rt_ctx->module_loader.set_is_loaded("clojure.template");
     printf("[jank-wasm] clojure.template loaded!\\n");
 
@@ -670,12 +675,8 @@ static int jank_main(int argc, char const** argv) {
 $(echo -e "${deps_load}")
     // Call the pre-compiled module
     printf("[jank-wasm] Executing pre-compiled module: ${module_name}\\n");
-    void* result = safe_load_module();
-    if(!result) {
-      printf("[jank-wasm] Module load failed!\\n");
-      return 1;
-    }
-    printf("[jank-wasm] Result: %p\\n", result);
+    safe_load_module();
+    printf("[jank-wasm] Module loaded successfully!\\n");
 
     // Call -main if it exists
     printf("[jank-wasm] Looking for -main function...\\n");
@@ -1097,7 +1098,8 @@ if [[ -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
   
   # Detect ^:export functions from generated C++ and add to EXPORTED_FUNCTIONS
   # These are generated as jank_export_<munged_name> functions
-  exported_functions="_main"
+  # Also export jank C API functions needed for WASM initialization
+  exported_functions="_main,_jank_init,_jank_load_clojure_core_native,_jank_setup_clojure_core_for_wasm"
   for cpp_file in "${compiled_objects[@]}"; do
     if [[ -f "${cpp_file}" ]]; then
       # Find all jank_export_* functions in the generated C++
@@ -1214,7 +1216,8 @@ if [[ -f "${shell_file}" ]]; then
   # Add entrypoint if we have one
   if [[ -n "${entrypoint_cpp}" && -f "${entrypoint_cpp}" ]]; then
     em_html_cmd+=("${entrypoint_cpp}")
-    em_html_cmd+=(-sEXPORTED_FUNCTIONS=_main)
+    # Export main and jank C API functions needed for WASM initialization
+    em_html_cmd+=(-sEXPORTED_FUNCTIONS=_main,_jank_init,_jank_load_clojure_core_native,_jank_setup_clojure_core_for_wasm)
   else
     em_html_cmd+=(
       -sSTANDALONE_WASM=0
