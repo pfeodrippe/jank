@@ -34,6 +34,8 @@ native_obj_files=()
 native_lib_dirs=()
 native_libs=()
 em_flags=()
+compile_flags=()
+jit_defines=()
 
 usage() {
   cat <<'USAGE'
@@ -65,6 +67,10 @@ Options:
   -L DIR                  Add native library search directory for JIT (can be used multiple times)
   --em-flag FLAG          Add extra flag to em++ linker (can be used multiple times)
                           Example: --em-flag "-sUSE_GLFW=3" --em-flag "-sASYNCIFY"
+  --compile-flag FLAG     Add extra flag to em++ compilation (can be used multiple times)
+                          Example: --compile-flag "-DFICTION_USE_WEBGPU"
+  --jit-define DEFINE     Add preprocessor define for native jank JIT during AOT (can be used multiple times)
+                          Example: --jit-define "FICTION_USE_STUB"
   --prelink-lib FILE      Alias for --lib (for libraries to link into final WASM)
   -v, --verbose           Enable verbose output (shows compilation commands)
 
@@ -200,6 +206,22 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       em_flags+=("$2")
+      shift 2
+      ;;
+    --compile-flag)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --compile-flag expects an argument" >&2
+        exit 1
+      fi
+      compile_flags+=("$2")
+      shift 2
+      ;;
+    --jit-define)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --jit-define expects an argument" >&2
+        exit 1
+      fi
+      jit_defines+=("$2")
       shift 2
       ;;
     --prelink-lib)
@@ -484,6 +506,14 @@ if [[ -n "${jank_source}" ]]; then
     if [[ ${#native_libs[@]} -gt 0 ]]; then
       for lib in "${native_libs[@]}"; do
         jank_cmd+=(--jit-lib "${lib}")
+      done
+    fi
+
+    # Add JIT preprocessor defines (for AOT compilation)
+    if [[ ${#jit_defines[@]} -gt 0 ]]; then
+      for define in "${jit_defines[@]}"; do
+        jank_cmd+=(-D "${define}")
+        echo "[emscripten-bundle] Added JIT define: ${define}"
       done
     fi
 
@@ -883,6 +913,14 @@ if [[ "${RELEASE:-}" != "1" ]]; then
   jank_compile_flags+=(-g3)
 fi
 
+# Add extra compile flags from --compile-flag arguments
+if [[ ${#compile_flags[@]} -gt 0 ]]; then
+  for cflag in "${compile_flags[@]}"; do
+    jank_compile_flags+=("${cflag}")
+    echo "[emscripten-bundle] Added compile flag: ${cflag}"
+  done
+fi
+
 em_link_cmd=(
   em++
   -o "${output_dir}/${output_name}.js"
@@ -1171,10 +1209,19 @@ em_link_cmd+=(
 )
 
 # Add extra em++ flags from --em-flag arguments
+# NOTE: Flags like "--embed-file /path@/target" need to be split into two arguments
 if [[ ${#em_flags[@]} -gt 0 ]]; then
   for em_flag in "${em_flags[@]}"; do
-    em_link_cmd+=("${em_flag}")
-    echo "[emscripten-bundle] Added em++ flag: ${em_flag}"
+    # Check if this is a flag that needs path splitting (--embed-file, --preload-file, etc.)
+    if [[ "$em_flag" =~ ^(--embed-file|--preload-file|--exclude-file|--use-preload-plugins)[[:space:]]+(.*) ]]; then
+      flag_name="${BASH_REMATCH[1]}"
+      flag_value="${BASH_REMATCH[2]}"
+      em_link_cmd+=("${flag_name}" "${flag_value}")
+      echo "[emscripten-bundle] Added em++ flag: ${flag_name} ${flag_value}"
+    else
+      em_link_cmd+=("${em_flag}")
+      echo "[emscripten-bundle] Added em++ flag: ${em_flag}"
+    fi
   done
 fi
 

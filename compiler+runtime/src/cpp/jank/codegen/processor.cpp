@@ -255,9 +255,9 @@ namespace jank::codegen
           else if constexpr(std::same_as<T, runtime::obj::re_pattern>)
           {
             util::format_to(buffer,
-                            R"(jank::runtime::make_box<jank::runtime::obj::re_pattern>({}))",
-                            /* We remove the # prefix here. */
-                            typed_o->to_code_string().substr(1));
+                            R"(jank::runtime::re_pattern(jank::runtime::make_box("{}")))",
+                            /* Escape the pattern for C++ string literal. */
+                            util::escape(typed_o->pattern));
           }
           else if constexpr(std::same_as<T, runtime::obj::uuid>)
           {
