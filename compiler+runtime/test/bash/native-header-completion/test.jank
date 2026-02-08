@@ -1,0 +1,68 @@
+;; Test for native header autocompletion (nREPL TAB completion)
+;;
+;; This test verifies that when you require an external C++ header with -I,
+;; the autocompletion system (native-header-functions) correctly returns
+;; symbols from the header's namespace.
+;;
+;; This is what powers nREPL completion when you type:
+;;   (tn/|)  <- TAB here shows: create_entity, init_system, etc.
+;;
+;; Run with: jank -I. run test.jank
+
+(ns test.native-header-completion
+  (:require ["test_native.hpp" :as tn]))
+
+;; Test 1: Autocompletion returns all symbols from the namespace
+;; This is what nREPL uses when you type "tn/" and press TAB
+(println "Testing autocompletion for 'tn/' prefix...")
+(let [completions (native-header-functions 'tn)]
+  (when (empty? completions)
+    (throw (ex-info "Autocompletion returned empty - no symbols found!" {:alias 'tn})))
+
+  ;; Verify expected functions are in completions
+  (let [completion-set (set completions)]
+    (doseq [expected ["create_entity" "init_system" "shutdown_system"
+                      "get_version" "update_position"]]
+      (when-not (contains? completion-set expected)
+        (throw (ex-info (str "Expected completion '" expected "' not found")
+                        {:expected expected :completions completions})))))
+
+  (println "  Found" (count completions) "completions:" completions))
+
+;; Test 2: Prefix filtering (when you type "tn/init" and TAB)
+(println "Testing autocompletion for 'tn/init' prefix...")
+(let [completions (native-header-functions 'tn "init")]
+  (when (empty? completions)
+    (throw (ex-info "Prefix 'init' returned no completions" {:alias 'tn})))
+  (when-not (some #(= "init_system" %) completions)
+    (throw (ex-info "init_system not in completions for prefix 'init'"
+                    {:completions completions})))
+  (println "  Found:" completions))
+
+;; Test 3: Structs/types appear in completions (for "tn/pos" TAB)
+(println "Testing autocompletion for 'tn/pos' prefix (struct)...")
+(let [completions (native-header-functions 'tn "pos")]
+  (when-not (some #(= "position" %) completions)
+    (throw (ex-info "Struct 'position' not in completions" {:completions completions})))
+  (println "  Found:" completions))
+
+;; Test 4: Verify the completed symbols actually work when called
+(println "Testing that completed functions are callable...")
+(let [entity-id (tn/create_entity)]
+  (when-not (pos? entity-id)
+    (throw (ex-info "create_entity failed" {:id entity-id})))
+  (println "  tn/create_entity ->" entity-id))
+
+(let [version (tn/get_version)]
+  (when (empty? version)
+    (throw (ex-info "get_version returned empty" {})))
+  (println "  tn/get_version ->" version))
+
+(when-not (tn/init_system)
+  (throw (ex-info "init_system returned false" {})))
+(println "  tn/init_system -> true")
+
+(tn/shutdown_system)
+(println "  tn/shutdown_system -> done")
+
+(println "\nAll native header autocompletion tests passed!")

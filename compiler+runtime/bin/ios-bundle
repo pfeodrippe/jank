@@ -1,0 +1,1130 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+error() {
+  echo -e "${RED}[ios-bundle] ERROR: $*${NC}" >&2
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  here="$(cd "$(dirname "$0")" && pwd)"
+else
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+repo_root="${here}/.."
+build_dir="${repo_root}/build-ios"
+native_build_dir="${repo_root}/build"
+output_dir=""
+output_name="jank"
+skip_build=false
+force_regenerate=false
+jank_source=""
+verbose=false
+ios_simulator=false
+extra_include_paths=()
+native_obj_files=()
+native_lib_dirs=()
+native_libs=()
+# New options for --entry-module workflow
+entry_module=""
+module_path=""
+output_library=""
+# JIT mode (remote compile server)
+jit_mode=false
+
+usage() {
+  cat <<'USAGE'
+Usage: ios-bundle [OPTIONS] [jank-source | simulator | device]
+
+Builds jank code for iOS using AOT C++ generation and cross-compilation.
+Generates core libraries (clojure.core, etc.) and compiles them for iOS arm64.
+
+Three workflows are supported:
+
+1. Single file: Provide a .jank source file to compile it and bundle for iOS
+2. Entry module: Use --entry-module to compile an entire app with all dependencies
+3. JIT mode: Use --jit for remote compile server (core libs only, app loaded at runtime)
+
+Options:
+  -h, --help              Show this help message
+  --build-dir DIR         CMake build directory for iOS (default: build-ios or build-ios-simulator)
+  --native-build-dir DIR  Native build directory with jank compiler (default: build)
+  --output-dir DIR        Output directory for generated files (default: build-dir)
+  --output-name NAME      Base name for output files (default: jank, or source basename)
+  --skip-build            Skip cmake build, only generate and compile C++
+  --force-regenerate      Force regeneration of C++ from jank source (ignore cache)
+  -I DIR                  Add include directory for C++ compilation (can be used multiple times)
+  --native-obj FILE       Add native object file for JIT during AOT compilation
+  --native-lib LIB        Add native dynamic library for JIT during AOT compilation
+  --jit-lib LIB           Alias for --native-lib (for JIT symbol resolution during codegen)
+  -L DIR                  Add native library search directory for JIT
+  -v, --verbose           Enable verbose output
+  --simulator             Build for iOS Simulator (arm64-apple-ios-simulator)
+  simulator               Same as --simulator (positional argument)
+  device                  Build for iOS Device (default, arm64-apple-ios)
+
+Entry Module Options (for full app compilation):
+  --entry-module MODULE   Entry point module name (e.g., myapp.ios)
+  --module-path DIR       Module search path for jank (e.g., src)
+  --output-library NAME   Output static library name (default: libapp_aot.a)
+
+JIT Mode Options (for remote compile server):
+  --jit                   Build for JIT mode (only core libs, uses remote compile server)
+                          App namespaces are loaded via macOS compile-server at runtime
+
+Examples:
+  ios-bundle                                    # Build jank runtime and core libs for iOS device
+  ios-bundle simulator                          # Build for iOS Simulator
+  ios-bundle --force-regenerate                 # Force regeneration of all C++ files
+  ios-bundle myapp.jank                         # Compile myapp.jank and bundle for iOS
+
+  # Full app compilation (recommended):
+  ios-bundle \\
+    --entry-module myapp.ios \\
+    --module-path src \\
+    --output-dir build-ios \\
+    --output-library libmyapp_aot.a \\
+    -I vendor/imgui \\
+    -I vendor/flecs/distr \\
+    -L /opt/homebrew/lib \\
+    --jit-lib /opt/homebrew/lib/libSDL3.dylib \\
+    simulator
+
+  # JIT mode (remote compile server):
+  ios-bundle --jit simulator              # Core libs only, app loaded via compile-server
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --simulator)
+      ios_simulator=true
+      shift
+      ;;
+    --build-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --build-dir expects an argument" >&2
+        exit 1
+      fi
+      build_dir="$2"
+      shift 2
+      ;;
+    --native-build-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --native-build-dir expects an argument" >&2
+        exit 1
+      fi
+      native_build_dir="$2"
+      shift 2
+      ;;
+    --output-dir)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --output-dir expects an argument" >&2
+        exit 1
+      fi
+      output_dir="$2"
+      shift 2
+      ;;
+    --output-name)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --output-name expects an argument" >&2
+        exit 1
+      fi
+      output_name="$2"
+      shift 2
+      ;;
+    --skip-build)
+      skip_build=true
+      shift
+      ;;
+    --force-regenerate)
+      force_regenerate=true
+      shift
+      ;;
+    --jit)
+      jit_mode=true
+      shift
+      ;;
+    -v|--verbose)
+      verbose=true
+      shift
+      ;;
+    -I)
+      if [[ $# -lt 2 ]]; then
+        echo "error: -I expects a directory path" >&2
+        exit 1
+      fi
+      extra_include_paths+=("$2")
+      shift 2
+      ;;
+    -I*)
+      extra_include_paths+=("${1:2}")
+      shift
+      ;;
+    --native-obj)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --native-obj expects a file path" >&2
+        exit 1
+      fi
+      native_obj_files+=("$2")
+      shift 2
+      ;;
+    --native-lib|--jit-lib)
+      if [[ $# -lt 2 ]]; then
+        echo "error: $1 expects a library name" >&2
+        exit 1
+      fi
+      native_libs+=("$2")
+      shift 2
+      ;;
+    --entry-module)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --entry-module expects a module name" >&2
+        exit 1
+      fi
+      entry_module="$2"
+      shift 2
+      ;;
+    --module-path)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --module-path expects a directory path" >&2
+        exit 1
+      fi
+      module_path="$2"
+      shift 2
+      ;;
+    --output-library)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --output-library expects a library name" >&2
+        exit 1
+      fi
+      output_library="$2"
+      shift 2
+      ;;
+    -L)
+      if [[ $# -lt 2 ]]; then
+        echo "error: -L expects a directory path" >&2
+        exit 1
+      fi
+      native_lib_dirs+=("$2")
+      shift 2
+      ;;
+    -L*)
+      native_lib_dirs+=("${1:2}")
+      shift
+      ;;
+    *.jank)
+      jank_source="$1"
+      shift
+      ;;
+    simulator)
+      ios_simulator=true
+      shift
+      ;;
+    device)
+      ios_simulator=false
+      shift
+      ;;
+    *)
+      echo "error: unknown option: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# If jank source provided but no output name specified, use source basename
+if [[ -n "${jank_source}" && "${output_name}" == "jank" ]]; then
+  output_name="$(basename "${jank_source}" .jank)"
+fi
+
+# Update build_dir based on simulator vs device and JIT mode if using default
+if [[ "${build_dir}" == "${repo_root}/build-ios" ]]; then
+  if [[ "${jit_mode}" == "true" ]]; then
+    if [[ "${ios_simulator}" == "true" ]]; then
+      build_dir="${repo_root}/build-ios-jit-simulator"
+    else
+      build_dir="${repo_root}/build-ios-jit-device"
+    fi
+  elif [[ "${ios_simulator}" == "true" ]]; then
+    build_dir="${repo_root}/build-ios-simulator"
+  fi
+fi
+
+# Default output_dir to build_dir if not specified
+if [[ -z "${output_dir}" ]]; then
+  output_dir="${build_dir}"
+fi
+
+# Default output_library if entry_module is provided
+if [[ -n "${entry_module}" && -z "${output_library}" ]]; then
+  output_library="libapp_aot.a"
+fi
+
+mkdir -p "${build_dir}"
+mkdir -p "${output_dir}"
+
+# Convert relative paths to absolute (before changing to repo_root)
+original_cwd="$(pwd)"
+if [[ -n "${module_path}" && "${module_path:0:1}" != "/" ]]; then
+  module_path="${original_cwd}/${module_path}"
+fi
+if [[ "${output_dir:0:1}" != "/" ]]; then
+  output_dir="${original_cwd}/${output_dir}"
+fi
+if [[ "${build_dir:0:1}" != "/" ]]; then
+  build_dir="${original_cwd}/${build_dir}"
+fi
+
+run() {
+  echo "[ios-bundle] $*"
+  "$@"
+}
+
+# --- iOS cross-compilation settings ---
+if [[ "${ios_simulator}" == "true" ]]; then
+  IOS_SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+  IOS_MIN_VERSION="17.0"
+  IOS_ARCH="arm64"
+  IOS_TRIPLE="arm64-apple-ios${IOS_MIN_VERSION}-simulator"
+else
+  IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+  IOS_MIN_VERSION="17.0"
+  IOS_ARCH="arm64"
+  IOS_TRIPLE="arm64-apple-ios${IOS_MIN_VERSION}"
+fi
+
+echo "[ios-bundle] iOS SDK: ${IOS_SDK}"
+echo "[ios-bundle] Target: ${IOS_TRIPLE}"
+if [[ "${jit_mode}" == "true" ]]; then
+  echo "[ios-bundle] Mode: JIT (remote compile server)"
+fi
+echo ""
+
+# --- Detect native jank compiler ---
+native_jank="${native_build_dir}/jank"
+
+if [[ ! -x "${native_jank}" ]]; then
+  error "Native jank compiler not found: ${native_jank}"
+  echo "       Build the native compiler first with ./bin/compile" >&2
+  exit 1
+fi
+
+echo "[ios-bundle] Native jank: ${native_jank}"
+
+# --- Helper function to regenerate a core library if needed ---
+regenerate_core_lib() {
+  local lib_name="$1"
+  local cpp_file="$2"
+  local jank_source_path="$3"
+
+  local need_regen=false
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_regen=true
+    echo "[ios-bundle] Forcing ${lib_name} regeneration (--force-regenerate)..."
+  elif [[ ! -f "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[ios-bundle] ${lib_name} C++ doesn't exist, generating..."
+  elif [[ "${native_jank}" -nt "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[ios-bundle] Native jank newer than ${lib_name}, regenerating..."
+  elif [[ -f "${jank_source_path}" && "${jank_source_path}" -nt "${cpp_file}" ]]; then
+    need_regen=true
+    echo "[ios-bundle] ${lib_name} source changed, regenerating..."
+  fi
+
+  if [[ "${need_regen}" == "true" ]]; then
+    echo "[ios-bundle] Regenerating ${lib_name} from ${jank_source_path}..."
+    rm -f "${cpp_file}"
+    if "${native_jank}" run \
+      --codegen wasm-aot \
+      --module-path src/jank \
+      --save-cpp \
+      --save-cpp-path "${cpp_file}" \
+      "${jank_source_path}" 2>&1; then
+      echo "[ios-bundle] ${lib_name} regeneration successful!"
+      return 0
+    else
+      error "${lib_name} regeneration failed!"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# --- Generate core libraries ---
+compiled_objects=()
+
+pushd "${repo_root}" >/dev/null
+
+# Regenerate clojure.core if needed
+clojure_core_cpp="${output_dir}/clojure_core_generated.cpp"
+clojure_core_jank="${repo_root}/src/jank/clojure/core.jank"
+if [[ -f "${clojure_core_jank}" ]]; then
+  regenerate_core_lib "clojure.core" "${clojure_core_cpp}" "${clojure_core_jank}"
+fi
+
+if [[ -f "${clojure_core_cpp}" ]]; then
+  echo "[ios-bundle] Found pre-compiled clojure.core: ${clojure_core_cpp}"
+  compiled_objects+=("${clojure_core_cpp}")
+else
+  echo "[ios-bundle] WARNING: clojure.core not pre-compiled"
+fi
+
+# Regenerate clojure.set if needed
+clojure_set_cpp="${output_dir}/clojure_set_generated.cpp"
+clojure_set_jank="${repo_root}/src/jank/clojure/set.jank"
+if [[ -f "${clojure_set_jank}" ]]; then
+  regenerate_core_lib "clojure.set" "${clojure_set_cpp}" "${clojure_set_jank}"
+fi
+
+if [[ -f "${clojure_set_cpp}" ]]; then
+  echo "[ios-bundle] Found pre-compiled clojure.set: ${clojure_set_cpp}"
+  compiled_objects+=("${clojure_set_cpp}")
+fi
+
+# Regenerate clojure.string if needed
+clojure_string_cpp="${output_dir}/clojure_string_generated.cpp"
+clojure_string_jank="${repo_root}/src/jank/clojure/string.jank"
+if [[ -f "${clojure_string_jank}" ]]; then
+  regenerate_core_lib "clojure.string" "${clojure_string_cpp}" "${clojure_string_jank}"
+fi
+
+if [[ -f "${clojure_string_cpp}" ]]; then
+  echo "[ios-bundle] Found pre-compiled clojure.string: ${clojure_string_cpp}"
+  compiled_objects+=("${clojure_string_cpp}")
+fi
+
+# Regenerate clojure.walk if needed
+clojure_walk_cpp="${output_dir}/clojure_walk_generated.cpp"
+clojure_walk_jank="${repo_root}/src/jank/clojure/walk.jank"
+if [[ -f "${clojure_walk_jank}" ]]; then
+  regenerate_core_lib "clojure.walk" "${clojure_walk_cpp}" "${clojure_walk_jank}"
+fi
+
+if [[ -f "${clojure_walk_cpp}" ]]; then
+  echo "[ios-bundle] Found pre-compiled clojure.walk: ${clojure_walk_cpp}"
+  compiled_objects+=("${clojure_walk_cpp}")
+fi
+
+# Regenerate clojure.template if needed
+clojure_template_cpp="${output_dir}/clojure_template_generated.cpp"
+clojure_template_jank="${repo_root}/src/jank/clojure/template.jank"
+if [[ -f "${clojure_template_jank}" ]]; then
+  regenerate_core_lib "clojure.template" "${clojure_template_cpp}" "${clojure_template_jank}"
+fi
+
+if [[ -f "${clojure_template_cpp}" ]]; then
+  echo "[ios-bundle] Found pre-compiled clojure.template: ${clojure_template_cpp}"
+  compiled_objects+=("${clojure_template_cpp}")
+fi
+
+# Regenerate clojure.test if needed
+clojure_test_cpp="${output_dir}/clojure_test_generated.cpp"
+clojure_test_jank="${repo_root}/src/jank/clojure/test.jank"
+if [[ -f "${clojure_test_jank}" ]]; then
+  regenerate_core_lib "clojure.test" "${clojure_test_cpp}" "${clojure_test_jank}"
+fi
+
+if [[ -f "${clojure_test_cpp}" ]]; then
+  echo "[ios-bundle] Found pre-compiled clojure.test: ${clojure_test_cpp}"
+  compiled_objects+=("${clojure_test_cpp}")
+fi
+
+# --- Compile user jank source if provided ---
+if [[ -n "${jank_source}" ]]; then
+  if [[ ! -f "${jank_source}" ]]; then
+    error "jank source file not found: ${jank_source}"
+    exit 1
+  fi
+
+  echo "[ios-bundle] Compiling jank source: ${jank_source}"
+
+  jank_source_abs="$(cd "$(dirname "${jank_source}")" && pwd)/$(basename "${jank_source}")"
+  jank_source_dir="$(dirname "${jank_source_abs}")"
+  module_name="$(basename "${jank_source}" .jank)"
+  jank_module_name="${module_name//_/-}"
+
+  cpp_output="${output_dir}/${module_name}_generated.cpp"
+
+  # Check if we need to regenerate C++
+  need_regenerate=false
+  if [[ "${force_regenerate}" == "true" ]]; then
+    need_regenerate=true
+  elif [[ ! -f "${cpp_output}" ]]; then
+    need_regenerate=true
+  elif [[ "${jank_source}" -nt "${cpp_output}" ]]; then
+    need_regenerate=true
+  elif [[ "${native_jank}" -nt "${cpp_output}" ]]; then
+    need_regenerate=true
+  fi
+
+  if [[ "${need_regenerate}" == "true" ]]; then
+    rm -f "${cpp_output}"
+
+    jank_cmd=("${native_jank}")
+
+    # Add include paths
+    if [[ ${#extra_include_paths[@]} -gt 0 ]]; then
+      for inc_path in "${extra_include_paths[@]}"; do
+        if [[ "${inc_path:0:1}" != "/" ]]; then
+          inc_path="$(cd "${inc_path}" 2>/dev/null && pwd || echo "${inc_path}")"
+        fi
+        jank_cmd+=(-I "${inc_path}")
+      done
+    fi
+
+    # Add native object files
+    if [[ ${#native_obj_files[@]} -gt 0 ]]; then
+      for obj_file in "${native_obj_files[@]}"; do
+        if [[ "${obj_file:0:1}" != "/" ]]; then
+          obj_file="$(cd "$(dirname "${obj_file}")" 2>/dev/null && pwd)/$(basename "${obj_file}")"
+        fi
+        jank_cmd+=(--obj "${obj_file}")
+      done
+    fi
+
+    # Add native library directories
+    if [[ ${#native_lib_dirs[@]} -gt 0 ]]; then
+      for lib_dir in "${native_lib_dirs[@]}"; do
+        if [[ "${lib_dir:0:1}" != "/" ]]; then
+          lib_dir="$(cd "${lib_dir}" 2>/dev/null && pwd || echo "${lib_dir}")"
+        fi
+        jank_cmd+=(-L "${lib_dir}")
+      done
+    fi
+
+    # Add native libraries
+    if [[ ${#native_libs[@]} -gt 0 ]]; then
+      for lib in "${native_libs[@]}"; do
+        jank_cmd+=(--jit-lib "${lib}")
+      done
+    fi
+
+    jank_cmd+=(
+      --module-path "${jank_source_dir}"
+      --codegen wasm-aot
+      --save-cpp
+      --save-cpp-path "${cpp_output}"
+      compile-module
+      "${jank_module_name}"
+    )
+
+    if [[ "${verbose}" == "true" ]]; then
+      echo "[ios-bundle] Running: ${jank_cmd[@]}"
+    fi
+
+    if "${jank_cmd[@]}" 2>&1; then
+      echo "[ios-bundle] Generated: ${cpp_output}"
+    else
+      error "Failed to generate C++ from ${jank_source}"
+      exit 1
+    fi
+  else
+    echo "[ios-bundle] Using cached C++: ${cpp_output}"
+  fi
+
+  compiled_objects+=("${cpp_output}")
+fi
+
+# --- JIT-only workflow: generate jank_aot_init.cpp for core libs + nREPL server ---
+jit_only_objects=()
+if [[ "${jit_mode}" == "true" && -z "${entry_module}" ]]; then
+  echo ""
+  echo "[ios-bundle] JIT-only workflow: generating jank_aot_init.cpp with nREPL server..."
+  echo ""
+
+  # Create directories for generated files
+  generated_dir="${output_dir}/generated"
+  obj_dir="${output_dir}/obj"
+  mkdir -p "${generated_dir}"
+  mkdir -p "${obj_dir}"
+
+  # Also compile jank.nrepl-server.server for JIT mode
+  # This is required because app namespaces may require jank.nrepl-server.server
+  nrepl_server_cpp="${generated_dir}/jank_nrepl_server_server_generated.cpp"
+  nrepl_server_jank="${repo_root}/src/jank/jank/nrepl_server/server.jank"
+  if [[ -f "${nrepl_server_jank}" ]]; then
+    need_regen=false
+    if [[ "${force_regenerate}" == "true" ]]; then
+      need_regen=true
+    elif [[ ! -f "${nrepl_server_cpp}" ]]; then
+      need_regen=true
+    elif [[ "${native_jank}" -nt "${nrepl_server_cpp}" ]]; then
+      need_regen=true
+    elif [[ "${nrepl_server_jank}" -nt "${nrepl_server_cpp}" ]]; then
+      need_regen=true
+    fi
+
+    if [[ "${need_regen}" == "true" ]]; then
+      echo "[ios-bundle] Generating jank.nrepl-server.server C++..."
+      rm -f "${nrepl_server_cpp}"
+      if "${native_jank}" run \
+        --codegen wasm-aot \
+        --module-path src/jank \
+        --save-cpp \
+        --save-cpp-path "${nrepl_server_cpp}" \
+        "${nrepl_server_jank}" 2>&1; then
+        echo "[ios-bundle] jank.nrepl-server.server generated successfully!"
+      else
+        error "jank.nrepl-server.server generation failed!"
+        exit 1
+      fi
+    else
+      echo "[ios-bundle] Using cached jank.nrepl-server.server C++..."
+    fi
+    jit_only_objects+=("${nrepl_server_cpp}")
+  fi
+
+  # Generate jank_aot_init.cpp for JIT mode (core libs + nREPL server)
+  init_file="${generated_dir}/jank_aot_init.cpp"
+
+  cat > "${init_file}" << 'JITEOF'
+// Auto-generated by ios-bundle --jit
+// JIT-only mode: loads core libs + nREPL server module
+// App namespaces are loaded via remote compile server at runtime
+
+#include <iostream>
+
+// Core library load functions
+extern "C" void jank_load_clojure_core_native();
+extern "C" void jank_load_core();
+extern "C" void jank_load_string();
+extern "C" void jank_load_set();
+extern "C" void jank_load_walk();
+extern "C" void jank_load_template__();
+extern "C" void jank_load_test();
+
+// nREPL native module loader (required for JIT mode)
+extern "C" void jank_load_jank_nrepl_server_asio();
+
+// Compiler native module (native-source, etc.)
+extern "C" void jank_load_jank_compiler_native();
+
+// nREPL server module (jank code that wraps the native module)
+// Note: jank uses only the last segment for function names, so jank.nrepl-server.server -> jank_load_server
+extern "C" void jank_load_server();
+
+extern "C" void jank_module_set_loaded(const char* module);
+
+// JIT mode entry point - loads core libs and nREPL support
+// App namespaces will be loaded via remote compile server
+extern "C" void jank_aot_init() {
+    std::cout << "[jank] JIT mode: Loading core libraries..." << std::endl;
+
+    // Core libraries
+    jank_load_clojure_core_native();
+    jank_load_core();
+    jank_load_string();
+    jank_load_set();
+    jank_load_walk();
+    jank_load_template__();
+    jank_load_test();
+
+    // Mark core modules as loaded
+    jank_module_set_loaded("clojure.core");
+    jank_module_set_loaded("clojure.string");
+    jank_module_set_loaded("clojure.set");
+    jank_module_set_loaded("clojure.walk");
+    jank_module_set_loaded("clojure.template");
+    jank_module_set_loaded("clojure.test");
+
+    // Load nREPL native module (required for nREPL server)
+    std::cout << "[jank] Loading nREPL native module..." << std::endl;
+    jank_load_jank_nrepl_server_asio();
+    jank_module_set_loaded("jank.nrepl-server.asio");
+
+    // Load compiler native module (native-source, etc.)
+    std::cout << "[jank] Loading compiler native module..." << std::endl;
+    jank_load_jank_compiler_native();
+
+    // Load nREPL server module (jank code)
+    std::cout << "[jank] Loading nREPL server module..." << std::endl;
+    jank_load_server();
+    jank_module_set_loaded("jank.nrepl-server.server");
+
+    std::cout << "[jank] JIT mode ready! App namespaces loaded via remote compile server." << std::endl;
+}
+JITEOF
+
+  echo "[ios-bundle] Generated: ${init_file}"
+  jit_only_objects+=("${init_file}")
+fi
+
+# --- Entry module workflow: compile entire app with all dependencies ---
+entry_module_objects=()
+if [[ -n "${entry_module}" ]]; then
+  echo ""
+  echo "[ios-bundle] Entry module workflow: ${entry_module}"
+  echo ""
+
+  if [[ -z "${module_path}" ]]; then
+    error "--module-path is required when using --entry-module"
+    exit 1
+  fi
+
+  # Create directories for generated files
+  generated_dir="${output_dir}/generated"
+  obj_dir="${output_dir}/obj"
+  mkdir -p "${generated_dir}"
+  mkdir -p "${obj_dir}"
+
+  # Build jank flags for module compilation
+  jank_flags=(
+    --module-path "${module_path}"
+    --codegen wasm-aot
+    --save-cpp
+  )
+
+  # Add include paths (use original_cwd for relative paths since we're in repo_root now)
+  for inc_path in "${extra_include_paths[@]}"; do
+    if [[ "${inc_path:0:1}" != "/" ]]; then
+      inc_path="${original_cwd}/${inc_path}"
+    fi
+    jank_flags+=(-I "${inc_path}")
+  done
+
+  # Add library directories (use original_cwd for relative paths)
+  for lib_dir in "${native_lib_dirs[@]}"; do
+    if [[ "${lib_dir:0:1}" != "/" ]]; then
+      lib_dir="${original_cwd}/${lib_dir}"
+    fi
+    jank_flags+=(-L "${lib_dir}")
+  done
+
+  # Add native libraries for JIT symbol resolution
+  for lib in "${native_libs[@]}"; do
+    jank_flags+=(--jit-lib "${lib}")
+  done
+
+  # Discover all modules via --list-modules
+  echo "[ios-bundle] Discovering modules from ${entry_module}..."
+  echo "[ios-bundle] Running: ${native_jank} ${jank_flags[@]} compile-module --list-modules ${entry_module}"
+
+  # Capture output and exit code separately so errors aren't swallowed by grep
+  module_output=""
+  if ! module_output=$("${native_jank}" "${jank_flags[@]}" compile-module --list-modules "${entry_module}"); then
+    echo "[ios-bundle] ERROR: Module discovery failed!"
+    exit 1
+  fi
+  all_modules=$(echo "${module_output}" | grep -v "^\[jank" | grep -v "^WARNING:")
+
+  # Filter to only include user modules (exclude clojure.* which are pre-compiled)
+  user_modules=()
+  while IFS= read -r module; do
+    if [[ -n "${module}" && ! "${module}" =~ ^clojure\. ]]; then
+      user_modules+=("${module}")
+    fi
+  done <<< "${all_modules}"
+
+  echo "[ios-bundle] Modules to compile (${#user_modules[@]} total):"
+  for module in "${user_modules[@]}"; do
+    echo "  - ${module}"
+  done
+  echo ""
+
+  # Compile each module to C++
+  echo "[ios-bundle] Generating C++ from modules..."
+  for module in "${user_modules[@]}"; do
+    # Replace both . and - with underscores for valid filenames that match function names
+    module_filename=$(echo "${module}" | tr '.-' '__')
+    cpp_output="${generated_dir}/${module_filename}_generated.cpp"
+
+    # Convert module name to source path (e.g., vybe.sdf.ios -> src/vybe/sdf/ios.jank)
+    source_path="${module_path}/$(echo "${module}" | tr '.' '/').jank"
+
+    # Check if we need to regenerate
+    need_regenerate=false
+    if [[ "${force_regenerate}" == "true" ]]; then
+      need_regenerate=true
+    elif [[ ! -f "${cpp_output}" ]]; then
+      need_regenerate=true
+    elif [[ -f "${source_path}" && "${source_path}" -nt "${cpp_output}" ]]; then
+      need_regenerate=true
+    elif [[ "${native_jank}" -nt "${cpp_output}" ]]; then
+      need_regenerate=true
+    fi
+
+    if [[ "${need_regenerate}" == "true" ]]; then
+      echo "[ios-bundle] Compiling ${module}..."
+      if "${native_jank}" "${jank_flags[@]}" --save-cpp-path "${cpp_output}" compile-module "${module}" 2>&1 | tail -3; then
+        if [[ -f "${cpp_output}" ]]; then
+          echo "[ios-bundle]   -> $(wc -l < "${cpp_output}") lines"
+        else
+          error "Failed to generate C++ for ${module}"
+          exit 1
+        fi
+      else
+        error "jank compilation failed for ${module}"
+        exit 1
+      fi
+    else
+      echo "[ios-bundle] Using cached: ${module}"
+    fi
+
+    entry_module_objects+=("${cpp_output}")
+  done
+
+  # Add missing includes to generated files (workaround until codegen is fixed)
+  echo ""
+  echo "[ios-bundle] Patching generated files (adding missing includes)..."
+  for cppfile in "${generated_dir}"/*.cpp; do
+    if ! grep -q "opaque_box.hpp" "${cppfile}"; then
+      sed -i '' 's|#include <jank/runtime/core/meta.hpp>|#include <jank/runtime/core/meta.hpp>\
+#include <jank/runtime/obj/opaque_box.hpp>\
+#include <jank/c_api.h>|' "${cppfile}"
+    fi
+  done
+
+  # Generate jank_aot_init.cpp
+  echo ""
+  echo "[ios-bundle] Generating jank_aot_init.cpp..."
+  init_file="${generated_dir}/jank_aot_init.cpp"
+
+  cat > "${init_file}" << 'HEADER'
+// Auto-generated by ios-bundle
+// DO NOT EDIT - This file is regenerated on each build
+
+#include <iostream>
+
+// Core library load functions
+extern "C" void jank_load_clojure_core_native();
+extern "C" void jank_load_core();
+extern "C" void jank_load_string();
+extern "C" void jank_load_set();
+extern "C" void jank_load_walk();
+extern "C" void jank_load_template__();  // double underscore because 'template' is C++ reserved word
+extern "C" void jank_load_test();
+
+HEADER
+
+  # Add extern declarations for application modules
+  for module in "${user_modules[@]}"; do
+    # Replace both . and - with underscores for valid C++ identifiers
+    func_name="jank_load_$(echo "${module}" | tr '.-' '__')"
+    echo "extern \"C\" void ${func_name}();" >> "${init_file}"
+  done
+
+  cat >> "${init_file}" << 'MIDDLE'
+
+// nREPL native module loader (only for JIT mode)
+#if defined(JANK_IOS_JIT)
+extern "C" void jank_load_jank_nrepl_server_asio();
+#endif
+
+extern "C" void jank_module_set_loaded(const char* module);
+
+// Single entry point - loads all modules in correct order
+extern "C" void jank_aot_init() {
+    std::cout << "[jank] Loading core libraries..." << std::endl;
+
+    // Core libraries (always needed)
+    jank_load_clojure_core_native();
+    jank_load_core();
+    jank_load_string();
+    jank_load_set();
+    jank_load_walk();
+    jank_load_template__();  // double underscore because 'template' is C++ reserved word
+    jank_load_test();
+
+#if defined(JANK_IOS_JIT)
+    // Load nREPL native module AFTER core libs but BEFORE user modules
+    // This is required because jank.nrepl-server.server depends on it
+    std::cout << "[jank] Loading nREPL native module..." << std::endl;
+    jank_load_jank_nrepl_server_asio();
+    jank_module_set_loaded("jank.nrepl-server.asio");
+#endif
+
+    std::cout << "[jank] Loading application modules..." << std::endl;
+
+MIDDLE
+
+  # Add load calls for application modules
+  for module in "${user_modules[@]}"; do
+    # Replace both . and - with underscores for valid C++ identifiers
+    func_name="jank_load_$(echo "${module}" | tr '.-' '__')"
+    echo "    std::cout << \"[jank] Loading ${module}...\" << std::endl;" >> "${init_file}"
+    echo "    ${func_name}();" >> "${init_file}"
+    echo "    jank_module_set_loaded(\"${module}\");" >> "${init_file}"
+  done
+
+  cat >> "${init_file}" << 'FOOTER'
+
+    // Also mark core modules as loaded
+    jank_module_set_loaded("clojure.core");
+    jank_module_set_loaded("clojure.string");
+    jank_module_set_loaded("clojure.set");
+    jank_module_set_loaded("clojure.walk");
+    jank_module_set_loaded("clojure.template");
+    jank_module_set_loaded("clojure.test");
+
+    std::cout << "[jank] All modules loaded successfully!" << std::endl;
+}
+FOOTER
+
+  echo "[ios-bundle] Generated: ${init_file}"
+  entry_module_objects+=("${init_file}")
+fi
+
+# --- Build jank runtime for iOS if needed ---
+if [[ "${skip_build}" != "true" ]]; then
+  echo ""
+  echo "[ios-bundle] Building jank runtime for iOS..."
+  # Pass the correct target (simulator or device) and JIT mode to build-ios
+  jit_arg=""
+  if [[ "${jit_mode}" == "true" ]]; then
+    jit_arg="jit"
+  fi
+  if [[ "${ios_simulator}" == "true" ]]; then
+    run "${repo_root}/bin/build-ios" "${build_dir}" Release simulator ${jit_arg}
+  else
+    run "${repo_root}/bin/build-ios" "${build_dir}" Release device ${jit_arg}
+  fi
+fi
+
+# --- Cross-compile generated C++ for iOS ---
+echo ""
+echo "[ios-bundle] Cross-compiling generated C++ for iOS..."
+
+# iOS compiler flags
+# Note: -Wno-c++11-narrowing needed because jank codegen produces narrowing in some places
+IOS_CXXFLAGS="-std=c++20 -O2 -fPIC -Wno-c++11-narrowing"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -target $IOS_TRIPLE -isysroot $IOS_SDK"
+
+# jank include paths
+IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/include/cpp"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/immer"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/folly"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/bpptree/include"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/cli11/include"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/boost-preprocessor/include"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/boost-multiprecision/include"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -I${repo_root}/third-party/bdwgc/include"
+
+# Add extra include paths (use original_cwd for relative paths since we're in repo_root)
+if [[ ${#extra_include_paths[@]} -gt 0 ]]; then
+  for inc_path in "${extra_include_paths[@]}"; do
+    if [[ "${inc_path:0:1}" != "/" ]]; then
+      inc_path="${original_cwd}/${inc_path}"
+    fi
+    IOS_CXXFLAGS="$IOS_CXXFLAGS -I${inc_path}"
+  done
+fi
+
+# Define macros for iOS (same as WASM to reuse code paths)
+IOS_CXXFLAGS="$IOS_CXXFLAGS -DJANK_TARGET_IOS=1"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -DJANK_TARGET_WASM=1"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -DJANK_TARGET_EMSCRIPTEN=1"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -DIMMER_HAS_LIBGC=1"
+IOS_CXXFLAGS="$IOS_CXXFLAGS -DIMMER_TAGGED_NODE=0"
+
+# JIT mode define (enables remote compile server support)
+if [[ "${jit_mode}" == "true" ]]; then
+  IOS_CXXFLAGS="$IOS_CXXFLAGS -DJANK_IOS_JIT=1"
+fi
+
+# Compile each C++ file (core libraries)
+compiled_object_files=()
+for cpp_file in "${compiled_objects[@]}"; do
+  if [[ -f "${cpp_file}" ]]; then
+    obj_file="${cpp_file%.cpp}.o"
+
+    # Check if we need to recompile
+    need_recompile=false
+    if [[ "${force_regenerate}" == "true" ]]; then
+      need_recompile=true
+    elif [[ ! -f "${obj_file}" ]]; then
+      need_recompile=true
+    elif [[ "${cpp_file}" -nt "${obj_file}" ]]; then
+      need_recompile=true
+    fi
+
+    if [[ "${need_recompile}" == "true" ]]; then
+      echo "[ios-bundle] Compiling ${cpp_file}..."
+      clang++ $IOS_CXXFLAGS -c "${cpp_file}" -o "${obj_file}"
+    else
+      echo "[ios-bundle] Using cached: ${obj_file}"
+    fi
+
+    compiled_object_files+=("${obj_file}")
+  fi
+done
+
+# Compile entry module C++ files (user modules + jank_aot_init.cpp)
+entry_module_object_files=()
+if [[ ${#entry_module_objects[@]} -gt 0 ]]; then
+  echo ""
+  echo "[ios-bundle] Cross-compiling entry module files..."
+  for cpp_file in "${entry_module_objects[@]}"; do
+    if [[ -f "${cpp_file}" ]]; then
+      # Put .o files in obj_dir for entry module workflow
+      basename_cpp=$(basename "${cpp_file}")
+      obj_file="${obj_dir}/${basename_cpp%.cpp}.o"
+
+      # Check if we need to recompile
+      need_recompile=false
+      if [[ "${force_regenerate}" == "true" ]]; then
+        need_recompile=true
+      elif [[ ! -f "${obj_file}" ]]; then
+        need_recompile=true
+      elif [[ "${cpp_file}" -nt "${obj_file}" ]]; then
+        need_recompile=true
+      fi
+
+      if [[ "${need_recompile}" == "true" ]]; then
+        echo "[ios-bundle] Compiling $(basename "${cpp_file}")..."
+        clang++ $IOS_CXXFLAGS -c "${cpp_file}" -o "${obj_file}"
+        echo "[ios-bundle]   -> $(ls -lh "${obj_file}" | awk '{print $5}')"
+      else
+        echo "[ios-bundle] Using cached: $(basename "${obj_file}")"
+      fi
+
+      entry_module_object_files+=("${obj_file}")
+    fi
+  done
+fi
+
+# Compile JIT-only C++ files (jank_aot_init.cpp for JIT mode)
+jit_only_object_files=()
+if [[ ${#jit_only_objects[@]} -gt 0 ]]; then
+  echo ""
+  echo "[ios-bundle] Cross-compiling JIT-only files..."
+  for cpp_file in "${jit_only_objects[@]}"; do
+    if [[ -f "${cpp_file}" ]]; then
+      basename_cpp=$(basename "${cpp_file}")
+      obj_file="${obj_dir}/${basename_cpp%.cpp}.o"
+
+      # Always recompile jank_aot_init.cpp (it's small and generated each run)
+      echo "[ios-bundle] Compiling $(basename "${cpp_file}")..."
+      clang++ $IOS_CXXFLAGS -c "${cpp_file}" -o "${obj_file}"
+      echo "[ios-bundle]   -> $(ls -lh "${obj_file}" | awk '{print $5}')"
+
+      jit_only_object_files+=("${obj_file}")
+    fi
+  done
+fi
+
+popd >/dev/null
+
+# --- Copy jank libraries and create static library (for entry-module workflow) ---
+if [[ -n "${entry_module}" ]]; then
+  echo ""
+  echo "[ios-bundle] Copying jank libraries and core module objects..."
+
+  # Copy jank static libraries to output_dir
+  cp "${build_dir}/libjank.a" "${output_dir}/"
+  cp "${build_dir}/libjankzip.a" "${output_dir}/"
+  cp "${build_dir}/third-party/bdwgc/libgc.a" "${output_dir}/"
+
+  # Copy core library object files to obj_dir
+  # These were compiled earlier in the script to output_dir (not build_dir)
+  for core_obj in clojure_core_generated.o clojure_set_generated.o clojure_string_generated.o clojure_walk_generated.o clojure_template_generated.o clojure_test_generated.o; do
+    if [[ -f "${output_dir}/${core_obj}" ]]; then
+      cp "${output_dir}/${core_obj}" "${obj_dir}/"
+    fi
+  done
+
+  # Create a single static library from ALL .o files (core + user modules + init)
+  echo ""
+  echo "[ios-bundle] Creating ${output_library} from all object files..."
+  ar rcs "${output_dir}/${output_library}" "${obj_dir}"/*.o
+  echo "[ios-bundle]   -> $(ls -lh "${output_dir}/${output_library}" | awk '{print $5}')"
+
+  # Summary for entry-module workflow
+  echo ""
+  echo "[ios-bundle] Build complete!"
+  echo ""
+  echo "Output libraries (in ${output_dir}/):"
+  echo "  - libjank.a"
+  echo "  - libjankzip.a"
+  echo "  - libgc.a"
+  echo "  - ${output_library} (all AOT-compiled modules)"
+  echo ""
+  echo "Object files (in ${obj_dir}/):"
+  ls -1 "${obj_dir}"/*.o 2>/dev/null | while read obj; do
+    echo "  - $(basename "${obj}")"
+  done
+  echo ""
+  echo "To use in Xcode:"
+  echo "  1. Add LIBRARY_SEARCH_PATHS: ${output_dir}"
+  echo "  2. Add OTHER_LDFLAGS: -ljank -ljankzip -lgc -l$(basename "${output_library}" .a | sed 's/^lib//')"
+  echo "  3. Call jank_init() then jank_aot_init() from your iOS code"
+elif [[ "${jit_mode}" == "true" ]]; then
+  # JIT-only workflow - create library with core libs + jank_aot_init.o
+  echo ""
+  echo "[ios-bundle] JIT mode: Copying jank libraries and core module objects..."
+
+  # Copy jank static libraries to output_dir
+  cp "${build_dir}/libjank.a" "${output_dir}/"
+  cp "${build_dir}/libjankzip.a" "${output_dir}/"
+  cp "${build_dir}/third-party/bdwgc/libgc.a" "${output_dir}/"
+
+  # Copy core library object files to obj_dir
+  for core_obj in clojure_core_generated.o clojure_set_generated.o clojure_string_generated.o clojure_walk_generated.o clojure_template_generated.o clojure_test_generated.o; do
+    if [[ -f "${output_dir}/${core_obj}" ]]; then
+      cp "${output_dir}/${core_obj}" "${obj_dir}/"
+    fi
+  done
+
+  # Create static library from core libs + jank_aot_init.o
+  output_library="libjank_aot.a"
+  echo ""
+  echo "[ios-bundle] Creating ${output_library} from core + JIT init..."
+  ar rcs "${output_dir}/${output_library}" "${obj_dir}"/*.o
+  echo "[ios-bundle]   -> $(ls -lh "${output_dir}/${output_library}" | awk '{print $5}')"
+
+  # Summary for JIT mode
+  echo ""
+  echo "[ios-bundle] JIT mode build complete!"
+  echo ""
+  echo "Output libraries (in ${output_dir}/):"
+  echo "  - libjank.a"
+  echo "  - libjankzip.a"
+  echo "  - libgc.a"
+  echo "  - ${output_library} (core libs + JIT init)"
+  echo ""
+  echo "Object files (in ${obj_dir}/):"
+  ls -1 "${obj_dir}"/*.o 2>/dev/null | while read obj; do
+    echo "  - $(basename "${obj}")"
+  done
+  echo ""
+  echo "To use in Xcode for JIT mode:"
+  echo "  1. Add LIBRARY_SEARCH_PATHS: ${output_dir}"
+  echo "  2. Add OTHER_LDFLAGS: -ljank -ljankzip -lgc -ljank_aot"
+  echo "  3. Call jank_init() then jank_aot_init() from your iOS code"
+  echo "  4. Configure remote compile server before loading app namespaces:"
+  echo "       jank::compile_server::configure_remote_compile(\"host\", 5570);"
+  echo "       jank::compile_server::connect_remote_compile();"
+  echo ""
+  echo "NOTE: App namespaces are NOT bundled - they will be loaded from"
+  echo "      the remote compile server (macOS) at runtime."
+else
+  # Summary for single-file or core-libs-only workflow
+  echo ""
+  echo "[ios-bundle] Build complete!"
+  echo ""
+  echo "Generated libraries:"
+  echo "  - ${build_dir}/libjank.a"
+  echo "  - ${build_dir}/libjankzip.a"
+  echo "  - ${build_dir}/third-party/bdwgc/libgc.a"
+  echo ""
+  echo "Generated object files:"
+  for obj in "${compiled_object_files[@]}"; do
+    echo "  - ${obj}"
+  done
+  echo ""
+  echo "To use in Xcode:"
+  echo "  1. Add the .a libraries to your iOS project"
+  echo "  2. Add the .o object files to your link phase"
+  echo "  3. Add include paths: ${repo_root}/include/cpp"
+  echo "  4. Call jank_init() and jank_load_* functions from your iOS code"
+fi

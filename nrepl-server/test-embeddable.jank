@@ -1,0 +1,18 @@
+(ns test-embeddable
+  (:require [jank.nrepl-server.server :as server]))
+
+(println "Testing embeddable nREPL server!")
+
+;; Start the server
+(def my-server (server/start-server {:port 5557 :bind "127.0.0.1"}))
+
+(println "Server started!")
+(println "Server port:" (server/server-port my-server))
+
+;; Let it run for a bit so we can connect
+(println "Server is running... (press Ctrl+C to stop)")
+(println "Try connecting with: lein repl :connect 5557")
+
+;; In a real application, you'd do your work here
+;; and stop the server when done:
+;; (server/stop-server my-server)

@@ -1,18 +1,31 @@
 #pragma once
 
 #include <jtl/ptr.hpp>
+#include <jtl/option.hpp>
 
 #include <jank/runtime/object.hpp>
+#include <jank/read/source.hpp>
 
 namespace jank::analyze
 {
   using local_frame_ptr = jtl::ptr<struct local_frame>;
+  using local_frame_ref = jtl::ref<struct local_frame>;
+  using local_binding_ref = jtl::ref<struct local_binding>;
 
   enum class expression_position : u8
   {
+    /* Used for function arguments, let bindings, and other places where the value is
+     * immediately consumed (not ignored). */
     value,
+    /* Used for the first form of a call. */
+    call,
+    /* Used for body forms within a `do` which are not the last. */
     statement,
-    tail
+    /* Used for the very last form of a function. */
+    tail,
+    /* Used when only types are permitted (cpp/cast, cpp/new, etc). Types are also viable
+     * in call position, in case we're calling a constructor. */
+    type
   };
 
   constexpr char const *expression_position_str(expression_position const pos)
@@ -21,10 +34,14 @@ namespace jank::analyze
     {
       case expression_position::value:
         return "value";
+      case expression_position::call:
+        return "call";
       case expression_position::statement:
         return "statement";
       case expression_position::tail:
         return "tail";
+      case expression_position::type:
+        return "type";
     }
     return "unknown";
   }
@@ -59,6 +76,7 @@ namespace jank::analyze
     cpp_type,
     cpp_value,
     cpp_cast,
+    cpp_unsafe_cast,
     cpp_call,
     cpp_constructor_call,
     cpp_member_call,
@@ -127,6 +145,8 @@ namespace jank::analyze
         return "cpp_value";
       case expression_kind::cpp_cast:
         return "cpp_cast";
+      case expression_kind::cpp_unsafe_cast:
+        return "cpp_unsafe_cast";
       case expression_kind::cpp_call:
         return "cpp_call";
       case expression_kind::cpp_constructor_call:
@@ -159,6 +179,11 @@ namespace jank::analyze
                expression_position position,
                local_frame_ptr frame,
                bool needs_box);
+    expression(expression_kind kind,
+               expression_position position,
+               local_frame_ptr frame,
+               bool needs_box,
+               read::source const &source);
     virtual ~expression() = default;
 
     virtual void propagate_position(expression_position const pos);
@@ -169,6 +194,7 @@ namespace jank::analyze
     expression_position position{};
     local_frame_ptr frame;
     bool needs_box{ true };
+    jtl::option<read::source> source;
   };
 
   using expression_ref = jtl::ref<expression>;
@@ -177,4 +203,27 @@ namespace jank::analyze
   /* Captures both expressions and things which inherit from expression. */
   template <typename T>
   concept expression_like = std::convertible_to<T *, expression *>;
+
+  /* Dynamic cast for expression types using kind field.
+   * Returns nullptr if the expression is not of the requested type.
+   * Use this instead of llvm::dyn_cast for jank expression types. */
+  template <expression_like T>
+  T *expr_dyn_cast(expression * const e)
+  {
+    if(e && e->kind == T::expr_kind)
+    {
+      return static_cast<T *>(e);
+    }
+    return nullptr;
+  }
+
+  template <expression_like T>
+  T const *expr_dyn_cast(expression const * const e)
+  {
+    if(e && e->kind == T::expr_kind)
+    {
+      return static_cast<T const *>(e);
+    }
+    return nullptr;
+  }
 }

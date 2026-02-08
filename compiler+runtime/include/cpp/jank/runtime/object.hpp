@@ -67,6 +67,7 @@ namespace jank::runtime
     native_function_wrapper,
     jit_function,
     jit_closure,
+    deferred_cpp_function,
     multi_function,
 
     native_pointer_wrapper,
@@ -75,6 +76,8 @@ namespace jank::runtime
     volatile_,
     reduced,
     delay,
+    arena,
+    future,
     ns,
 
     var,
@@ -89,6 +92,7 @@ namespace jank::runtime
     inst,
 
     opaque_box,
+    user_type,
   };
 
   [[gnu::visibility("default")]]
@@ -199,6 +203,8 @@ namespace jank::runtime
         return "jit_function";
       case object_type::jit_closure:
         return "jit_closure";
+      case object_type::deferred_cpp_function:
+        return "deferred_cpp_function";
       case object_type::multi_function:
         return "multi_function";
 
@@ -213,6 +219,10 @@ namespace jank::runtime
         return "reduced";
       case object_type::delay:
         return "delay";
+      case object_type::arena:
+        return "arena";
+      case object_type::future:
+        return "future";
       case object_type::ns:
         return "ns";
 
@@ -237,6 +247,8 @@ namespace jank::runtime
 
       case object_type::opaque_box:
         return "opaque_box";
+      case object_type::user_type:
+        return "user_type";
     }
     return "unknown";
   }

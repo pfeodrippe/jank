@@ -2,6 +2,8 @@
 
 #include <filesystem>
 
+#include <jank/util/folly_shim.hpp>
+
 #include <jtl/result.hpp>
 
 #include <jank/runtime/object.hpp>
@@ -14,6 +16,11 @@ namespace jank::runtime
 
 namespace jank::runtime::module
 {
+#ifdef JANK_IOS_JIT
+  /* Lookup a JIT symbol name from an address. Returns empty string if not found. */
+  std::string lookup_jit_symbol(uintptr_t addr);
+#endif
+
   enum class origin : u8
   {
     /* Regardless of which binaries are present, and how new they are,
@@ -161,25 +168,32 @@ namespace jank::runtime::module
     jtl::result<find_result, error_ref> find(jtl::immutable_string const &module, origin const ori);
 
     bool is_loaded(jtl::immutable_string const &module);
-    void set_is_loaded(jtl::immutable_string const &module);
+    void set_is_loaded(jtl::immutable_string const &module) const;
 
     jtl::result<void, error_ref> load(jtl::immutable_string const &module, origin const ori);
     jtl::result<void, error_ref>
     load_o(jtl::immutable_string const &module, file_entry const &entry) const;
     jtl::result<void, error_ref>
     load_cpp(jtl::immutable_string const &module, file_entry const &entry) const;
-    jtl::result<void, error_ref> load_jank(file_entry const &entry) const;
-    jtl::result<void, error_ref> load_cljc(file_entry const &entry) const;
+    jtl::result<void, error_ref>
+    load_jank(jtl::immutable_string const &module, file_entry const &entry) const;
+    jtl::result<void, error_ref>
+    load_cljc(jtl::immutable_string const &module, file_entry const &entry) const;
 
     /* This only adds a single path, so it's assumed there's no separator present. */
     void add_path(jtl::immutable_string const &path);
 
     object_ref to_runtime_data() const;
 
-    jtl::immutable_string paths;
-    /* TODO: These will need synchonization. */
-    /* This maps module strings to entries. Module strings are like fully qualified namespace
+    struct mutable_state
+    {
+      jtl::immutable_string paths;
+      /* This maps module strings to entries. Module strings are like fully qualified namespace
      * names. For example, `clojure.core`, `jank.compiler`, etc. */
-    native_unordered_map<jtl::immutable_string, entry> entries;
+      native_unordered_map<jtl::immutable_string, entry> entries;
+    };
+
+    /*** XXX: Everything here is thread-safe. ***/
+    folly::Synchronized<mutable_state> state;
   };
 }

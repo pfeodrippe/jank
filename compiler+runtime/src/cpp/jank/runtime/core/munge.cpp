@@ -1,4 +1,5 @@
 #include <regex>
+#include <cctype>
 
 #include <jank/runtime/core/munge.hpp>
 #include <jank/runtime/obj/persistent_string.hpp>
@@ -30,7 +31,7 @@ namespace jank::runtime
     {  ']', "_RBRACK_" },
     {  '(', "_LPAREN_" },
     {  ')', "_RPAREN_" },
-    {  '/',  "_SLASH_" },
+    {  '/',        "$" },
     { '\\', "_BSLASH_" },
     {  '?',  "_QMARK_" }
   };
@@ -53,7 +54,7 @@ namespace jank::runtime
     {  "_CIRCA_",  '@' },
     {  "_SHARP_",  '#' },
     {  "_CARET_",  '^' },
-    {  "_SLASH_",  '/' },
+    {        "$",  '/' },
     {   "_PERC_",  '%' },
     {   "_PLUS_",  '+' },
     {   "_BANG_",  '!' },
@@ -284,6 +285,13 @@ namespace jank::runtime
     if(cpp_keywords.contains(munged))
     {
       munged += "__";
+    }
+
+    /* C++ identifiers cannot start with a digit. Prefix with underscore if so.
+     * This commonly happens with UUIDs in iOS bundle paths. */
+    if(!munged.empty() && std::isdigit(static_cast<unsigned char>(munged[0])))
+    {
+      munged = "_" + munged;
     }
 
     return munged;

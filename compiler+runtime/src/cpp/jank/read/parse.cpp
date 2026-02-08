@@ -3,6 +3,7 @@
 #include <jank/read/parse.hpp>
 #include <jank/error/parse.hpp>
 #include <jank/util/escape.hpp>
+#include <jank/util/cli.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core.hpp>
@@ -14,11 +15,53 @@
 #include <jank/runtime/sequence_range.hpp>
 #include <jank/util/scope_exit.hpp>
 #include <jank/util/fmt.hpp>
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+  #include <jank/analyze/processor.hpp>
+#endif
 
 /* TODO: Make common symbol boxes once and reuse those. */
 namespace jank::read::parse
 {
   using namespace jank::runtime;
+
+  static bool is_utf8_char(jtl::immutable_string const &s)
+  {
+    if(s.size() == 1)
+    {
+      return static_cast<unsigned char>(s[0]) <= 0x7F;
+    }
+    else if(s.size() == 2)
+    {
+      auto const is_char0_utf8{ static_cast<unsigned char>(s[0]) >= 0xC0
+                                && static_cast<unsigned char>(s[0]) <= 0xDF };
+      auto const is_char1_utf8{ static_cast<unsigned char>(s[1]) >= 0x80
+                                && static_cast<unsigned char>(s[1]) <= 0xBF };
+      return is_char0_utf8 && is_char1_utf8;
+    }
+    else if(s.size() == 3)
+    {
+      auto const is_char0_utf8{ static_cast<unsigned char>(s[0]) >= 0xE0
+                                && static_cast<unsigned char>(s[0]) <= 0xEF };
+      auto const is_char1_utf8{ static_cast<unsigned char>(s[1]) >= 0x80
+                                && static_cast<unsigned char>(s[1]) <= 0xBF };
+      auto const is_char2_utf8{ static_cast<unsigned char>(s[2]) >= 0x80
+                                && static_cast<unsigned char>(s[2]) <= 0xBF };
+      return is_char0_utf8 && is_char1_utf8 && is_char2_utf8;
+    }
+    else if(s.size() == 4)
+    {
+      auto const is_char0_utf8{ static_cast<unsigned char>(s[0]) >= 0xF0
+                                && static_cast<unsigned char>(s[0]) <= 0xF7 };
+      auto const is_char1_utf8{ static_cast<unsigned char>(s[1]) >= 0x80
+                                && static_cast<unsigned char>(s[1]) <= 0xBF };
+      auto const is_char2_utf8{ static_cast<unsigned char>(s[2]) >= 0x80
+                                && static_cast<unsigned char>(s[2]) <= 0xBF };
+      auto const is_char3_utf8{ static_cast<unsigned char>(s[3]) >= 0x80
+                                && static_cast<unsigned char>(s[3]) <= 0xBF };
+      return is_char0_utf8 && is_char1_utf8 && is_char2_utf8 && is_char3_utf8;
+    }
+    return false;
+  }
 
   jtl::result<jtl::immutable_string, char_parse_error>
   parse_character_in_base(jtl::immutable_string const &char_literal, int const base)
@@ -493,6 +536,8 @@ namespace jank::read::parse
     ++token_current;
     auto const sv(std::get<jtl::immutable_string_view>(start_token.data));
     auto const character(get_char_from_literal(sv));
+    static constexpr auto const min_unicode_str_length{ 3 };
+    static constexpr auto const max_unicode_str_length{ 5 };
 
     if(character.is_none())
     {
@@ -511,6 +556,19 @@ namespace jank::read::parse
         return object_source_info{ make_box<obj::character>(char_bytes.expect_ok()),
                                    start_token,
                                    start_token };
+      }
+      else if(sv[0] == '\\' && sv.size() >= min_unicode_str_length
+              && sv.size() <= max_unicode_str_length)
+      {
+        auto const str(sv.substr(1));
+
+        if(!is_utf8_char(str))
+        {
+          auto const err("Invalid Unicode character.");
+          return error::parse_invalid_unicode({ start_token.start, latest_token.end }, err);
+        }
+
+        return object_source_info{ make_box<obj::character>(str), start_token, start_token };
       }
 
       return error::parse_invalid_character(start_token);
@@ -1067,16 +1125,19 @@ namespace jank::read::parse
     }
 
     auto const jank_keyword(__rt_ctx->intern_keyword("", "jank").expect_ok());
+    auto const wasm_keyword(__rt_ctx->intern_keyword("", "wasm").expect_ok());
     auto const default_keyword(__rt_ctx->intern_keyword("", "default").expect_ok());
 
     auto const r{ make_sequence_range(list) };
     for(auto it(r.begin()); it != r.end(); ++it, ++it)
     {
       auto const kw(*it);
-      /* We take the first match, checking for :jank first. If there are duplicates, it doesn't
-       * matter. If :default comes first, we'll always take it. In short, order is important. This
-       * matches Clojure's behavior. */
-      if(equal(kw, jank_keyword) || equal(kw, default_keyword))
+      /* We take the first match, checking for :jank and :wasm (if WASM AOT codegen is active).
+       * If there are duplicates, it doesn't matter. If :default comes first, we'll always take it.
+       * In short, order is important. This matches Clojure's behavior. */
+      bool const is_wasm_build = (util::cli::opts.codegen == util::cli::codegen_type::wasm_aot);
+      if(equal(kw, jank_keyword) || (is_wasm_build && equal(kw, wasm_keyword))
+         || equal(kw, default_keyword))
       {
         if(splice)
         {
@@ -1253,15 +1314,19 @@ namespace jank::read::parse
   {
     object_ref ret{};
 
-    /* Specials, such as fn*, let*, try, etc. just get left alone. We can't qualify them more. */
-    if(__rt_ctx->an_prc.is_special(form))
+    /* Specials, such as fn*, let*, try, etc. just get left alone. We can't qualify them more.
+     * Note: analyze module is not available in WASM builds. */
+#if !defined(JANK_TARGET_WASM) || defined(JANK_HAS_CPPINTEROP)
+    if(analyze::processor::is_special(form))
     {
       ret = make_box<obj::persistent_list>(std::in_place, make_box<obj::symbol>("quote"), form);
     }
+    else
+#endif
     /* By default, all symbols get qualified. However, any symbol ending in # does not get
      * qualified, but instead gets a gensym (a unique name). The unique names are kept in
      * a bound map for reproducibility. */
-    else if(form->type == object_type::symbol)
+    if(form->type == object_type::symbol)
     {
       auto sym(expect_object<obj::symbol>(form));
       if(sym->ns.empty() && sym->name.ends_with('#'))
@@ -1689,7 +1754,8 @@ namespace jank::read::parse
   {
     auto const token(token_current->expect_ok());
     ++token_current;
-    return object_source_info{ make_box<obj::integer>(std::get<i64>(token.data)), token, token };
+    /* Use make_box(i64) to get integer from cache when possible */
+    return object_source_info{ make_box(std::get<i64>(token.data)), token, token };
   }
 
   processor::object_result processor::parse_big_integer()

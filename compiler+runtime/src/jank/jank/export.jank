@@ -1,0 +1,11 @@
+(ns jank.export
+  (:refer-clojure :exclude [register]))
+
+(def exports (atom {}))
+
+(defn register
+  "Registers a var to be exported with the given name and schema.
+   schema: Malli-like function schema, e.g. [:=> [:cat :int] :int]"
+  [var name schema]
+  (swap! exports assoc name {:var var
+                             :schema schema}))

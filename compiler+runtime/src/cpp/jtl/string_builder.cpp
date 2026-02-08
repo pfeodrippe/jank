@@ -16,10 +16,7 @@ namespace jtl
   {
     auto const new_capacity{ std::bit_ceil(required) };
     /* NOLINTNEXTLINE(cppcoreguidelines-no-malloc) */
-    auto const new_data{ reinterpret_cast<char *>(malloc(new_capacity)) };
-    string_builder::traits_type::copy(new_data, sb.buffer, sb.pos);
-    /* NOLINTNEXTLINE(cppcoreguidelines-no-malloc) */
-    free(sb.buffer);
+    auto const new_data{ reinterpret_cast<char *>(GC_realloc(sb.buffer, new_capacity)) };
     sb.buffer = new_data;
     sb.capacity = new_capacity;
   }
@@ -102,7 +99,7 @@ namespace jtl
   string_builder::~string_builder()
   {
     /* NOLINTNEXTLINE(cppcoreguidelines-no-malloc) */
-    free(buffer);
+    GC_free(buffer);
   }
 
   string_builder &string_builder::operator()(bool const d) &
@@ -238,10 +235,13 @@ namespace jtl
     return *this;
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
+  // Only needed when native_big_integer is a boost type with .str() method
   string_builder &string_builder::operator()(jank::native_big_integer const &d) &
   {
     return (*this)(d.str());
   }
+#endif
 
   string_builder &string_builder::operator()(char const d) &
   {
@@ -347,10 +347,12 @@ namespace jtl
     (*this)(d);
   }
 
+#ifndef JANK_TARGET_EMSCRIPTEN
   void string_builder::push_back(jank::native_big_integer const &d) &
   {
     (*this)(d);
   }
+#endif
 
   void string_builder::push_back(char const d) &
   {

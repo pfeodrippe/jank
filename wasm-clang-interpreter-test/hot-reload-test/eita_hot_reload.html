@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jank WASM Hot-Reload Demo</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eaeaea;
+        }
+        h1 { color: #00d9ff; margin-bottom: 5px; }
+        .subtitle { color: #888; margin-bottom: 20px; }
+        .container { display: flex; gap: 20px; }
+        .panel {
+            flex: 1;
+            background: #16213e;
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid #0f3460;
+        }
+        .panel h2 {
+            color: #00d9ff;
+            font-size: 16px;
+            margin: 0 0 10px 0;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #0f3460;
+        }
+        #status-bar {
+            display: flex;
+            gap: 20px;
+            background: #0f3460;
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .status-item { display: flex; align-items: center; gap: 8px; }
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ff4444;
+        }
+        .status-dot.connected { background: #44ff44; }
+        .status-dot.loading { background: #ffaa00; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        #output {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            padding: 10px;
+            font-family: 'Fira Code', 'Monaco', monospace;
+            font-size: 13px;
+            height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .log-line { margin: 2px 0; }
+        .log-info { color: #58a6ff; }
+        .log-success { color: #3fb950; }
+        .log-error { color: #f85149; }
+        .log-hot-reload { color: #ff7b00; font-weight: bold; }
+        button {
+            background: #238636;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-right: 8px;
+            margin-bottom: 8px;
+        }
+        button:hover { background: #2ea043; }
+        button:disabled { background: #484f58; cursor: not-allowed; }
+        button.secondary { background: #30363d; }
+        button.secondary:hover { background: #484f58; }
+        input, textarea {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            padding: 8px;
+            color: #eaeaea;
+            font-family: 'Fira Code', monospace;
+            width: 100%;
+        }
+        input:focus, textarea:focus { outline: none; border-color: #58a6ff; }
+        .input-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+        .input-row label { min-width: 80px; color: #8b949e; }
+        .input-row input { flex: 1; }
+        #stats-panel { font-size: 13px; }
+        #stats-panel .stat {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #30363d;
+        }
+        #stats-panel .stat-value { color: #00d9ff; font-family: monospace; }
+        .hot-reload-badge {
+            display: inline-block;
+            background: #ff7b00;
+            color: #1a1a2e;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Jank WASM Hot-Reload <span class="hot-reload-badge">LIVE</span></h1>
+    <p class="subtitle">Real-time function updates from nREPL</p>
+
+    <div id="status-bar">
+        <div class="status-item">
+            <span class="status-dot" id="wasm-status"></span>
+            <span>WASM: <span id="wasm-status-text">Loading...</span></span>
+        </div>
+        <div class="status-item">
+            <span class="status-dot" id="ws-status"></span>
+            <span>Server: <span id="ws-status-text">Disconnected</span></span>
+        </div>
+        <div class="status-item">
+            <span>Patches: <span id="patch-count">0</span></span>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="panel" style="flex: 2;">
+            <h2>Output</h2>
+            <div id="output"></div>
+            <div style="margin-top: 10px;">
+                <button id="clear-btn" class="secondary">Clear Output</button>
+                <button id="run-btn" disabled>Run main()</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>Function Call</h2>
+            <div class="input-row">
+                <label>Function:</label>
+                <input type="text" id="fn-name" placeholder="ggg" value="ggg">
+            </div>
+            <div class="input-row">
+                <label>Argument:</label>
+                <input type="number" id="fn-arg" value="10">
+            </div>
+            <button id="call-btn" disabled>Call Function</button>
+
+            <h2 style="margin-top: 20px;">Hot-Reload Stats</h2>
+            <div id="stats-panel">
+                <div class="stat"><span>Patches Loaded</span><span class="stat-value" id="stat-patches">0</span></div>
+                <div class="stat"><span>Total Bytes</span><span class="stat-value" id="stat-bytes">0</span></div>
+                <div class="stat"><span>Last Patch</span><span class="stat-value" id="stat-last">-</span></div>
+                <div class="stat"><span>Errors</span><span class="stat-value" id="stat-errors">0</span></div>
+            </div>
+
+            <h2 style="margin-top: 20px;">Quick Patch</h2>
+            <p style="font-size: 12px; color: #8b949e;">Or send code from Emacs via nREPL</p>
+            <textarea id="eval-code" rows="4" placeholder="(defn ggg [v] (+ 100 v))">(defn ggg [v] (+ 100 v))</textarea>
+            <button id="eval-btn" disabled style="margin-top: 10px;">Send to Server</button>
+        </div>
+    </div>
+
+    <script type="module">
+        // ============== Hot-Reload Client ==============
+        class JankHotReloadClient {
+            constructor(wasmModule, options = {}) {
+                this.module = wasmModule;
+                this.serverUrl = options.serverUrl || 'ws://localhost:7888/repl';
+                this.autoReconnect = options.autoReconnect !== false;
+                this.reconnectDelay = options.reconnectDelay || 2000;
+                this.ws = null;
+                this.patchCounter = 0;
+                this.connected = false;
+                this.stats = { patchesLoaded: 0, totalBytes: 0, errors: 0, lastPatchTime: null };
+            }
+
+            connect() {
+                if (this.connected) return;
+                log('Connecting to hot-reload server...', 'info');
+                try {
+                    this.ws = new WebSocket(this.serverUrl);
+                    this.setupEventHandlers();
+                } catch (err) {
+                    log('Failed to connect: ' + err.message, 'error');
+                    if (this.autoReconnect) {
+                        setTimeout(() => this.connect(), this.reconnectDelay);
+                    }
+                }
+            }
+
+            setupEventHandlers() {
+                this.ws.onopen = () => {
+                    this.connected = true;
+                    updateWsStatus(true);
+                    log('Connected to hot-reload server!', 'success');
+                    this.send({ type: 'handshake', client: 'jank-wasm-browser', version: '1.0.0' });
+                };
+
+                this.ws.onmessage = (evt) => this.handleMessage(evt.data);
+
+                this.ws.onerror = (err) => {
+                    log('WebSocket error', 'error');
+                    this.stats.errors++;
+                    updateStats();
+                };
+
+                this.ws.onclose = () => {
+                    this.connected = false;
+                    updateWsStatus(false);
+                    log('Disconnected from server', 'info');
+                    if (this.autoReconnect) {
+                        log(`Reconnecting in ${this.reconnectDelay}ms...`, 'info');
+                        setTimeout(() => this.connect(), this.reconnectDelay);
+                    }
+                };
+            }
+
+            async handleMessage(data) {
+                try {
+                    const msg = JSON.parse(data);
+                    switch (msg.type) {
+                        case 'patch':
+                            await this.loadPatch(msg.data, msg.symbols, msg.symbolName);
+                            break;
+                        case 'eval_result':
+                            log('Eval result: ' + msg.result, 'success');
+                            break;
+                        case 'error':
+                            log('Server error: ' + msg.error, 'error');
+                            this.stats.errors++;
+                            updateStats();
+                            break;
+                        case 'handshake_ack':
+                            log('Server acknowledged connection', 'info');
+                            break;
+                        default:
+                            log('Unknown message: ' + msg.type, 'info');
+                    }
+                } catch (err) {
+                    log('Failed to handle message: ' + err.message, 'error');
+                }
+            }
+
+            async loadPatch(patchBase64, symbols, symbolName) {
+                const startTime = performance.now();
+                try {
+                    log(`>>> HOT-RELOAD: Loading patch (symbol: ${symbolName})...`, 'hot-reload');
+
+                    const binaryString = atob(patchBase64);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+
+                    const patchPath = `/tmp/jank_patch_${this.patchCounter++}.wasm`;
+                    this.module.FS.writeFile(patchPath, bytes);
+
+                    // Pass the unique symbol name to avoid dlsym caching
+                    const result = this.module.ccall(
+                        'jank_hot_reload_load_patch',
+                        'number',
+                        ['string', 'string'],
+                        [patchPath, symbolName]
+                    );
+
+                    const loadTime = performance.now() - startTime;
+
+                    if (result === 0) {
+                        this.stats.patchesLoaded++;
+                        this.stats.totalBytes += bytes.length;
+                        this.stats.lastPatchTime = loadTime;
+                        updateStats();
+
+                        const symbolNames = symbols ? symbols.map(s => s.name || s).join(', ') : 'unknown';
+                        log(`>>> HOT-RELOAD: SUCCESS! ${bytes.length} bytes, ${loadTime.toFixed(1)}ms`, 'hot-reload');
+                        log(`    Updated: ${symbolNames}`, 'hot-reload');
+
+                        // Flash the badge
+                        document.querySelector('.hot-reload-badge').style.animation = 'pulse 0.3s 3';
+                    } else {
+                        throw new Error(`load_patch returned ${result}`);
+                    }
+                } catch (err) {
+                    log('>>> HOT-RELOAD: FAILED - ' + err.message, 'error');
+                    this.stats.errors++;
+                    updateStats();
+                }
+            }
+
+            eval(code) {
+                const msg = { type: 'eval', code: code.trim(), timestamp: Date.now() };
+                if (this.connected && this.ws.readyState === WebSocket.OPEN) {
+                    this.send(msg);
+                    log('Sent eval request to server', 'info');
+                } else {
+                    log('Not connected to server', 'error');
+                }
+            }
+
+            send(msg) {
+                try {
+                    this.ws.send(JSON.stringify(msg));
+                } catch (err) {
+                    log('Failed to send: ' + err.message, 'error');
+                }
+            }
+        }
+
+        // ============== UI Helpers ==============
+        const output = document.getElementById('output');
+        const wasmStatusDot = document.getElementById('wasm-status');
+        const wasmStatusText = document.getElementById('wasm-status-text');
+        const wsStatusDot = document.getElementById('ws-status');
+        const wsStatusText = document.getElementById('ws-status-text');
+
+        function log(text, type = 'info') {
+            const line = document.createElement('div');
+            line.className = `log-line log-${type}`;
+            line.textContent = text;
+            output.appendChild(line);
+            output.scrollTop = output.scrollHeight;
+            console.log(`[${type}]`, text);
+        }
+
+        function updateWasmStatus(status, text) {
+            wasmStatusDot.className = 'status-dot ' + status;
+            wasmStatusText.textContent = text;
+        }
+
+        function updateWsStatus(connected) {
+            wsStatusDot.className = 'status-dot ' + (connected ? 'connected' : '');
+            wsStatusText.textContent = connected ? 'Connected' : 'Disconnected';
+        }
+
+        function updateStats() {
+            if (!window.hotReloadClient) return;
+            const s = window.hotReloadClient.stats;
+            document.getElementById('stat-patches').textContent = s.patchesLoaded;
+            document.getElementById('stat-bytes').textContent = s.totalBytes + ' B';
+            document.getElementById('stat-last').textContent = s.lastPatchTime ? s.lastPatchTime.toFixed(1) + 'ms' : '-';
+            document.getElementById('stat-errors').textContent = s.errors;
+            document.getElementById('patch-count').textContent = s.patchesLoaded;
+        }
+
+        // ============== Main ==============
+        let moduleInstance = null;
+
+        async function init() {
+            updateWasmStatus('loading', 'Loading...');
+            log('Loading Jank WASM module...', 'info');
+
+            try {
+                // Load from the build directory
+                const Module = await import('/eita.js');
+                const initFn = Module.default || Module;
+
+                moduleInstance = await initFn({
+                    print: (text) => log(text, 'info'),
+                    printErr: (text) => log(text, 'error')
+                });
+
+                updateWasmStatus('connected', 'Ready');
+                log('WASM module loaded successfully!', 'success');
+
+                // Enable buttons
+                document.getElementById('run-btn').disabled = false;
+                document.getElementById('call-btn').disabled = false;
+                document.getElementById('eval-btn').disabled = false;
+
+                // Initialize hot-reload client
+                window.hotReloadClient = new JankHotReloadClient(moduleInstance, {
+                    serverUrl: 'ws://localhost:7888/repl'
+                });
+                window.hotReloadClient.connect();
+
+                // Expose jankEval for devtools
+                window.jankEval = (code) => window.hotReloadClient.eval(code);
+
+            } catch (err) {
+                updateWasmStatus('', 'Error');
+                log('Failed to load module: ' + err.message, 'error');
+                console.error(err);
+            }
+        }
+
+        // Event handlers
+        document.getElementById('clear-btn').addEventListener('click', () => {
+            output.innerHTML = '';
+            log('Output cleared', 'info');
+        });
+
+        document.getElementById('run-btn').addEventListener('click', () => {
+            if (!moduleInstance || !moduleInstance._main) return;
+            log('--- Running main() ---', 'info');
+            try {
+                const result = moduleInstance._main();
+                log(`main() returned: ${result}`, result === 0 ? 'success' : 'error');
+            } catch (err) {
+                log('Runtime error: ' + err.message, 'error');
+            }
+        });
+
+        document.getElementById('call-btn').addEventListener('click', () => {
+            if (!moduleInstance) return;
+            const fnName = document.getElementById('fn-name').value.trim();
+            const argValue = parseInt(document.getElementById('fn-arg').value);
+
+            if (!fnName) { log('Enter a function name', 'error'); return; }
+
+            log(`--- Calling ${fnName}(${argValue}) ---`, 'info');
+
+            // Try the export wrapper
+            const exportFn = moduleInstance[`_jank_export_${fnName}`];
+            if (typeof exportFn === 'function') {
+                try {
+                    const result = exportFn(argValue);
+                    log(`Result: ${result}`, 'success');
+                } catch (err) {
+                    log('Error: ' + err.message, 'error');
+                }
+            } else {
+                log(`Function _jank_export_${fnName} not found`, 'error');
+            }
+        });
+
+        document.getElementById('eval-btn').addEventListener('click', () => {
+            const code = document.getElementById('eval-code').value.trim();
+            if (!code) { log('Enter some code', 'error'); return; }
+            if (!window.hotReloadClient || !window.hotReloadClient.connected) {
+                log('Not connected to server', 'error');
+                return;
+            }
+            window.hotReloadClient.eval(code);
+        });
+
+        // Start
+        init();
+    </script>
+</body>
+</html>

@@ -166,21 +166,146 @@ namespace jank::runtime
     return {};
   }
 
+  jtl::result<bool, jtl::immutable_string>
+  ns::add_native_alias(obj::symbol_ref const sym, native_alias alias)
+  {
+    auto locked_native_aliases(native_aliases.wlock());
+    auto const found(locked_native_aliases->find(sym));
+    if(found != locked_native_aliases->end())
+    {
+      auto const &existing(found->second);
+      if(existing.header != alias.header || existing.scope != alias.scope
+         || existing.include_directive != alias.include_directive)
+      {
+        return err(util::format("{} already bound to native header '{}' in ns {}",
+                                sym->to_string(),
+                                existing.header,
+                                to_string()));
+      }
+      return ok(false);
+    }
+    locked_native_aliases->emplace(sym, std::move(alias));
+    return ok(true);
+  }
+
+  void ns::remove_native_alias(obj::symbol_ref const sym)
+  {
+    auto locked_native_aliases(native_aliases.wlock());
+    locked_native_aliases->erase(sym);
+  }
+
+  jtl::option<ns::native_alias> ns::find_native_alias(obj::symbol_ref const sym) const
+  {
+    auto locked_native_aliases(native_aliases.rlock());
+    auto const found(locked_native_aliases->find(sym));
+    if(found != locked_native_aliases->end())
+    {
+      return found->second;
+    }
+    return none;
+  }
+
+  native_vector<ns::native_alias> ns::native_aliases_snapshot() const
+  {
+    native_vector<native_alias> ret;
+    auto locked_native_aliases(native_aliases.rlock());
+    ret.reserve(locked_native_aliases->size());
+    for(auto const &entry : *locked_native_aliases)
+    {
+      ret.emplace_back(entry.second);
+    }
+    return ret;
+  }
+
+  native_unordered_map<obj::symbol_ref, ns::native_alias> ns::native_aliases_map_snapshot() const
+  {
+    auto locked_native_aliases(native_aliases.rlock());
+    return *locked_native_aliases;
+  }
+
+  jtl::result<void, jtl::immutable_string> ns::add_native_refer(obj::symbol_ref const sym,
+                                                                obj::symbol_ref const alias_sym,
+                                                                obj::symbol_ref const member)
+  {
+    auto locked_native_refers(native_refers.wlock());
+    auto const found(locked_native_refers->find(sym));
+    if(found != locked_native_refers->end())
+    {
+      auto const &existing(found->second);
+      // Use value comparison for symbols instead of pointer comparison
+      // If the member is different, throw an error
+      if(!existing.member->equal(*member))
+      {
+        return err(util::format("{} already refers to native member '{}.{}' in ns {}",
+                                sym->to_string(),
+                                existing.alias->to_string(),
+                                existing.member->to_string(),
+                                to_string()));
+      }
+      // If member is the same but alias is different, update to use the new alias
+      if(!existing.alias->equal(*alias_sym))
+      {
+        locked_native_refers->at(sym) = native_refer{ alias_sym, member };
+      }
+      return ok();
+    }
+    locked_native_refers->emplace(sym, native_refer{ alias_sym, member });
+    return ok();
+  }
+
+  void ns::remove_native_refer(obj::symbol_ref const sym)
+  {
+    auto locked_native_refers(native_refers.wlock());
+    locked_native_refers->erase(sym);
+  }
+
+  jtl::option<ns::native_refer> ns::find_native_refer(obj::symbol_ref const sym) const
+  {
+    auto locked_native_refers(native_refers.rlock());
+    auto const found(locked_native_refers->find(sym));
+    if(found != locked_native_refers->end())
+    {
+      return found->second;
+    }
+    return none;
+  }
+
+  native_unordered_map<obj::symbol_ref, ns::native_refer> ns::native_refers_snapshot() const
+  {
+    auto locked_native_refers(native_refers.rlock());
+    return *locked_native_refers;
+  }
+
   jtl::result<void, jtl::immutable_string> ns::refer(obj::symbol_ref const sym, var_ref const var)
   {
+    auto const clojure_core(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core")));
+    auto const this_ns(ns_ref{ this });
     auto locked_vars(vars.wlock());
     if(auto const found = (*locked_vars)->data.find(sym))
     {
       if(found->data->type == object_type::var)
       {
         auto const found_var(expect_object<runtime::var>(found->data));
-        auto const clojure_core(__rt_ctx->find_ns(make_box<obj::symbol>("clojure.core")));
-        if(var->n != found_var->n && (found_var->n != clojure_core))
+        /* Allow re-referring if:
+         * 1. The vars are from the same namespace (var->n == found_var->n), OR
+         * 2. The existing var is from clojure.core (can be replaced), OR
+         * 3. The existing var is from the current namespace (local definition shadows clojure.core)
+         *
+         * Case 3 fixes the bug where re-evaluating (ns foo) fails if foo defines
+         * a var that shadows clojure.core (e.g., 'profile'). In Clojure, this is
+         * allowed - local definitions take precedence and we simply skip the refer. */
+        if(var->n != found_var->n && found_var->n != clojure_core && found_var->n != this_ns)
         {
           return err(util::format("{} already refers to {} in ns {}",
                                   sym->to_string(),
                                   expect_object<runtime::var>(*found)->to_string(),
                                   to_string()));
+        }
+        /* If the existing var is from the current namespace, skip this refer
+         * to preserve the local definition (don't overwrite with clojure.core var). */
+        if(found_var->n == this_ns)
+        {
+          return ok();
         }
       }
     }

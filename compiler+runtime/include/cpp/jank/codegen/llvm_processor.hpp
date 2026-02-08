@@ -58,6 +58,7 @@ namespace jank::analyze
     using cpp_type_ref = jtl::ref<struct cpp_type>;
     using cpp_value_ref = jtl::ref<struct cpp_value>;
     using cpp_cast_ref = jtl::ref<struct cpp_cast>;
+    using cpp_unsafe_cast_ref = jtl::ref<struct cpp_unsafe_cast>;
     using cpp_call_ref = jtl::ref<struct cpp_call>;
     using cpp_constructor_call_ref = jtl::ref<struct cpp_constructor_call>;
     using cpp_member_call_ref = jtl::ref<struct cpp_member_call>;
@@ -78,7 +79,9 @@ namespace jank::codegen
   {
     module,
     function,
-    eval
+    eval,
+    wasm_aot, // Generates standalone C++ modules for WASM (no JIT)
+    wasm_patch // Generates SIDE_MODULE patches for hot-reload (extern C, no headers)
   };
 
   constexpr char const *compilation_target_str(compilation_target const t)
@@ -91,6 +94,10 @@ namespace jank::codegen
         return "function";
       case compilation_target::eval:
         return "eval";
+      case compilation_target::wasm_aot:
+        return "wasm_aot";
+      case compilation_target::wasm_patch:
+        return "wasm_patch";
       default:
         return "unknown";
     }

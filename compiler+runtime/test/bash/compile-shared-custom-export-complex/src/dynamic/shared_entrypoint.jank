@@ -1,0 +1,15 @@
+(ns dynamic.shared-entrypoint
+  (:require [jank.export]))
+
+(defn my-complex [x y z]
+  (+ x y z))
+
+(jank.export/register #'my-complex "my_complex" [:=> [:cat :int :double :int] :double])
+
+(defn my-array-ptr [arr size]
+  arr)
+
+(jank.export/register #'my-array-ptr "my_array_ptr" [:=> [:cat [:vector :int] :int] [:vector :int]])
+
+(defn -main [& args]
+  (println "Main called!"))

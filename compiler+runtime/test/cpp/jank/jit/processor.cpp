@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <filesystem>
 
 #include <clang/Frontend/CompilerInstance.h>
@@ -36,6 +37,70 @@ namespace jank::jit
 
   TEST_SUITE("jit")
   {
+    TEST_CASE("eval_string_with_result - integer")
+    {
+      auto const result(__rt_ctx->jit_prc.eval_string_with_result("42"));
+      REQUIRE(result.is_ok());
+
+      auto const &r{ result.expect_ok() };
+      CHECK(r.valid);
+      CHECK_FALSE(r.is_void);
+      CHECK(r.type_str == "int");
+      /* The repr should contain the type and value, like clang-repl output */
+      CHECK(r.repr.find("int") != jtl::immutable_string::npos);
+      CHECK(r.repr.find("42") != jtl::immutable_string::npos);
+    }
+
+    TEST_CASE("eval_string_with_result - double")
+    {
+      auto const result(__rt_ctx->jit_prc.eval_string_with_result("3.14"));
+      REQUIRE(result.is_ok());
+
+      auto const &r{ result.expect_ok() };
+      CHECK(r.valid);
+      CHECK_FALSE(r.is_void);
+      CHECK(r.type_str == "double");
+      CHECK(r.repr.find("double") != jtl::immutable_string::npos);
+      CHECK(r.repr.find("3.14") != jtl::immutable_string::npos);
+    }
+
+    TEST_CASE("eval_string_with_result - void expression")
+    {
+      /* First declare a variable */
+      __rt_ctx->jit_prc.eval_string("int test_var_void = 0;");
+
+      /* Assignment returns void */
+      auto const result(__rt_ctx->jit_prc.eval_string_with_result("test_var_void = 5"));
+      REQUIRE(result.is_ok());
+
+      auto const &r{ result.expect_ok() };
+      /* Assignment expressions don't capture value in clang-repl style */
+      /* The result may be valid but void, or the value of the assignment */
+      CHECK(r.valid);
+    }
+
+    TEST_CASE("eval_string_with_result - pointer")
+    {
+      /* Declare and get address */
+      __rt_ctx->jit_prc.eval_string("int test_ptr_val = 123;");
+      auto const result(__rt_ctx->jit_prc.eval_string_with_result("&test_ptr_val"));
+      REQUIRE(result.is_ok());
+
+      auto const &r{ result.expect_ok() };
+      CHECK(r.valid);
+      CHECK_FALSE(r.is_void);
+      CHECK(r.ptr != nullptr);
+      /* Type should indicate it's a pointer to int */
+      CHECK(r.type_str.find("int") != jtl::immutable_string::npos);
+      CHECK(r.type_str.find("*") != jtl::immutable_string::npos);
+    }
+
+    TEST_CASE("eval_string_with_result - error on invalid code")
+    {
+      auto const result(__rt_ctx->jit_prc.eval_string_with_result("this_does_not_exist_xyz"));
+      CHECK(result.is_err());
+    }
+
     TEST_CASE("files")
     {
       auto const cardinal_result(__rt_ctx->intern_keyword("success").expect_ok());
@@ -57,11 +122,24 @@ namespace jank::jit
       diag.setClient(new clang::IgnoringDiagConsumer{}, true);
       util::scope_exit const finally{ [&] { diag.setClient(old_client.release(), true); } };
 
-      for(auto const &dir_entry : std::filesystem::recursive_directory_iterator("test/jank"))
+      auto const * const env_filter{ std::getenv("JANK_JIT_TEST_FILTER") };
+      std::string const test_filter{ env_filter ? env_filter : "" };
+      bool const filter_enabled{ !test_filter.empty() };
+
+      for(auto const &dir_entry : std::filesystem::recursive_directory_iterator("../test/jank"))
       {
         if(!std::filesystem::is_regular_file(dir_entry.path()))
         {
           continue;
+        }
+
+        if(filter_enabled)
+        {
+          auto const path_string(dir_entry.path().string());
+          if(path_string.find(test_filter) == std::string::npos)
+          {
+            continue;
+          }
         }
 
         auto const filename(dir_entry.path().filename().string());

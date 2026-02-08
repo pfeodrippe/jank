@@ -1,0 +1,48 @@
+(cpp/raw "
+#include <iostream>
+#include <array> // For std::array
+
+int ttt() {
+    std::array<int, 5> arr = {10, 20, 30, 40, 50};
+
+    for (auto it = arr.begin(); it != arr.end(); ++it) {
+        std::cout << *it << \" \"; // Dereference the iterator to get the element
+    }
+    std::cout << std::endl;
+    return 0;
+}
+
+namespace eita::cpp::constructor::complex::pass_argument
+{
+  struct foo
+  {
+    foo(int const v)
+      : a{ v }, b{ v }
+    { }
+
+    int a{};
+    int b{ 7 };
+  };
+}
+")
+
+(let [globals (cpp/jank.runtime.get_global_cpp_functions)
+      target (first (filter #(= "ttt" (:name %)) globals))]
+  (when (empty? globals)
+    (throw (ex-info "global function registry empty" {})))
+  (when-not target
+    (throw (ex-info "global function ttt not registered" {:globals globals})))
+  (println "Found global function: ttt")
+  (println "Return type:" (:return-type target))
+  (println "Args:" (:args target)))
+
+(let [types (cpp/jank.runtime.get_global_cpp_types)
+      foo (first (filter #(= "eita.cpp.constructor.complex.pass_argument.foo" (:name %)) types))]
+  (when (empty? types)
+    (throw (ex-info "global cpp types registry empty" {})))
+  (when-not foo
+    (throw (ex-info "struct foo not registered" {:types types})))
+  (println "Found struct foo")
+  (println "Kind:" (:kind foo))
+  (println "Fields:" (:fields foo))
+  (println "Constructors:" (:constructors foo)))

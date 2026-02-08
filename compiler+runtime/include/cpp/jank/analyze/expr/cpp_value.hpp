@@ -20,10 +20,13 @@ namespace jank::analyze::expr
       null,
       bool_true,
       bool_false,
+      string_literal, /* For inline C string literals like #cpp "hello" */
       constructor,
       variable,
       enum_constant,
       function,
+
+      /* The following must be in call position. */
       member_access,
       member_call,
       operator_call
@@ -51,5 +54,7 @@ namespace jank::analyze::expr
      * scopes in Clang. */
     jtl::ptr<void> scope;
     value_kind val_kind;
+    /* For string_literal kind, stores the actual C string literal (including quotes) */
+    jtl::immutable_string literal_str;
   };
 }

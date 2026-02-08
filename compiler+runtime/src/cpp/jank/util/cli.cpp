@@ -19,9 +19,9 @@ namespace jank::util::cli
   {
     if(*it == long_flag)
     {
-      ++it;
       if(needs_value)
       {
+        ++it;
         if(it == end)
         {
           throw util::format("The '{}' flag requires an argument, but one was not provided.",
@@ -126,8 +126,16 @@ OPTIONS
           --direct-call       Elides the dereferencing of vars for improved performance.
   -O,     --optimization <0 - 3>
                               The optimization level to use for AOT compilation.
-          --codegen <llvm-ir, cpp> [default: cpp]
+          --codegen <llvm-ir, cpp, wasm-aot, wasm-patch> [default: cpp]
                               The type of code generation to use.
+          --save-cpp          Save generated C++ code to a file (useful for AOT/WASM compilation).
+          --save-cpp-path <path>
+                              Path to save generated C++ code.
+          --save-llvm-ir      Save generated LLVM IR to a file (useful for WASM/cross-compilation).
+          --save-llvm-ir-path <path>
+                              Path to save generated LLVM IR code.
+          --eagerness <lazy, eager> [default: lazy]
+                              How eagerly to JIT compile functions.
   -I,     --include-dir <path>
                               Absolute or relative path to the directory for includes
                               resolution. Can be specified multiple times.
@@ -137,8 +145,18 @@ OPTIONS
   -L,     --library-dir <path>
                               Absolute or relative path to the directory to search dynamic
                               libraries in. Can be specified multiple times.
-  -l <lib>                    Library identifiers, absolute or relative paths eg. -lfoo for
-                              libfoo.so or foo.dylib. Can be specified multiple times.)",
+  -l,     --lib <lib>         Library identifiers, absolute or relative paths eg. -lfoo for
+                              libfoo.so or foo.dylib. Can be specified multiple times.
+          --obj <path>        Object files (.o) to load into JIT. Can be specified multiple times.
+          --framework <name>  macOS framework to link. Can be specified multiple times.
+          --jit-lib <path>    Libraries for JIT only (not AOT linker). Can be specified multiple times.
+          --link-lib <path>   Libraries for AOT linker only (not JIT). Can be specified multiple times.
+
+RUN-MAIN SPECIFIC OPTIONS
+          --ios-compile-server <port>
+                              Start iOS compile server on specified port (for remote JIT).
+          --ios-resource-dir <path>
+                              Path to iOS resources (PCH, headers) for compile server.)",
                   JANK_VERSION);
     std::exit(1);
   }
@@ -179,6 +197,7 @@ OPTIONS
         /**** These are all of the global flags which can apply to any command. ****/
         if(check_flag(it, end, value, "--", false))
         {
+          ++it;
           /* This implies that everything coming after is meant for the running program. */
           std::copy(it, end, std::back_inserter(opts.extra_opts));
           break;
@@ -202,6 +221,10 @@ OPTIONS
         else if(check_flag(it, end, value, "--perf", false))
         {
           opts.perf_profiling_enabled = true;
+        }
+        else if(check_flag(it, end, value, "--debug", false))
+        {
+          opts.debug = true;
         }
         else if(check_flag(it, end, value, "--direct-call", false))
         {
@@ -240,9 +263,48 @@ OPTIONS
           {
             opts.codegen = codegen_type::llvm_ir;
           }
+          else if(value == "wasm-aot")
+          {
+            opts.codegen = codegen_type::wasm_aot;
+          }
+          else if(value == "wasm-patch")
+          {
+            opts.codegen = codegen_type::wasm_patch;
+          }
           else
           {
             throw util::format("Invalid codegen type '{}'.", value);
+          }
+        }
+        else if(check_flag(it, end, value, "--save-cpp", false))
+        {
+          opts.save_cpp = true;
+        }
+        else if(check_flag(it, end, value, "--save-cpp-path", true))
+        {
+          opts.save_cpp_path = value;
+        }
+        else if(check_flag(it, end, value, "--save-llvm-ir", false))
+        {
+          opts.save_llvm_ir = true;
+        }
+        else if(check_flag(it, end, value, "--save-llvm-ir-path", true))
+        {
+          opts.save_llvm_ir_path = value;
+        }
+        else if(check_flag(it, end, value, "--eagerness", true))
+        {
+          if(value == "lazy")
+          {
+            opts.eagerness = compilation_eagerness::lazy;
+          }
+          else if(value == "eager")
+          {
+            opts.eagerness = compilation_eagerness::eager;
+          }
+          else
+          {
+            throw util::format("Invalid eagerness type '{}'.", value);
           }
         }
         else if(check_flag(it, end, value, "-I", "--include-dir", true))
@@ -257,9 +319,25 @@ OPTIONS
         {
           opts.library_dirs.emplace_back(value);
         }
-        else if(check_flag(it, end, value, "-l", "--link", true))
+        else if(check_flag(it, end, value, "-l", "--lib", true))
         {
           opts.libs.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "--obj", true))
+        {
+          opts.object_files.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "--framework", true))
+        {
+          opts.frameworks.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "--jit-lib", true))
+        {
+          opts.jit_libs.emplace_back(value);
+        }
+        else if(check_flag(it, end, value, "--link-lib", true))
+        {
+          opts.link_libs.emplace_back(value);
         }
 
         /**** These are command-specific flags which we will store until we know the command. ****/
@@ -274,6 +352,18 @@ OPTIONS
         else if(check_flag(it, end, value, "--runtime", true))
         {
           pending_flags["--runtime"] = value;
+        }
+        else if(check_flag(it, end, value, "--ios-compile-server", true))
+        {
+          pending_flags["--ios-compile-server"] = value;
+        }
+        else if(check_flag(it, end, value, "--ios-resource-dir", true))
+        {
+          pending_flags["--ios-resource-dir"] = value;
+        }
+        else if(check_flag(it, end, value, "--list-modules", false))
+        {
+          pending_flags["--list-modules"] = "";
         }
         else if(command.empty())
         {
@@ -304,6 +394,21 @@ OPTIONS
       else if(command == "run-main")
       {
         opts.target_module = get_positional_arg(command, "module", pending_positional_args);
+        if(check_pending_flag("--ios-compile-server", value, pending_flags))
+        {
+          try
+          {
+            opts.ios_compile_server_port = static_cast<uint16_t>(std::stoi(value.c_str()));
+          }
+          catch(...)
+          {
+            throw util::format("Invalid port number for --ios-compile-server: '{}'", value);
+          }
+        }
+        if(check_pending_flag("--ios-resource-dir", value, pending_flags))
+        {
+          opts.ios_resource_dir = value;
+        }
       }
       else if(command == "repl")
       {
@@ -349,6 +454,10 @@ OPTIONS
         {
           opts.target_file = value;
         }
+        if(check_pending_flag("--list-modules", value, pending_flags))
+        {
+          opts.list_modules = true;
+        }
 
         if(command == "compile" && opts.output_target == compilation_target::unspecified)
         {
@@ -380,6 +489,14 @@ OPTIONS
           util::format_to(sb, " {}", arg);
         }
         throw sb.release();
+      }
+
+      /* Regardless of what's requested, if we're generating IR, we need to force eagerness.
+       * This is because deferred fns only support C++ compilation AND laziness doesn't buy
+       * us very much for IR gen, since we don't have the cost of C++ compilation to pay. */
+      if(opts.codegen == codegen_type::llvm_ir)
+      {
+        opts.eagerness = compilation_eagerness::eager;
       }
     }
     catch(jtl::immutable_string const &msg)

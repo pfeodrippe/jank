@@ -1,0 +1,9 @@
+(ns eita)
+
+;; Simple function that adds 49 to input (changed from 48)
+(defn ^:export ggg [v]
+  (+ 49 v))
+
+;; Another simple function
+(defn add-ten [x]
+  (+ x 10))

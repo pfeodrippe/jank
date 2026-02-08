@@ -1,8 +1,10 @@
 #pragma once
 
-#include <folly/Synchronized.h>
+#include <jank/util/folly_shim.hpp>
+#include <jtl/option.hpp>
 
 #include <jank/runtime/var.hpp>
+#include <jank/type.hpp>
 
 namespace jank::runtime
 {
@@ -34,6 +36,32 @@ namespace jank::runtime
     void remove_alias(obj::symbol_ref const sym);
     ns_ref find_alias(obj::symbol_ref const sym) const;
 
+    struct native_alias
+    {
+      jtl::immutable_string header;
+      jtl::immutable_string include_directive;
+      jtl::immutable_string scope;
+    };
+
+    struct native_refer
+    {
+      obj::symbol_ref alias;
+      obj::symbol_ref member;
+    };
+
+    jtl::result<bool, jtl::immutable_string>
+    add_native_alias(obj::symbol_ref sym, native_alias alias);
+    void remove_native_alias(obj::symbol_ref sym);
+    jtl::option<native_alias> find_native_alias(obj::symbol_ref sym) const;
+    native_vector<native_alias> native_aliases_snapshot() const;
+    native_unordered_map<obj::symbol_ref, native_alias> native_aliases_map_snapshot() const;
+
+    jtl::result<void, jtl::immutable_string>
+    add_native_refer(obj::symbol_ref sym, obj::symbol_ref alias, obj::symbol_ref member);
+    void remove_native_refer(obj::symbol_ref sym);
+    jtl::option<native_refer> find_native_refer(obj::symbol_ref sym) const;
+    native_unordered_map<obj::symbol_ref, native_refer> native_refers_snapshot() const;
+
     jtl::result<void, jtl::immutable_string> refer(obj::symbol_ref const sym, var_ref const var);
 
     obj::persistent_hash_map_ref get_mappings() const;
@@ -56,6 +84,8 @@ namespace jank::runtime
     /* TODO: Benchmark the use of atomics here. That's what Clojure uses. */
     folly::Synchronized<obj::persistent_hash_map_ref> vars;
     folly::Synchronized<obj::persistent_hash_map_ref> aliases;
+    folly::Synchronized<native_unordered_map<obj::symbol_ref, native_alias>> native_aliases;
+    folly::Synchronized<native_unordered_map<obj::symbol_ref, native_refer>> native_refers;
 
     std::atomic_uint64_t symbol_counter{};
   };

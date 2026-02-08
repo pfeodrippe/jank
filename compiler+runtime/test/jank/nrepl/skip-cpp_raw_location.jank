@@ -1,0 +1,4 @@
+; Test file for cpp/raw source location tracking
+; The cpp/raw call on line 4 should have its location stored
+
+(cpp/raw "inline void test_cpp_raw_location_fn(int x) { /* test */ }")

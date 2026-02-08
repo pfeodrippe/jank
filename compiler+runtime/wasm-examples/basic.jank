@@ -1,0 +1,11 @@
+; Basic test using only core-native functions
+(def x 42)
+(def y (+ x 100))
+(def z (* x y))
+(def is-even (even? z))
+
+(println "x =" x)
+(println "y =" y)
+(println "z =" z)
+(println "z is even?" is-even)
+(println "WASM basic test!")

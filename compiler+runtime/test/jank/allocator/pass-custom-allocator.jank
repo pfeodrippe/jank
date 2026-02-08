@@ -1,0 +1,61 @@
+; Test that the generic allocator interface works with ANY allocator type
+; This demonstrates how users can use different allocators interchangeably
+
+; Helper function that works with ANY allocator (arena or debug-allocator)
+(defn test-allocator [allocator name]
+  (println (str "Testing allocator: " name))
+
+  ; All allocators support the same interface via jank.arena-native
+  (assert (jank.arena-native/allocator? allocator)
+          (str name " should be an allocator"))
+
+  ; Allocate some memory
+  (let [ptr1 (jank.arena-native/alloc! allocator 64)]
+    (assert (> ptr1 0) (str name " alloc! should return non-zero pointer"))
+
+    (let [ptr2 (jank.arena-native/alloc! allocator 128)]
+      (assert (> ptr2 0) (str name " second alloc! should work"))
+      (assert (not= ptr1 ptr2) (str name " should return different pointers"))
+
+      ; Get stats (works with any allocator)
+      (let [stats (jank.arena-native/allocator-stats allocator)]
+        (assert (map? stats) (str name " allocator-stats should return a map"))
+        (assert (>= (:total-allocated stats) 192)
+                (str name " should have allocated at least 192 bytes")))
+
+      ; Free memory (no-op for arena, tracked for debug-allocator)
+      (jank.arena-native/free! allocator ptr1)
+      (jank.arena-native/free! allocator ptr2)))
+
+  ; Reset allocator
+  (jank.arena-native/allocator-reset! allocator)
+
+  (println (str "  " name " passed!")))
+
+; Test with arena allocator
+(def arena (jank.arena-native/create))
+(test-allocator arena "arena")
+
+; Test with debug allocator
+(def debug-alloc (jank.debug-allocator-native/create))
+(test-allocator debug-alloc "debug-allocator")
+
+; Verify debug-allocator specific features still work after generic operations
+(def d2 (jank.debug-allocator-native/create))
+(def p1 (jank.arena-native/alloc! d2 64))
+(def p2 (jank.arena-native/alloc! d2 64))
+(jank.arena-native/free! d2 p1)
+; Don't free p2 - should be a leak
+
+(assert (jank.debug-allocator-native/has-leaks? d2)
+        "Should detect leak via debug-allocator-specific function")
+(assert (= 1 (jank.debug-allocator-native/detect-leaks d2))
+        "Should have exactly 1 leak")
+
+; Double-free detection
+(jank.arena-native/free! d2 p1) ; Free p1 again - double free!
+(assert (= 1 (:double-free-count (jank.debug-allocator-native/debug-stats d2)))
+        "Should detect double-free")
+
+(println "All custom allocator tests passed!")
+:success

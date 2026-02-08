@@ -13,6 +13,15 @@ extern "C" void *jank_const_nil();
 
 namespace jank::runtime
 {
+  /* Forward declaration for allocator interface support.
+   * The actual allocator type is defined in core/arena.hpp. */
+  struct allocator;
+  extern thread_local allocator *current_allocator;
+
+  /* Try to allocate from the current allocator if one is active.
+   * Returns nullptr if no allocator is active. Defined in core/arena.cpp. */
+  void *try_allocator_alloc(usize size, usize alignment);
+
   namespace obj
   {
     struct nil;
@@ -169,6 +178,12 @@ namespace jank::runtime
     bool is_nil() const noexcept
     {
       return data->type == object_type::nil;
+    }
+
+    /* Create an oref from a raw void pointer (for iOS JIT constant registry). */
+    static oref from_ptr(void *ptr) noexcept
+    {
+      return oref{ reinterpret_cast<value_type *>(ptr) };
     }
 
     value_type *data{ std::bit_cast<object *>(jank_const_nil()) };
@@ -441,7 +456,10 @@ namespace jank::runtime
 
     oref<object> erase() const noexcept
     {
-      return { std::bit_cast<object *>(jank_const_nil()) };
+      /* Don't call jank_const_nil() here - it would cause infinite recursion
+       * since jank_const_nil() calls jank_nil().erase().
+       * Since nil::base is the only data member, we can reinterpret_cast directly. */
+      return { reinterpret_cast<object *>(data) };
     }
 
     bool is_some() const noexcept
@@ -476,8 +494,42 @@ namespace jank::runtime
   jtl::ref<T> make_box(Args &&...args)
   {
     static_assert(sizeof(jtl::ref<T>) == sizeof(T *));
-    /* TODO: Figure out cleanup for this. */
-    T *ret{ new(GC) T{ std::forward<Args>(args)... } };
+    T *ret{};
+
+    if constexpr(requires { T::pointer_free; })
+    {
+      if constexpr(T::pointer_free)
+      {
+        /* pointer_free types (integers, reals, etc.) use caching and
+         * PointerFreeGC - don't allocate from arena to preserve cache semantics. */
+        ret = new(PointerFreeGC) T{ std::forward<Args>(args)... };
+      }
+      else
+      {
+        /* Try allocator interface first, then GC */
+        if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
+        {
+          ret = new(alloc_mem) T{ std::forward<Args>(args)... };
+        }
+        else
+        {
+          ret = new(GC) T{ std::forward<Args>(args)... };
+        }
+      }
+    }
+    else
+    {
+      /* Try allocator interface first, then GC */
+      if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
+      {
+        ret = new(alloc_mem) T{ std::forward<Args>(args)... };
+      }
+      else
+      {
+        ret = new(GC) T{ std::forward<Args>(args)... };
+      }
+    }
+
     if(!ret)
     {
       throw std::runtime_error{ "unable to allocate box" };
@@ -497,7 +549,42 @@ namespace jank::runtime
   oref<T> make_box(Args &&...args)
   {
     static_assert(sizeof(oref<T>) == sizeof(T *));
-    oref<T> ret{ new(GC) T{ std::forward<Args>(args)... } };
+    T *ret{};
+
+    if constexpr(requires { T::pointer_free; })
+    {
+      if constexpr(T::pointer_free)
+      {
+        /* pointer_free types (integers, reals, etc.) use caching and
+         * PointerFreeGC - don't allocate from arena to preserve cache semantics. */
+        ret = new(PointerFreeGC) T{ std::forward<Args>(args)... };
+      }
+      else
+      {
+        /* Try allocator interface first, then GC */
+        if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
+        {
+          ret = new(alloc_mem) T{ std::forward<Args>(args)... };
+        }
+        else
+        {
+          ret = new(GC) T{ std::forward<Args>(args)... };
+        }
+      }
+    }
+    else
+    {
+      /* Try allocator interface first, then GC */
+      if(auto *alloc_mem = try_allocator_alloc(sizeof(T), alignof(T)))
+      {
+        ret = new(alloc_mem) T{ std::forward<Args>(args)... };
+      }
+      else
+      {
+        ret = new(GC) T{ std::forward<Args>(args)... };
+      }
+    }
+
     return ret;
   }
 

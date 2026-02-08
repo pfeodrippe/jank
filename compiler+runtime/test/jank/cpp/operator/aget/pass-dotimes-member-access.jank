@@ -1,0 +1,28 @@
+(cpp/raw "namespace jank::cpp::operator_::aget::pass_dotimes_member_access
+          {
+            struct DrawData {
+              int CmdListsCount;
+              int* CmdLists;
+
+              DrawData() : CmdListsCount(3) {
+                CmdLists = new int[3];
+                CmdLists[0] = 100;
+                CmdLists[1] = 200;
+                CmdLists[2] = 300;
+              }
+            };
+
+            DrawData* GetDrawData() {
+              static DrawData data;
+              return &data;
+            }
+          }")
+
+; Test pattern similar to ImGui: (dotimes [n count] (cpp/aget arr n))
+(let [dd (cpp/jank.cpp.operator_.aget.pass_dotimes_member_access.GetDrawData)
+      total (atom 0)]
+  (dotimes [n (cpp/.-CmdListsCount dd)]
+    (let [value (cpp/aget (cpp/.-CmdLists dd) n)]
+      (swap! total + value)))
+  (assert (= 600 @total))  ; 100 + 200 + 300
+  :success)

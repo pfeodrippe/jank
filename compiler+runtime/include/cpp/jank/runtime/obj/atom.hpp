@@ -1,7 +1,6 @@
 #pragma once
 
-#include <folly/Synchronized.h>
-
+#include <jank/util/folly_shim.hpp>
 #include <jank/runtime/object.hpp>
 #include <jank/runtime/obj/persistent_hash_map.hpp>
 #include <jank/runtime/obj/persistent_vector.hpp>
@@ -53,12 +52,15 @@ namespace jank::runtime::obj
     void add_watch(object_ref const key, object_ref const fn);
     void remove_watch(object_ref const key);
 
+    /*** XXX: Everything here is immutable after initialization. ***/
     object base{ obj_type };
+
+    /*** XXX: Everything here is thread-safe. ***/
+
     /* We have to hold only a raw pointer here, since std::atomic doesn't
-     * support more complex types. However, that means we need to manually
-     * handle reference counting for held values when swapping, resetting, etc. */
+     * support more complex types. */
     std::atomic<object *> val{};
-    /* Since watches is a 'persistent_hash_map", there in no guarantee in which
+    /* Since watches is a `persistent_hash_map`, there in no guarantee in which
      * order watches are invoked. */
     folly::Synchronized<persistent_hash_map_ref> watches{};
   };

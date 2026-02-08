@@ -2,6 +2,7 @@
 
 #include <jank/analyze/processor.hpp>
 #include <jank/codegen/llvm_processor.hpp>
+#include <jank/compile_server/protocol.hpp>
 
 namespace jank::analyze
 {
@@ -33,6 +34,7 @@ namespace jank::analyze
     using cpp_type_ref = jtl::ref<struct cpp_type>;
     using cpp_value_ref = jtl::ref<struct cpp_value>;
     using cpp_cast_ref = jtl::ref<struct cpp_cast>;
+    using cpp_unsafe_cast_ref = jtl::ref<struct cpp_unsafe_cast>;
     using cpp_call_ref = jtl::ref<struct cpp_call>;
     using cpp_constructor_call_ref = jtl::ref<struct cpp_constructor_call>;
     using cpp_member_call_ref = jtl::ref<struct cpp_member_call>;
@@ -89,6 +91,10 @@ namespace jank::codegen
     processor(analyze::expr::function_ref const expr,
               jtl::immutable_string const &module,
               compilation_target target);
+    processor(analyze::expr::function_ref const expr,
+              jtl::immutable_string const &module,
+              compilation_target target,
+              compilation_target owner_target);
     processor(processor const &) = delete;
     processor(processor &&) noexcept = delete;
 
@@ -130,6 +136,8 @@ namespace jank::codegen
     jtl::option<handle>
     gen(analyze::expr::cpp_cast_ref const, analyze::expr::function_arity const &);
     jtl::option<handle>
+    gen(analyze::expr::cpp_unsafe_cast_ref const, analyze::expr::function_arity const &);
+    jtl::option<handle>
     gen(analyze::expr::cpp_call_ref const, analyze::expr::function_arity const &);
     jtl::option<handle>
     gen(analyze::expr::cpp_constructor_call_ref const, analyze::expr::function_arity const &);
@@ -154,6 +162,9 @@ namespace jank::codegen
     void build_footer();
     jtl::immutable_string expression_str();
 
+    jtl::immutable_string module_init_str(jtl::immutable_string const &module);
+    void emit_native_header_includes();
+
     void format_elided_var(jtl::immutable_string const &start,
                            jtl::immutable_string const &end,
                            jtl::immutable_string const &ret_tmp,
@@ -169,10 +180,19 @@ namespace jank::codegen
                             native_vector<analyze::expression_ref> const &arg_exprs,
                             analyze::expr::function_arity const &fn_arity);
 
+    /* For module target, wrap constant access with registry lookup to avoid
+     * iOS JIT ADRP relocation issues. For other targets, return name as-is. */
+    jtl::immutable_string wrap_constant_access(jtl::immutable_string const &simple_name);
+
+    /* Returns metadata for all lifted constants (for iOS JIT BSS pre-allocation).
+     * The qualified_name is the mangled C++ symbol name (e.g., "_ZN8vybe_sdf8const_117E"). */
+    native_vector<compile_server::constant_info> get_lifted_constants_metadata() const;
+
     analyze::expr::function_ref root_fn;
     jtl::immutable_string module;
 
     compilation_target target{};
+    compilation_target owner_target{};
     jtl::immutable_string struct_name;
     jtl::string_builder cpp_raw_buffer;
     jtl::string_builder module_header_buffer;
@@ -198,5 +218,14 @@ namespace jank::codegen
       lifted_constants;
     bool generated_declaration{};
     bool generated_expression{};
+    /* When true, function_code is emitted even for eval target.
+     * Set by iOS compile server where generated code is compiled remotely. */
+    bool remote_compilation{};
+    native_set<jtl::immutable_string> emitted_function_codes;
+
+    /* CSE cache for cpp/unbox operations.
+     * Key: type_name + "|" + value_expression_string
+     * Value: cached temporary variable name */
+    std::map<native_transient_string, jtl::immutable_string> unbox_cache;
   };
 }

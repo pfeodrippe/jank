@@ -1,0 +1,13 @@
+(require '["clojure/string_native.hpp"
+           :as str-native
+           :refer [reverse starts_with]
+           :rename {starts_with begins-with}])
+
+(let [alias-result (str-native/reverse "abc")
+      refer-result (reverse "abc")
+      renamed-result (boolean (begins-with "abc" "a"))]
+  (if (and (= "cba" alias-result)
+           (= alias-result refer-result)
+           renamed-result)
+    :success
+    :failure))

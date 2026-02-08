@@ -1,0 +1,40 @@
+; Test that user-type can be redefined
+
+(defn make-user-type [type-name constructor-fn]
+  (cpp/jank.runtime.make_user_type type-name constructor-fn))
+
+; First definition - multiplier of 2
+(def MyMath
+  (make-user-type
+    "MyMath"
+    (fn [{:keys [multiplier]}]
+      {:call (fn [this x] (* multiplier x))
+       :to-string (fn [this] (str "#MyMath{:multiplier " multiplier "}"))})))
+
+; Create instance from first definition
+(def math1 (MyMath {:multiplier 2}))
+(assert (= 10 (math1 5)))  ; 2 * 5 = 10
+
+; Redefine the type - now adds instead of multiplies
+(def MyMath
+  (make-user-type
+    "MyMath"
+    (fn [{:keys [addend]}]
+      {:call (fn [this x] (+ addend x))
+       :to-string (fn [this] (str "#MyMath{:addend " addend "}"))})))
+
+; Old instance still works with old behavior
+(assert (= 10 (math1 5)))  ; still 2 * 5 = 10
+
+; New instance uses new behavior
+(def math2 (MyMath {:addend 100}))
+(assert (= 105 (math2 5)))  ; 100 + 5 = 105
+
+; Create another instance from redefined type
+(def math3 (MyMath {:addend 50}))
+(assert (= 55 (math3 5)))  ; 50 + 5 = 55
+
+; Verify old instance is unaffected
+(assert (= 20 (math1 10)))  ; still 2 * 10 = 20
+
+:success

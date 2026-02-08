@@ -1,0 +1,9 @@
+# Compiled WASM outputs
+*.wasm
+*.js
+*.js.mem
+*.data
+
+# Keep source files
+!*.cpp
+!*.html

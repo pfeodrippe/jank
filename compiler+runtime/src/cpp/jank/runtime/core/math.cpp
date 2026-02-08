@@ -1,13 +1,49 @@
+#include <codecvt>
 #include <random>
+#include <string>
 
 #include <jank/runtime/core/math.hpp>
 #include <jank/runtime/behavior/number_like.hpp>
+#include <jank/runtime/obj/character.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core/make_box.hpp>
 #include <jank/util/fmt/print.hpp>
 
 namespace jank::runtime
 {
+  namespace
+  {
+    i64 character_to_code_point(obj::character_ref const &character)
+    {
+      std::string const utf8_bytes{ character->data }; // raw UTF-8 bytes for this character
+      if(utf8_bytes.empty())
+      {
+        throw std::runtime_error("unable to convert empty character to integer");
+      }
+
+      std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
+      std::u32string decoded;
+      try
+      {
+        decoded = converter.from_bytes(utf8_bytes);
+      }
+      catch(std::range_error const &e)
+      {
+        throw std::runtime_error(util::format("unable to convert character '{}' to integer: {}",
+                                              character->to_code_string(),
+                                              e.what()));
+      }
+
+      if(decoded.empty())
+      {
+        throw std::runtime_error(
+          util::format("unable to convert character '{}' to integer", character->to_code_string()));
+      }
+
+      return static_cast<i64>(decoded.front());
+    }
+  }
+
   template <typename T>
   static f64 to_real(T const &val)
   {
@@ -15,11 +51,23 @@ namespace jank::runtime
     {
       return static_cast<f64>(val);
     }
+#ifdef JANK_TARGET_EMSCRIPTEN
+    // For WASM: native_big_integer = long long, native_big_decimal = double
+    else if constexpr(std::is_same_v<T, native_big_integer>)
+    {
+      return static_cast<f64>(val);
+    }
+    else if constexpr(std::is_same_v<T, native_big_decimal>)
+    {
+      return val;
+    }
+#else
     else if constexpr(std::is_same_v<T, native_big_integer>
                       || std::is_same_v<T, native_big_decimal>)
     {
       return val.template convert_to<f64>();
     }
+#endif
     else if constexpr(std::is_same_v<T, f64>)
     {
       return val;
@@ -376,11 +424,30 @@ namespace jank::runtime
 
   object_ref div(object_ref const l, object_ref const r)
   {
+    if(is_zero(r))
+    {
+      throw make_box("Illegal divide by zero in '/'").erase();
+    }
+
     return visit_number_like(
       [](auto const typed_l, auto const r) -> object_ref {
         return visit_number_like(
-          [](auto const typed_r, auto const &typed_l) -> object_ref {
-            return make_box(typed_l / typed_r->data).erase();
+          []<typename T>(auto const typed_r, T const &typed_l_data) -> object_ref {
+            using LeftType = std::decay_t<T>;
+            using RightType = std::decay_t<decltype(typed_r->data)>;
+
+            constexpr bool left_is_int_like{ std::is_same_v<LeftType, i64>
+                                             || std::is_same_v<LeftType, native_big_integer> };
+            constexpr bool right_is_int_like{ std::is_same_v<RightType, i64>
+                                              || std::is_same_v<RightType, native_big_integer> };
+
+            if constexpr(left_is_int_like && right_is_int_like)
+            {
+              return obj::ratio::create(native_big_integer(typed_l_data),
+                                        native_big_integer(typed_r->data));
+            }
+
+            return make_box(typed_l_data / typed_r->data).erase();
           },
           r,
           typed_l->data);
@@ -1838,6 +1905,11 @@ namespace jank::runtime
 
   i64 to_int(object_ref const l)
   {
+    if(l->type == object_type::character)
+    {
+      return character_to_code_point(expect_object<obj::character>(l));
+    }
+
     return visit_number_like([](auto const typed_l) -> i64 { return typed_l->to_integer(); }, l);
   }
 
@@ -1889,6 +1961,26 @@ namespace jank::runtime
   bool is_real(object_ref const o)
   {
     return o->type == object_type::real;
+  }
+
+  bool is_double(object_ref const o)
+  {
+    if(o->type != object_type::real)
+    {
+      return false;
+    }
+    auto const real_obj(expect_object<obj::real>(o));
+    return !real_obj->is_single_precision();
+  }
+
+  bool is_single_precision(object_ref const o)
+  {
+    if(o->type != object_type::real)
+    {
+      return false;
+    }
+    auto const real_obj(expect_object<obj::real>(o));
+    return real_obj->is_single_precision();
   }
 
   bool is_ratio(object_ref const o)

@@ -1,0 +1,4 @@
+;; This file tests clojure.core functionality
+(refer 'clojure.core)
+(def x (+ 1 2))
+(println "Result:" x)

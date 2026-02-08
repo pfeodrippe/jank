@@ -33,6 +33,7 @@ namespace jank::runtime::obj
     i64 to_integer() const;
     f64 to_real() const;
 
+    /*** XXX: Everything here is immutable after initialization. ***/
     object base{ obj_type };
     bool data{};
   };
@@ -66,6 +67,7 @@ namespace jank::runtime::obj
     i64 to_integer() const;
     f64 to_real() const;
 
+    /*** XXX: Everything here is immutable after initialization. ***/
     object base{ obj_type };
     /* TODO: Is it faster to have the data first or the base first? */
     i64 data{};
@@ -81,7 +83,7 @@ namespace jank::runtime::obj
     real() = default;
     real(real &&) noexcept = default;
     real(real const &) = default;
-    real(f64 const d);
+    real(f64 const d, bool single_precision = false);
 
     /* behavior::object_like */
     bool equal(object const &) const;
@@ -99,9 +101,12 @@ namespace jank::runtime::obj
     /* behavior::number_like */
     i64 to_integer() const;
     f64 to_real() const;
+    bool is_single_precision() const;
 
-    f64 data{};
+    /*** XXX: Everything here is immutable after initialization. ***/
     object base{ obj_type };
+    f64 data{};
+    bool single_precision{ false };
   };
 }
 

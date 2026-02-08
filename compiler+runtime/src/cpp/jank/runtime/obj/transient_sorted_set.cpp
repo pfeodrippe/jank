@@ -104,7 +104,7 @@ namespace jank::runtime::obj
 
   object_ref transient_sorted_set::get_entry(object_ref const elem)
   {
-    auto found{ call(elem) };
+    auto const found{ call(elem) };
     if(found == jank_nil())
     {
       return found;

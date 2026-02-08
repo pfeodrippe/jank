@@ -4,6 +4,8 @@
 #include <jank/hash.hpp>
 #include <jank/util/fmt/print.hpp>
 
+#include <iostream>
+
 namespace jank::runtime
 {
   object::object(object const &rhs) noexcept

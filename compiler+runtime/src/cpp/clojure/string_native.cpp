@@ -3,7 +3,9 @@
 #include <jank/runtime/obj/jit_function.hpp>
 #include <jank/runtime/obj/native_function_wrapper.hpp>
 #include <jank/runtime/obj/persistent_vector.hpp>
-#include <jank/runtime/obj/re_pattern.hpp>
+#ifndef JANK_TARGET_WASM
+  #include <jank/runtime/obj/re_pattern.hpp>
+#endif
 #include <jank/runtime/rtti.hpp>
 #include <jank/util/fmt.hpp>
 #include <jank/util/string.hpp>
@@ -91,6 +93,7 @@ namespace clojure::string_native
     return buff.release();
   }
 
+#ifndef JANK_TARGET_WASM
   static jtl::immutable_string replace_first(jtl::immutable_string const &s,
                                              std::regex const &match,
                                              jtl::immutable_string const &replacement)
@@ -134,6 +137,7 @@ namespace clojure::string_native
 
     return buff.release();
   }
+#endif
 
   static jtl::immutable_string replace_first(jtl::immutable_string const &s,
                                              object_ref const match,
@@ -151,6 +155,7 @@ namespace clojure::string_native
         return replace_first(s,
                              try_object<obj::persistent_string>(match)->data,
                              try_object<obj::persistent_string>(replacement)->data);
+#ifndef JANK_TARGET_WASM
       case object_type::re_pattern:
         if(replacement->type == object_type::persistent_string)
         {
@@ -160,6 +165,7 @@ namespace clojure::string_native
         }
 
         return replace_first(s, try_object<obj::re_pattern>(match)->regex, replacement);
+#endif
       default:
         throw std::runtime_error{ util::format("Invalid match arg: {}",
                                                runtime::to_code_string(match)) };
@@ -318,6 +324,7 @@ namespace clojure::string_native
     return make_box(s_str.substr(0, r));
   }
 
+#ifndef JANK_TARGET_WASM
   object_ref split(object_ref const s, object_ref const re)
   {
     auto const s_str(try_object<obj::persistent_string>(s)->data);
@@ -381,5 +388,164 @@ namespace clojure::string_native
 
     return make_box<obj::persistent_vector>(
       runtime::detail::native_persistent_vector{ vec.begin(), vec.end() });
+  }
+#endif
+
+  // WASM-compatible functions (no regex required)
+
+  object_ref split_lines(object_ref const s)
+  {
+    auto const s_str(try_object<obj::persistent_string>(s)->data);
+    native_vector<object_ref> vec;
+
+    jtl::immutable_string::size_type start = 0;
+    jtl::immutable_string::size_type pos = 0;
+    auto const s_size = s_str.size();
+
+    while(pos < s_size)
+    {
+      if(s_str[pos] == '\n')
+      {
+        // Check for \r\n
+        if(pos > start)
+        {
+          auto end = pos;
+          if(end > 0 && s_str[end - 1] == '\r')
+          {
+            --end;
+          }
+          if(end > start)
+          {
+            vec.emplace_back(make_box<obj::persistent_string>(s_str.substr(start, end - start)));
+          }
+        }
+        start = pos + 1;
+      }
+      ++pos;
+    }
+
+    // Handle last segment
+    if(start < s_size)
+    {
+      vec.emplace_back(make_box<obj::persistent_string>(s_str.substr(start)));
+    }
+
+    return make_box<obj::persistent_vector>(
+      runtime::detail::native_persistent_vector{ vec.begin(), vec.end() });
+  }
+
+  object_ref split_by_string(object_ref const s, object_ref const delimiter)
+  {
+    auto const s_str(try_object<obj::persistent_string>(s)->data);
+    auto const delim_str(runtime::to_string(delimiter));
+
+    native_vector<object_ref> vec;
+
+    if(delim_str.empty())
+    {
+      // Split into individual characters
+      for(auto const c : s_str)
+      {
+        vec.emplace_back(make_box<obj::persistent_string>(jtl::immutable_string{ &c, 1 }));
+      }
+    }
+    else
+    {
+      jtl::immutable_string::size_type start{ 0 };
+      jtl::immutable_string::size_type pos{ 0 };
+
+      while((pos = s_str.find(delim_str, start)) != jtl::immutable_string::npos)
+      {
+        if(pos > start)
+        {
+          vec.emplace_back(make_box<obj::persistent_string>(s_str.substr(start, pos - start)));
+        }
+        start = pos + delim_str.size();
+      }
+
+      // Handle last segment
+      if(start < s_str.size())
+      {
+        vec.emplace_back(make_box<obj::persistent_string>(s_str.substr(start)));
+      }
+    }
+
+    return make_box<obj::persistent_vector>(
+      runtime::detail::native_persistent_vector{ vec.begin(), vec.end() });
+  }
+
+  object_ref split_by_string(object_ref const s, object_ref const delimiter, object_ref const limit)
+  {
+    auto const limit_int(try_object<obj::integer>(limit)->data);
+
+    if(limit_int < 1)
+    {
+      return split_by_string(s, delimiter);
+    }
+
+    auto const s_str(try_object<obj::persistent_string>(s)->data);
+    auto const delim_str(runtime::to_string(delimiter));
+
+    native_vector<object_ref> vec;
+    vec.reserve(limit_int);
+
+    jtl::immutable_string::size_type start{ 0 };
+    jtl::immutable_string::size_type pos{ 0 };
+    i64 count{ 1 };
+
+    while(count < limit_int && (pos = s_str.find(delim_str, start)) != jtl::immutable_string::npos)
+    {
+      if(pos > start)
+      {
+        vec.emplace_back(make_box<obj::persistent_string>(s_str.substr(start, pos - start)));
+        ++count;
+      }
+      start = pos + delim_str.size();
+    }
+
+    // Add remaining string as last element
+    if(start < s_str.size())
+    {
+      vec.emplace_back(make_box<obj::persistent_string>(s_str.substr(start)));
+    }
+
+    return make_box<obj::persistent_vector>(
+      runtime::detail::native_persistent_vector{ vec.begin(), vec.end() });
+  }
+
+  object_ref replace_all(object_ref const s, object_ref const match, object_ref const replacement)
+  {
+    auto const s_str(try_object<obj::persistent_string>(s)->data);
+    auto const match_str(runtime::to_string(match));
+    auto const replacement_str(runtime::to_string(replacement));
+
+    if(match_str.empty())
+    {
+      return s;
+    }
+
+    jtl::string_builder buff;
+    jtl::immutable_string::size_type start{ 0 };
+    jtl::immutable_string::size_type pos{ 0 };
+
+    while((pos = s_str.find(match_str, start)) != jtl::immutable_string::npos)
+    {
+      buff(s_str.substr(start, pos - start));
+      buff(replacement_str);
+      start = pos + match_str.size();
+    }
+
+    // Append remaining string
+    if(start < s_str.size())
+    {
+      buff(s_str.substr(start));
+    }
+    else if(start == 0)
+    {
+      // No replacements made
+      return s;
+    }
+
+    return make_box<obj::persistent_string>(buff.release());
   }
 }

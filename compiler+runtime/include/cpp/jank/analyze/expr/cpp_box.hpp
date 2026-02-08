@@ -20,6 +20,7 @@ namespace jank::analyze::expr
             local_frame_ptr frame,
             bool needs_box,
             expression_ref value_expr,
+            jtl::ptr<void> boxed_type,
             read::source const &source);
 
     void propagate_position(expression_position const pos) override;
@@ -27,6 +28,8 @@ namespace jank::analyze::expr
     void walk(std::function<void(jtl::ref<expression>)> const &f) override;
 
     expression_ref value_expr;
+    /* The C++ pointer type being boxed (e.g., bool*). Used for type inference. */
+    jtl::ptr<void> boxed_type{};
     read::source source;
   };
 }

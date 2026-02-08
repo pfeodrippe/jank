@@ -1,0 +1,9 @@
+;; Test loop/recur for WASM
+;; This tests the C++ codegen for loop/recur
+
+;; Simple loop that sums 1 to 5
+(loop [i 0
+       sum 0]
+  (if (< i 5)
+    (recur (+ i 1) (+ sum i))
+    sum))

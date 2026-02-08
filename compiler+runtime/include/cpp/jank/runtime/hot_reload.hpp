@@ -1,0 +1,192 @@
+#pragma once
+
+#include <unordered_map>
+#include <string>
+#include <vector>
+#include <memory>
+
+#include <jank/runtime/object.hpp>
+#include <jank/runtime/var.hpp>
+
+namespace jank::runtime
+{
+  /* Hot-reload registry for WASM development mode.
+   *
+   * When HOT_RELOAD=1 is set during build, this enables runtime function patching
+   * by loading WASM side modules via dlopen and updating var bindings.
+   *
+   * This achieves REPL-like development speed (~180ms turnaround):
+   * - Server compiles jank -> C++ -> WASM (~180ms)
+   * - Browser loads patch via dlopen (~1ms)
+   * - Var registry updates function bindings
+   *
+   * Architecture:
+   *   Browser (jank.wasm MAIN_MODULE)
+   *       ↓ WebSocket
+   *   nREPL Server (native)
+   *       - Receives eval request
+   *       - Compiles to WASM side module
+   *       - Sends patch to browser
+   *
+   * CRITICAL: Emscripten dlsym Symbol Caching
+   * ==========================================
+   * Emscripten's dlsym() caches symbol lookups BY NAME, not by module handle!
+   * This means loading multiple patches with the same symbol name (e.g.,
+   * "jank_patch_symbols") will always return the FIRST loaded function pointer,
+   * even when using different module handles.
+   *
+   * SOLUTION: Each patch MUST have a unique symbol name, e.g.:
+   *   - jank_patch_symbols_1, jank_patch_symbols_2, etc.
+   *   - jank_eita_ggg_1, jank_eita_ggg_2, etc.
+   *
+   * The server passes --patch-id to the generator, which creates unique symbols.
+   * The browser then passes the symbol name to load_patch().
+   *
+   * What DOESN'T work:
+   *   - dlclose() before dlopen() - cache persists
+   *   - RTLD_LOCAL vs RTLD_GLOBAL - no effect
+   *   - Different file paths - cache is by symbol name
+   *
+   * See: /hot-reload-test/README.md for full documentation
+   */
+  class hot_reload_registry
+  {
+  public:
+    static hot_reload_registry &instance();
+
+    /* Load a WASM side module and register its symbols.
+     *
+     * The side module must export a jank_patch_symbols() function that returns
+     * metadata about the symbols to register:
+     *
+     *   struct patch_symbol {
+     *     const char* qualified_name;  // e.g. "user/my-func"
+     *     const char* signature;       // Type signature (for validation)
+     *     void* fn_ptr;                // Function pointer
+     *   };
+     *
+     *   extern "C" patch_symbol* jank_patch_symbols(int* count);
+     *
+     * Returns 0 on success, -1 on error.
+     */
+    int load_patch(std::string const &module_path, std::string const &symbol_name);
+
+    /* Register a symbol from a loaded patch.
+     * This creates a callable object and binds it to the var.
+     */
+    int
+    register_symbol(std::string const &qualified_name, void *fn_ptr, std::string const &signature);
+
+    /* Get statistics about loaded patches (for debugging). */
+    struct stats
+    {
+      size_t loaded_modules{ 0 };
+      size_t registered_symbols{ 0 };
+      std::vector<std::string> module_paths;
+    };
+
+    stats get_stats() const;
+
+  private:
+    hot_reload_registry() = default;
+
+    /* Track loaded module handles (to prevent GC). */
+    struct module_info
+    {
+      void *handle{ nullptr };
+      std::string path;
+      std::vector<std::string> symbols;
+    };
+
+    std::vector<module_info> loaded_modules_;
+    size_t registered_symbols_{ 0 };
+  };
+
+  /* C API for WebAssembly exports.
+   * These functions are callable from JavaScript via ccall/cwrap.
+   */
+  extern "C"
+  {
+    /* Load a patch module from the virtual filesystem.
+     * Path should be like "/tmp/patch_123.wasm".
+     * symbol_name is the unique symbol to look for (e.g. "jank_patch_symbols_123").
+     * Returns 0 on success, -1 on error.
+     */
+    int jank_hot_reload_load_patch(char const *path, char const *symbol_name);
+
+    /* Get statistics about loaded patches.
+     * Returns JSON string (caller must free).
+     */
+    char const *jank_hot_reload_get_stats();
+
+    /* Helper functions for patches to manipulate jank objects.
+     * These are exported from the main module and can be called by SIDE_MODULEs.
+     */
+
+    /* Box an integer value into a jank object_ref (as void* for C ABI). */
+    void *jank_box_integer(int64_t value);
+
+    /* Unbox an integer from a jank object_ref. Returns 0 if not an integer. */
+    int64_t jank_unbox_integer(void *obj);
+
+    /* Add two boxed integers and return a new boxed integer.
+     * This is a convenience function for simple arithmetic patches.
+     */
+    void *jank_add_integers(void *a, void *b);
+
+    /* ===== Full runtime helpers for real jank code ===== */
+
+    /* Call a var by namespace and name with variadic arguments.
+     * This allows patches to call any function without hardcoded imports.
+     *
+     * Example:
+     *   void* args[] = {arg1, arg2};
+     *   jank_call_var("clojure.core", "+", 2, args);
+     */
+    void *jank_call_var(char const *ns, char const *name, int argc, void **args);
+
+    /* Deref a var and return its current value.
+     * Returns nil if var not found.
+     */
+    void *jank_deref_var(char const *ns, char const *name);
+
+    /* Create a keyword (namespace can be empty string for unqualified). */
+    void *jank_make_keyword(char const *ns, char const *name);
+
+    /* Create a persistent vector from elements. */
+    void *jank_make_vector(int argc, void **elements);
+
+    /* Create a persistent set from elements. */
+    void *jank_make_set(int argc, void **elements);
+
+    /* Create a boxed double. */
+    void *jank_box_double(double value);
+
+    /* Unbox a double from a number object. Returns 0.0 if not a number. */
+    double jank_unbox_double(void *obj);
+
+    /* Create a persistent string. */
+    void *jank_make_string(char const *str);
+
+    /* Print objects (like println but returns nil). */
+    void *jank_println(int argc, void **args);
+
+    /* Return nil value. */
+    void *jank_nil_value();
+
+#ifdef __EMSCRIPTEN__
+    /* Check if a value is truthy (non-nil, non-false). Returns 1 for truthy, 0 for falsy.
+     * Note: This is only for WASM - native builds use jank_truthy from c_api.h */
+    int jank_truthy(void *obj);
+#endif
+
+    /* Create a symbol. */
+    void *jank_make_symbol(char const *ns, char const *name);
+
+    /* Create a callable wrapper from a function pointer.
+     * This allows anonymous functions from patches to be passed to HOFs like mapv.
+     * The fn_ptr should have signature: void* (*)(void*) for arity 1, etc.
+     */
+    void *jank_make_fn_wrapper(void *fn_ptr, int arity);
+  }
+} // namespace jank::runtime

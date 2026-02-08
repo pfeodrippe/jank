@@ -1,0 +1,88 @@
+; Test creating a custom allocator entirely in jank code
+; This demonstrates how users can implement their own allocators without C++
+
+; Our allocator state - an atom holding a map of allocations
+(def my-state (atom {:allocations {}
+                     :alloc-count 0
+                     :free-count 0
+                     :total-bytes 0}))
+
+; Allocator function: allocate memory
+; (alloc-fn state size alignment) -> pointer as integer
+(defn my-alloc [state size alignment]
+  ; Use native malloc via arena for actual allocation
+  (let [ptr (jank.arena-native/alloc! (jank.arena-native/create) size)]
+    (swap! state (fn [s]
+                   (-> s
+                       (update :allocations assoc ptr {:size size :alignment alignment})
+                       (update :alloc-count inc)
+                       (update :total-bytes + size))))
+    ptr))
+
+; Free function: free memory
+; (free-fn state ptr size alignment) -> nil
+(defn my-free [state ptr size alignment]
+  (swap! state (fn [s]
+                 (-> s
+                     (update :allocations dissoc ptr)
+                     (update :free-count inc))))
+  nil)
+
+; Reset function: reset allocator state
+; (reset-fn state) -> nil
+(defn my-reset [state]
+  (reset! state {:allocations {}
+                 :alloc-count 0
+                 :free-count 0
+                 :total-bytes 0})
+  nil)
+
+; Stats function: return allocation statistics
+; (stats-fn state) -> {:total-allocated n :total-used m}
+(defn my-stats [state]
+  (let [s @state]
+    {:total-allocated (:total-bytes s)
+     :total-used (:total-bytes s)}))
+
+; Create our custom allocator using jank functions
+(def my-allocator
+  (jank.arena-native/create-jank-allocator
+    {:alloc-fn my-alloc
+     :free-fn my-free
+     :reset-fn my-reset
+     :stats-fn my-stats
+     :state my-state}))
+
+; Test that it's recognized as an allocator
+(assert (jank.arena-native/allocator? my-allocator)
+        "Custom jank allocator should be recognized as allocator")
+
+; Test allocation using generic allocator functions
+(def ptr1 (jank.arena-native/alloc! my-allocator 64))
+(assert (> ptr1 0) "alloc! should return non-zero pointer")
+(assert (= 1 (:alloc-count @my-state)) "Should have 1 allocation")
+(assert (= 64 (:total-bytes @my-state)) "Should have 64 bytes allocated")
+
+; Allocate more
+(def ptr2 (jank.arena-native/alloc! my-allocator 128))
+(assert (not= ptr1 ptr2) "Should return different pointers")
+(assert (= 2 (:alloc-count @my-state)) "Should have 2 allocations")
+(assert (= 192 (:total-bytes @my-state)) "Should have 192 bytes allocated")
+
+; Test stats via generic interface
+(let [stats (jank.arena-native/allocator-stats my-allocator)]
+  (assert (= 192 (:total-allocated stats)) "Stats should show 192 bytes"))
+
+; Test free
+(jank.arena-native/free! my-allocator ptr1)
+(assert (= 1 (:free-count @my-state)) "Should have 1 free")
+(assert (not (contains? (:allocations @my-state) ptr1)) "ptr1 should be removed from allocations")
+
+; Test reset
+(jank.arena-native/allocator-reset! my-allocator)
+(assert (= 0 (:alloc-count @my-state)) "After reset, alloc-count should be 0")
+(assert (= 0 (:free-count @my-state)) "After reset, free-count should be 0")
+(assert (empty? (:allocations @my-state)) "After reset, allocations should be empty")
+
+(println "All jank-defined allocator tests passed!")
+:success

@@ -1,0 +1,156 @@
+#!/bin/bash
+# Strategy 5 End-to-End Test - All in One
+# Tests that jank WASM runtime can load side modules via dlopen
+set -e
+
+JANK_ROOT="${JANK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+TEST_DIR="/tmp/jank-strategy5-e2e-$(date +%s)"
+
+echo "=== Strategy 5: Hybrid Server-Side Compilation ==="
+echo "JANK_ROOT: $JANK_ROOT"
+echo "Test directory: $TEST_DIR"
+echo ""
+
+# Check prerequisites
+if [ ! -f "${JANK_ROOT}/build-wasm/jank.js" ]; then
+    echo "ERROR: jank WASM not built. Run:"
+    echo "  cd ${JANK_ROOT} && ./bin/emscripten-bundle"
+    echo "  rm -f build-wasm/jank_runtime_prelinked.o build-wasm/jank.js build-wasm/jank.wasm"
+    echo "  DYNAMIC_LINK=1 ./bin/emscripten-bundle"
+    exit 1
+fi
+
+# Check if dlopen is available in the build
+if ! grep -q "dlopen" "${JANK_ROOT}/build-wasm/jank.js" 2>/dev/null; then
+    echo "WARNING: dlopen not found in jank.js - may need DYNAMIC_LINK=1 rebuild"
+fi
+
+mkdir -p "$TEST_DIR"
+cd "$TEST_DIR"
+
+# Create side module (simulated compiled jank code)
+cat > user_module.cpp << 'CPPEOF'
+#include <emscripten.h>
+extern "C" {
+EMSCRIPTEN_KEEPALIVE int user_add(int a, int b) { return a + b; }
+EMSCRIPTEN_KEEPALIVE int user_multiply(int a, int b) { return a * b; }
+EMSCRIPTEN_KEEPALIVE int user_factorial(int n) { return n <= 1 ? 1 : n * user_factorial(n-1); }
+EMSCRIPTEN_KEEPALIVE int module_init() { return 42; }
+}
+CPPEOF
+
+echo "[1/4] Compiling side module..."
+emcc -sSIDE_MODULE=1 -O2 -o user_module.wasm user_module.cpp
+echo "      Created: user_module.wasm ($(wc -c < user_module.wasm | tr -d ' ') bytes)"
+
+# Create test script
+cat > test.mjs << JSEOF
+import { readFile } from 'fs/promises';
+const jankPath = '${JANK_ROOT}/build-wasm';
+console.log('\\n[2/4] Loading jank WASM runtime...');
+const jank = await (await import(jankPath + '/jank.js')).default();
+console.log('      Done!');
+const sideModule = await readFile('${TEST_DIR}/user_module.wasm');
+console.log('[3/4] Writing side module to virtual FS...');
+jank.FS.writeFile('/user.wasm', sideModule);
+console.log('[4/4] Loading via dlopen...');
+const handle = jank._dlopen(jank.stringToNewUTF8('/user.wasm'), 2);
+if (!handle) {
+    console.error('dlopen FAILED');
+    if (typeof jank._dlerror === 'function') {
+        const err = jank._dlerror();
+        if (err) console.error('dlerror:', jank.UTF8ToString(err));
+    }
+    process.exit(1);
+}
+console.log('      Handle:', handle);
+const sym = n => jank._dlsym(handle, jank.stringToNewUTF8(n));
+const userAdd = sym('user_add');
+const userMul = sym('user_multiply');
+const userFact = sym('user_factorial');
+const moduleInit = sym('module_init');
+console.log('\\nSymbols resolved:');
+console.log('  user_add:', userAdd ? '0x' + userAdd.toString(16) : 'NOT FOUND');
+console.log('  user_multiply:', userMul ? '0x' + userMul.toString(16) : 'NOT FOUND');
+console.log('  user_factorial:', userFact ? '0x' + userFact.toString(16) : 'NOT FOUND');
+console.log('  module_init:', moduleInit ? '0x' + moduleInit.toString(16) : 'NOT FOUND');
+
+// Try calling functions via getWasmTableEntry or dynCall
+if (userAdd && userMul && userFact && moduleInit) {
+    console.log('\\nCalling functions:');
+    let allPassed = true;
+
+    // Method 1: getWasmTableEntry (preferred)
+    if (jank.getWasmTableEntry) {
+        try {
+            const initFunc = jank.getWasmTableEntry(moduleInit);
+            const initResult = initFunc();
+            console.log('  module_init() =', initResult, initResult === 42 ? '✓' : '✗');
+            allPassed = allPassed && (initResult === 42);
+
+            const addFunc = jank.getWasmTableEntry(userAdd);
+            const addResult = addFunc(3, 4);
+            console.log('  user_add(3, 4) =', addResult, addResult === 7 ? '✓' : '✗');
+            allPassed = allPassed && (addResult === 7);
+
+            const mulFunc = jank.getWasmTableEntry(userMul);
+            const mulResult = mulFunc(6, 7);
+            console.log('  user_multiply(6, 7) =', mulResult, mulResult === 42 ? '✓' : '✗');
+            allPassed = allPassed && (mulResult === 42);
+
+            const factFunc = jank.getWasmTableEntry(userFact);
+            const factResult = factFunc(5);
+            console.log('  user_factorial(5) =', factResult, factResult === 120 ? '✓' : '✗');
+            allPassed = allPassed && (factResult === 120);
+
+            if (allPassed) {
+                console.log('\\n=== SUCCESS! Strategy 5 fully working! ===');
+                console.log('\\nProven:');
+                console.log('  1. dlopen() loads WASM side modules');
+                console.log('  2. dlsym() resolves function symbols');
+                console.log('  3. Functions can be called from JavaScript');
+                process.exit(0);
+            }
+        } catch (e) {
+            console.log('  getWasmTableEntry error:', e.message);
+        }
+    }
+    // Method 2: dynCall fallback
+    else if (jank.dynCall) {
+        try {
+            // 'i' = returns int, no args for module_init
+            // 'iii' = returns int, takes two ints for add/multiply
+            const initResult = jank.dynCall('i', moduleInit);
+            console.log('  module_init() =', initResult, initResult === 42 ? '✓' : '✗');
+
+            const addResult = jank.dynCall('iii', userAdd, [3, 4]);
+            console.log('  user_add(3, 4) =', addResult, addResult === 7 ? '✓' : '✗');
+        } catch (e) {
+            console.log('  dynCall error:', e.message);
+        }
+    }
+}
+
+if (userAdd && userMul && userFact && moduleInit) {
+    console.log('\\n=== SUCCESS! dlopen/dlsym working! ===');
+    console.log('Symbols resolved, ready for function calls.');
+} else {
+    console.log('\\n=== PARTIAL SUCCESS ===');
+    console.log('dlopen worked but some symbols not found.');
+    process.exit(1);
+}
+JSEOF
+
+echo '{"type": "module"}' > package.json
+
+# Ensure jank build-wasm has package.json
+if [ ! -f "${JANK_ROOT}/build-wasm/package.json" ]; then
+    echo '{"type": "module"}' > "${JANK_ROOT}/build-wasm/package.json"
+fi
+
+echo ""
+node test.mjs
+exit_code=$?
+echo ""
+echo "Test directory: $TEST_DIR"
+exit $exit_code

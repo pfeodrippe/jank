@@ -1,0 +1,4 @@
+(ns dynamic.shared-entrypoint)
+
+(defn -main [& args]
+  (println (str "shared-lib-invoked/" (count args))))
